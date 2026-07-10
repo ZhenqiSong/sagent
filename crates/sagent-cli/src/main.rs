@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 #[command(name = "sagent", version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 
     /// 日志级别 (trace, debug, info, warn, error)
     #[arg(short, long, env = "SAGENT_LOG", default_value = "info")]
@@ -52,24 +52,31 @@ async fn main() -> anyhow::Result<()> {
     sagent_core::logging::init_with_default(&cli.log_level);
 
     match cli.command {
-        Commands::Run { profile, message } => {
+        Some(Commands::Run { profile, message }) => {
             tracing::info!(?profile, ?message, "启动对话模式");
-            sagent_cli::commands::run::execute(profile, message).await
+            sagent_cli::commands::run::execute(profile, message).await?;
+            return Ok(());
         }
-        Commands::Gateway { platforms } => {
+        Some(Commands::Gateway { platforms }) => {
             tracing::info!(?platforms, "启动 Gateway");
             tracing::warn!("Gateway 命令尚未实现");
-            Ok(())
+            return Ok(());
         }
-        Commands::Tools { list } => {
+        Some(Commands::Tools { list }) => {
             tracing::info!(list, "列出工具");
             tracing::warn!("Tools 命令尚未实现");
-            Ok(())
+            return Ok(());
         }
-        Commands::Setup => {
+        Some(Commands::Setup) => {
             tracing::info!("启动配置向导");
             tracing::warn!("Setup 命令尚未实现");
-            Ok(())
+            return Ok(());
+        }
+        None => {
+            tracing::info!("未指定子命令，启动 CLI 交互界面");
         }
     }
+
+    sagent_cli::SAgentCLI::new();
+    Ok(())
 }

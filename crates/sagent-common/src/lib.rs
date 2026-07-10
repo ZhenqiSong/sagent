@@ -5,7 +5,9 @@
 
 pub mod error;
 pub mod types;
+pub mod path;
 
 // Re-export 常用类型
 pub use error::SagentError;
 pub use types::{ContentBlock, Message, Role};
+pub use path::get_sagent_home;

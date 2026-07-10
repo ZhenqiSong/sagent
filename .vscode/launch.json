@@ -1,0 +1,91 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Debug unit tests in library 'sagent_cli'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=sagent-cli"
+                ]
+            }
+        },
+        {
+            "name": "Debug executable 'sagent'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=sagent",
+                    "--package=sagent-cli",
+                    "--",
+                    "run"
+                ]
+            },
+            "args": []
+        },
+        {
+            "name": "Debug unit tests in executable 'sagent'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--bin=sagent",
+                    "--package=sagent-cli"
+                ]
+            }
+        },
+        {
+            "name": "Debug unit tests in library 'sagent_common'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=sagent-common"
+                ]
+            }
+        },
+        {
+            "name": "Debug unit tests in library 'sagent_core'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=sagent-core"
+                ]
+            }
+        },
+        {
+            "name": "Debug unit tests in library 'sagent_gateway'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=sagent-gateway"
+                ]
+            }
+        },
+        {
+            "name": "Debug unit tests in library 'sagent_plugin'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=sagent-plugin"
+                ]
+            }
+        }
+    ]
+}

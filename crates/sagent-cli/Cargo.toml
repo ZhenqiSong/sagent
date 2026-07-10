@@ -1,0 +1,18 @@
+[package]
+name = "sagent-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sagent"
+path = "src/main.rs"
+
+[dependencies]
+sagent-common.workspace = true
+sagent-core.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

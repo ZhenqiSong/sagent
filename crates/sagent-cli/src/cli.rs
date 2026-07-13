@@ -10,31 +10,6 @@ pub struct SAgentCLI {
     pub console: Term,
 }
 
-/// sagent CLI 配置项。
-///
-/// 控制 CLI 的行为偏好，如默认 Profile、REPL 历史记录等。
-pub struct SAgentCLIConfig {
-    /// 默认使用的 Profile 名称，`None` 表示使用内置默认值。
-    pub default_profile: Option<String>,
-    /// 是否启用 REPL 历史记录。
-    pub history_enabled: bool,
-    /// 历史记录文件的最大行数。
-    pub max_history_lines: usize,
-}
-
-impl Default for SAgentCLIConfig {
-    fn default() -> Self {
-        Self {
-            default_profile: None,
-            history_enabled: true,
-            max_history_lines: 1000,
-        }
-    }
-}
-
-fn load_cli_config() -> anyhow::Result<SAgentCLIConfig> {
-    Ok(SAgentCLIConfig::default())
-}
 
 impl SAgentCLI {
     /// 创建一个新的 CLI 实例，绑定到标准终端。

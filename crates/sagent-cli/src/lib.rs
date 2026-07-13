@@ -4,5 +4,7 @@
 
 pub mod cli;
 pub mod commands;
+pub mod config;
+pub mod managed_scope;
 
 pub use cli::SAgentCLI;

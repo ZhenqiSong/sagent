@@ -7,13 +7,21 @@ use clap::{Parser, Subcommand};
 /// sagent — 个人智能 Agent
 #[derive(Parser)]
 #[command(name = "sagent", version, about, long_about = None)]
-struct Cli {
+struct CliArgument {
     #[command(subcommand)]
     command: Option<Commands>,
 
     /// 日志级别 (trace, debug, info, warn, error)
     #[arg(short, long, env = "SAGENT_LOG", default_value = "info")]
     log_level: String,
+
+    /// 终端输出是否紧凑
+    #[arg(default_value = "false")]
+    compact: Option<bool>,
+
+    /// 恢复会话
+    #[arg(default_value = None)]
+    resume: Option<String>
 }
 
 #[derive(Subcommand)]
@@ -48,10 +56,10 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    sagent_core::logging::init_with_default(&cli.log_level);
+    let cli_args = CliArgument::parse();
+    sagent_core::logging::init_with_default(&cli_args.log_level);
 
-    match cli.command {
+    match cli_args.command {
         Some(Commands::Run { profile, message }) => {
             tracing::info!(?profile, ?message, "启动对话模式");
             sagent_cli::commands::run::execute(profile, message).await?;
@@ -77,6 +85,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    sagent_cli::SAgentCLI::new();
+    let mut cli = sagent_cli::SAgentCLI::new(
+        cli_args.compact, 
+        cli_args.resume
+    );
+    cli.run()?;
     Ok(())
 }

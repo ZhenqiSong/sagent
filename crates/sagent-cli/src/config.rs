@@ -287,6 +287,25 @@ impl Default for AgentConfig {
     }
 }
 
+/// 工具处理模式
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub enum ToolProcessMode{
+    #[serde(rename="off")]
+    Off,
+    #[serde(rename="new")]
+    New,
+    #[serde(rename="all")]
+    All,
+    #[serde(rename="verbose")]
+    Verbose
+}
+
+impl Default for ToolProcessMode {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
 /// 显示与终端输出配置。
 ///
 /// 控制 CLI 的输出格式、滚动摘要、推理显示、流式行为等。
@@ -337,6 +356,8 @@ pub struct DisplayConfig {
     /// 显示皮肤
     #[serde(default = "default_skin")]
     pub skin: String,
+    #[serde(default)]
+    pub tool_process: ToolProcessMode,
 }
 
 fn default_resume_display() -> String { "full".to_string() }
@@ -371,6 +392,7 @@ impl Default for DisplayConfig {
             persistent_output_max_lines: default_persistent_output_max_lines(),
             persist_prompts: default_persist_prompts(),
             skin: default_skin(),
+            tool_process: ToolProcessMode::All,
         }
     }
 }
@@ -540,7 +562,7 @@ pub struct SAgentCLIConfig {
     pub terminal: Option<TerminalConfig>,
     /// 浏览器环境配置
     #[serde(default)]
-    pub browser: BrowserConfig,
+    pub browser: Option<BrowserConfig>,
     #[serde(default)]
     pub compression: CompressionConfig,
     /// Agent 行为配置
@@ -555,7 +577,7 @@ pub struct SAgentCLIConfig {
     pub code_execution: CodeExecutionConfig,
     /// 辅助功能配置（vision / web_extract）
     #[serde(default)]
-    pub auxiliary: AuxiliaryConfig,
+    pub auxiliary: Option<AuxiliaryConfig>,
     /// 子 Agent 委托配置
     #[serde(default)]
     pub delegation: DelegationConfig,
@@ -569,13 +591,13 @@ impl Default for SAgentCLIConfig {
         Self {
             model: Some(ModelConfig::default()),
             terminal: Some(TerminalConfig::default()),
-            browser: BrowserConfig::default(),
+            browser: Some(BrowserConfig::default()),
             compression: CompressionConfig::default(),
             agent: AgentConfig::default(),
             display: DisplayConfig::default(),
             clarify: ClarifyConfig::default(),
             code_execution: CodeExecutionConfig::default(),
-            auxiliary: AuxiliaryConfig::default(),
+            auxiliary: Some(AuxiliaryConfig::default()),
             delegation: DelegationConfig::default(),
             onboarding: OnboardingConfig::default(),
         }
@@ -679,11 +701,12 @@ fn load_managed_config() -> Option<SAgentCLIConfig> {
 /// 文件中未设置的字段会自动回退到代码默认值。
 ///
 /// 设置环境变量 `SAGENT_IGNORE_USER_CONFIG=1` 可跳过用户配置文件加载。
-fn load_cli_config() -> anyhow::Result<SAgentCLIConfig> {
+pub fn load_cli_config() -> anyhow::Result<SAgentCLIConfig> {
     let user_config_path = get_sagent_home().join("config.yaml");
 
     // 以代码默认值为基础，后续叠加用户配置文件
     let mut config = SAgentCLIConfig::default();
+    let mut file_has_terminal_config = false;
 
     if user_config_path.exists()
         && !std::env::var("SAGENT_IGNORE_USER_CONFIG").is_ok_and(|v| v == "1")
@@ -691,6 +714,8 @@ fn load_cli_config() -> anyhow::Result<SAgentCLIConfig> {
         let contents = std::fs::read_to_string(&user_config_path)?;
         // 先解析为通用 Value 树，递归替换其中的 ${ENV_VAR} 后再反序列化为强类型
         let mut raw: serde_yaml::Value = serde_yaml::from_str(&contents)?;
+        // 检查用户配置文件中是否显式包含 terminal 段
+        file_has_terminal_config = raw.get("terminal").is_some();
         substitute_env_vars(&mut raw);
         let file_config: SAgentCLIConfig = serde_yaml::from_value(raw)?;
         // 文件中的配置覆盖默认值（未设置的字段保留默认值，由 serde(default) 保证）
@@ -721,59 +746,425 @@ fn load_cli_config() -> anyhow::Result<SAgentCLIConfig> {
     }
 
     // 将最终配置同步到环境变量，便于子进程和工具链读取
-    apply_config_to_env(&config);
+    apply_config_to_env(&config, file_has_terminal_config);
 
     Ok(config)
 }
 
-/// 将已加载的配置项同步到对应的环境变量。
+
+static GLOBAL_CLI_CONFIG: OnceLock<SAgentCLIConfig> = OnceLock::new();
+/// 获取全局 CLI 配置。
 ///
-/// 仅设置非空/非默认值的字段。
-fn apply_config_to_env(config: &SAgentCLIConfig) {
-    // ---- Model / Provider ----
-    if let Some(ref model) = config.model {
-        if let Some(ref url) = model.base_url {
-            if !url.is_empty() {
-                std::env::set_var("OPENAI_BASE_URL", url);
+/// 首次调用时加载配置并缓存，后续调用直接返回缓存值。
+/// 如果配置加载失败，将在调试日志中记录错误并返回代码默认值。
+///
+/// # 示例
+///
+/// ```ignore
+/// use sagent_cli::config::get_config;
+///
+/// let config = get_config();
+/// println!("max_turns: {}", config.agent.max_turns);
+/// ```
+pub fn get_config() -> &'static SAgentCLIConfig {
+    GLOBAL_CLI_CONFIG.get_or_init(|| {
+        match load_cli_config() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                tracing::warn!(error = %e, "加载 CLI 配置失败，使用默认配置");
+                SAgentCLIConfig::default()
             }
         }
-        if let Some(ref m) = model.default {
-            if !m.is_empty() {
-                std::env::set_var("SAGENT_DEFAULT_MODEL", m);
+    })
+}
+
+/// 将 JSON Value 转为环境变量字符串。
+///
+/// `None` 或 `Null` → `None`；
+/// 字符串 → 直接克隆；
+/// 数组/对象 → JSON 序列化；
+/// 其余（布尔、数字）→ `to_string()`。
+fn json_value_to_env_string(v: Option<&serde_json::Value>) -> Option<String> {
+    match v {
+        None | Some(serde_json::Value::Null) => None,
+        Some(v) => Some(match v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                serde_json::to_string(v).unwrap_or_default()
             }
-        }
-    }
-
-    // ---- Terminal ----
-    if let Some(ref term) = config.terminal {
-        std::env::set_var("SAGENT_TERMINAL_ENV", &term.env_type);
-        if let Some(ref cwd) = term.cwd {
-            if !cwd.is_empty() {
-                std::env::set_var("SAGENT_TERMINAL_CWD", cwd);
-            }
-        }
-        std::env::set_var("SAGENT_TERMINAL_DOCKER_IMAGE", &term.docker_image);
-    }
-
-    // ---- Code execution ----
-    std::env::set_var(
-        "SAGENT_CODE_TIMEOUT",
-        config.code_execution.timeout.to_string(),
-    );
-
-    // ---- Delegation ----
-    if !config.delegation.base_url.is_empty() {
-        std::env::set_var("SAGENT_DELEGATION_BASE_URL", &config.delegation.base_url);
-    }
-    if !config.delegation.api_key.is_empty() {
-        std::env::set_var("SAGENT_DELEGATION_API_KEY", &config.delegation.api_key);
-    }
-
-    // ---- Auxiliary (vision / web_extract) ----
-    if !config.auxiliary.vision.base_url.is_empty() {
-        std::env::set_var("SAGENT_VISION_BASE_URL", &config.auxiliary.vision.base_url);
-    }
-    if !config.auxiliary.web_extract.base_url.is_empty() {
-        std::env::set_var("SAGENT_WEB_EXTRACT_BASE_URL", &config.auxiliary.web_extract.base_url);
+            _ => v.to_string(),
+        }),
     }
 }
+
+/// 将已加载的配置项同步到对应的环境变量。
+///
+/// `file_has_terminal_config`：配置文件是否显式包含 `terminal` 段。
+/// 为 true 时所有字段均同步到环境变量（覆盖已有值）；
+/// 为 false 时仅同步环境变量尚未设置的项。
+fn apply_config_to_env(config: &SAgentCLIConfig, file_has_terminal_config: bool) {
+    // config_key → 环境变量名 的映射表
+    let env_mappings: &[(&str, &str)] = &[
+        ("env_type", "TERMINAL_ENV"),
+        ("cwd", "TERMINAL_CWD"),
+        ("timeout", "TERMINAL_TIMEOUT"),
+        ("home_mode", "TERMINAL_HOME_MODE"),
+        ("lifetime_seconds", "TERMINAL_LIFETIME_SECONDS"),
+        ("docker_image", "TERMINAL_DOCKER_IMAGE"),
+        ("docker_forward_env", "TERMINAL_DOCKER_FORWARD_ENV"),
+        ("singularity_image", "TERMINAL_SINGULARITY_IMAGE"),
+        ("modal_image", "TERMINAL_MODAL_IMAGE"),
+        ("daytona_image", "TERMINAL_DAYTONA_IMAGE"),
+        // SSH config
+        ("ssh_host", "TERMINAL_SSH_HOST"),
+        ("ssh_user", "TERMINAL_SSH_USER"),
+        ("ssh_port", "TERMINAL_SSH_PORT"),
+        ("ssh_key", "TERMINAL_SSH_KEY"),
+        // Container resource config
+        ("container_cpu", "TERMINAL_CONTAINER_CPU"),
+        ("container_memory", "TERMINAL_CONTAINER_MEMORY"),
+        ("container_disk", "TERMINAL_CONTAINER_DISK"),
+        ("container_persistent", "TERMINAL_CONTAINER_PERSISTENT"),
+        ("docker_volumes", "TERMINAL_DOCKER_VOLUMES"),
+        ("docker_env", "TERMINAL_DOCKER_ENV"),
+        ("docker_extra_args", "TERMINAL_DOCKER_EXTRA_ARGS"),
+        ("docker_mount_cwd_to_workspace", "TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE"),
+        ("docker_network", "TERMINAL_DOCKER_NETWORK"),
+        ("docker_run_as_host_user", "TERMINAL_DOCKER_RUN_AS_HOST_USER"),
+        ("docker_persist_across_processes", "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES"),
+        ("docker_orphan_reaper", "TERMINAL_DOCKER_ORPHAN_REAPER"),
+        ("sandbox_dir", "TERMINAL_SANDBOX_DIR"),
+        ("persistent_shell", "TERMINAL_PERSISTENT_SHELL"),
+        ("sudo_password", "SUDO_PASSWORD"),
+    ];
+
+    let is_gateway = std::env::var("_SAGENT_GATEWAY").is_ok();
+
+    // 将 TerminalConfig 序列化为 JSON，通过 config_key 动态索引字段值
+    let term_json = config
+        .terminal
+        .as_ref()
+        .and_then(|t| serde_json::to_value(t).ok());
+
+    for &(config_key, env_var) in env_mappings {
+        let raw_val = term_json.as_ref().and_then(|tj| tj.get(config_key));
+        let val = json_value_to_env_string(raw_val);
+
+        if let Some(val) = val {
+            if env_var == "TERMINAL_CWD" {
+                // Gateway 模式跳过 CWD（由 Gateway 自行管理）；CLI 始终导出
+                if is_gateway {
+                    continue;
+                }
+                std::env::set_var(env_var, &val);
+            } else if file_has_terminal_config || std::env::var(env_var).is_err() {
+                // 配置文件显式包含 terminal 段，或环境变量尚未设置 → 同步
+                std::env::set_var(env_var, &val);
+            }
+        }
+    }
+
+    // 将 BrowserConfig 序列化为 JSON，通过 config_key 动态索引字段值
+    let browser_json = config
+        .browser
+        .as_ref()
+        .and_then(|t| serde_json::to_value(t).ok());
+    let browser_env_mappings = &[
+        ("inactivity_timeout", "BROWSER_INACTIVITY_TIMEOUT")
+    ];
+    for &(config_key, env_var) in browser_env_mappings {
+        let raw_val = browser_json.as_ref().and_then(|tj| tj.get(config_key));
+        let val = json_value_to_env_string(raw_val);
+        if let Some(val) = val {
+            std::env::set_var(env_var, &val);
+        }
+    }
+
+    let auxiliary_config = config
+        .auxiliary
+        .as_ref()
+        .and_then(|t| serde_json::to_value(t).ok());
+
+    // task_key → [(字段名, 环境变量名)]
+    let auxiliary_task_env: &[(&str, &[(&str, &str)])] = &[
+        ("vision", &[
+            ("provider", "AUXILIARY_VISION_PROVIDER"),
+            ("model", "AUXILIARY_VISION_MODEL"),
+            ("base_url", "AUXILIARY_VISION_BASE_URL"),
+            ("api_key", "AUXILIARY_VISION_API_KEY"),
+        ]),
+        ("web_extract", &[
+            ("provider", "AUXILIARY_WEB_EXTRACT_PROVIDER"),
+            ("model", "AUXILIARY_WEB_EXTRACT_MODEL"),
+            ("base_url", "AUXILIARY_WEB_EXTRACT_BASE_URL"),
+            ("api_key", "AUXILIARY_WEB_EXTRACT_API_KEY"),
+        ]),
+        ("approval", &[
+            ("provider", "AUXILIARY_APPROVAL_PROVIDER"),
+            ("model", "AUXILIARY_APPROVAL_MODEL"),
+            ("base_url", "AUXILIARY_APPROVAL_BASE_URL"),
+            ("api_key", "AUXILIARY_APPROVAL_API_KEY"),
+        ]),
+    ];
+
+    for &(task_key, env_map) in auxiliary_task_env {
+        let task_cfg = auxiliary_config.as_ref().and_then(|ac| ac.get(task_key));
+        for &(field, env_var) in env_map {
+            let raw_val = task_cfg.and_then(|tc| tc.get(field));
+            if let Some(v) = json_value_to_env_string(raw_val) {
+                if v.is_empty() {
+                    continue;
+                }
+                // provider 为 "auto" 时跳过（表示未显式覆盖）
+                if field == "provider" && v == "auto" {
+                    continue;
+                }
+                std::env::set_var(env_var, &v);
+            }
+        }
+    }
+
+    // TODO: 将 security 配置同步到环境变量
+    // let security_config = config.security.as_ref().and_then(|sc| serde_json::to_value(sc).ok());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ==================== json_value_to_env_string ====================
+
+    #[test]
+    fn test_value_none_returns_none() {
+        assert_eq!(json_value_to_env_string(None), None);
+    }
+
+    #[test]
+    fn test_value_null_returns_none() {
+        assert_eq!(json_value_to_env_string(Some(&json!(null))), None);
+    }
+
+    #[test]
+    fn test_value_string() {
+        let v = json!("hello");
+        assert_eq!(json_value_to_env_string(Some(&v)), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_value_empty_string() {
+        let v = json!("");
+        assert_eq!(json_value_to_env_string(Some(&v)), Some("".to_string()));
+    }
+
+    #[test]
+    fn test_value_bool() {
+        let v = json!(true);
+        assert_eq!(json_value_to_env_string(Some(&v)), Some("true".to_string()));
+        let v = json!(false);
+        assert_eq!(json_value_to_env_string(Some(&v)), Some("false".to_string()));
+    }
+
+    #[test]
+    fn test_value_number() {
+        let v = json!(42);
+        assert_eq!(json_value_to_env_string(Some(&v)), Some("42".to_string()));
+        let v = json!(3.14);
+        assert_eq!(json_value_to_env_string(Some(&v)), Some("3.14".to_string()));
+    }
+
+    #[test]
+    fn test_value_array() {
+        let v = json!(["a", "b"]);
+        assert_eq!(
+            json_value_to_env_string(Some(&v)),
+            Some(r#"["a","b"]"#.to_string())
+        );
+    }
+
+    #[test]
+    fn test_value_empty_array() {
+        let v = json!([]);
+        assert_eq!(json_value_to_env_string(Some(&v)), Some("[]".to_string()));
+    }
+
+    #[test]
+    fn test_value_object() {
+        let v = json!({"key": "value"});
+        assert_eq!(
+            json_value_to_env_string(Some(&v)),
+            Some(r#"{"key":"value"}"#.to_string())
+        );
+    }
+
+    // ==================== apply_config_to_env ====================
+    // 注意：这些测试会修改进程级环境变量，使用 Mutex 串行化执行。
+
+    use std::sync::Mutex;
+
+    /// 测试环境变量操作的串行锁。
+    static ENV_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// 构造一个默认配置，保留 Custom terminal 便于按需覆盖各字段。
+    fn default_test_config() -> SAgentCLIConfig {
+        SAgentCLIConfig::default()
+    }
+
+    /// 清理测试中添加的环境变量。
+    fn cleanup_env_vars(vars: &[&str]) {
+        for var in vars {
+            std::env::remove_var(var);
+        }
+    }
+
+    #[test]
+    fn test_terminal_cwd_set_for_cli() {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap();
+        let ev = "TERMINAL_CWD";
+        std::env::remove_var(ev);
+        // 确保不是 gateway
+        std::env::remove_var("_SAGENT_GATEWAY");
+
+        let mut config = default_test_config();
+        config.terminal.as_mut().unwrap().cwd = Some("/home/test".to_string());
+        apply_config_to_env(&config, false);
+
+        assert_eq!(std::env::var(ev).ok().as_deref(), Some("/home/test"));
+
+        cleanup_env_vars(&[ev]);
+    }
+
+    #[test]
+    fn test_terminal_cwd_skipped_in_gateway() {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap();
+        let ev = "TERMINAL_CWD";
+        std::env::remove_var(ev);
+        std::env::set_var("_SAGENT_GATEWAY", "1");
+
+        let mut config = default_test_config();
+        config.terminal.as_mut().unwrap().cwd = Some("/gateway/path".to_string());
+        apply_config_to_env(&config, false);
+
+        assert_eq!(std::env::var(ev).ok(), None);
+
+        cleanup_env_vars(&[ev, "_SAGENT_GATEWAY"]);
+    }
+
+    #[test]
+    fn test_file_has_terminal_true_overrides_existing() {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap();
+        let ev = "TERMINAL_ENV";
+        std::env::remove_var(ev);
+        std::env::set_var(ev, "old_value");
+
+        let mut config = default_test_config();
+        config.terminal.as_mut().unwrap().env_type = "docker".to_string();
+        // file_has_terminal_config = true → 即使环境变量已存在也要覆盖
+        apply_config_to_env(&config, true);
+
+        assert_eq!(std::env::var(ev).ok().as_deref(), Some("docker"));
+
+        cleanup_env_vars(&[ev]);
+    }
+
+    #[test]
+    fn test_file_has_terminal_false_preserves_existing() {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap();
+        let ev = "TERMINAL_ENV";
+        std::env::remove_var(ev);
+        std::env::set_var(ev, "existing_env");
+
+        let mut config = default_test_config();
+        config.terminal.as_mut().unwrap().env_type = "singularity".to_string();
+        // file_has_terminal_config = false + 环境变量已存在 → 不覆盖
+        apply_config_to_env(&config, false);
+
+        assert_eq!(std::env::var(ev).ok().as_deref(), Some("existing_env"));
+
+        cleanup_env_vars(&[ev]);
+    }
+
+    #[test]
+    fn test_browser_inactivity_timeout_set() {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap();
+        let ev = "BROWSER_INACTIVITY_TIMEOUT";
+        std::env::remove_var(ev);
+
+        let mut config = default_test_config();
+        config.browser.as_mut().unwrap().inactivity_timeout = 600;
+        apply_config_to_env(&config, false);
+
+        assert_eq!(std::env::var(ev).ok().as_deref(), Some("600"));
+
+        cleanup_env_vars(&[ev]);
+    }
+
+    #[test]
+    fn test_auxiliary_vision_env_vars() {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap();
+        let vars = [
+            "AUXILIARY_VISION_PROVIDER",
+            "AUXILIARY_VISION_MODEL",
+            "AUXILIARY_VISION_BASE_URL",
+            "AUXILIARY_VISION_API_KEY",
+        ];
+        for v in &vars {
+            std::env::remove_var(v);
+        }
+
+        let mut config = default_test_config();
+        let aux = config.auxiliary.as_mut().unwrap();
+        aux.vision.provider = "openai".to_string();
+        aux.vision.model = "gpt-4o".to_string();
+        aux.vision.base_url = "https://custom.api/v1".to_string();
+        aux.vision.api_key = "sk-test123".to_string();
+        apply_config_to_env(&config, false);
+
+        assert_eq!(std::env::var("AUXILIARY_VISION_PROVIDER").ok().as_deref(), Some("openai"));
+        assert_eq!(std::env::var("AUXILIARY_VISION_MODEL").ok().as_deref(), Some("gpt-4o"));
+        assert_eq!(std::env::var("AUXILIARY_VISION_BASE_URL").ok().as_deref(), Some("https://custom.api/v1"));
+        assert_eq!(std::env::var("AUXILIARY_VISION_API_KEY").ok().as_deref(), Some("sk-test123"));
+
+        cleanup_env_vars(&vars);
+    }
+
+    #[test]
+    fn test_auxiliary_provider_auto_skipped() {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap();
+        let ev = "AUXILIARY_VISION_PROVIDER";
+        std::env::remove_var(ev);
+
+        let mut config = default_test_config();
+        // provider 默认为 "auto"，应被跳过不设置
+        config.auxiliary.as_mut().unwrap().vision.provider = "auto".to_string();
+        apply_config_to_env(&config, false);
+
+        assert_eq!(std::env::var(ev).ok(), None);
+
+        cleanup_env_vars(&[ev]);
+    }
+
+    #[test]
+    fn test_auxiliary_web_extract_env_vars() {
+        let _lock = ENV_TEST_MUTEX.lock().unwrap();
+        let vars = [
+            "AUXILIARY_WEB_EXTRACT_PROVIDER",
+            "AUXILIARY_WEB_EXTRACT_MODEL",
+        ];
+        for v in &vars {
+            std::env::remove_var(v);
+        }
+
+        let mut config = default_test_config();
+        let aux = config.auxiliary.as_mut().unwrap();
+        aux.web_extract.provider = "anthropic".to_string();
+        aux.web_extract.model = "claude-sonnet".to_string();
+        apply_config_to_env(&config, false);
+
+        assert_eq!(std::env::var("AUXILIARY_WEB_EXTRACT_PROVIDER").ok().as_deref(), Some("anthropic"));
+        assert_eq!(std::env::var("AUXILIARY_WEB_EXTRACT_MODEL").ok().as_deref(), Some("claude-sonnet"));
+
+        cleanup_env_vars(&vars);
+    }
+}
+

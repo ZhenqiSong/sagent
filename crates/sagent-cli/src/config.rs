@@ -584,6 +584,8 @@ pub struct SAgentCLIConfig {
     /// 首次使用引导配置
     #[serde(default)]
     pub onboarding: OnboardingConfig,
+    #[serde(default)]
+    pub max_concurrent_sessions: Option<u32>,
 }
 
 impl Default for SAgentCLIConfig {
@@ -600,6 +602,7 @@ impl Default for SAgentCLIConfig {
             auxiliary: Some(AuxiliaryConfig::default()),
             delegation: DelegationConfig::default(),
             onboarding: OnboardingConfig::default(),
+            max_concurrent_sessions: None,
         }
     }
 }

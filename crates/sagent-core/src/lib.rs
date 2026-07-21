@@ -4,4 +4,5 @@
 //! Session / Memory / Skill 管理等核心逻辑。
 
 pub mod logging;
+pub mod utils;
 pub use sagent_common;

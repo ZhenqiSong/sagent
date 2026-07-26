@@ -1,9 +1,12 @@
 //! sagent CLI 主控制结构。
 
 use console::Term;
+use sagent_core::agent::AIAgent;
 
 use crate::config::{self, SAgentCLIConfig, ToolProcessMode};
-use crate::cli_core::active_session::try_acquire_active_session;
+use crate::cli_core::active_session::ActiveSessionLease;
+use std::io::{self, Write};
+use crate::utils;
 
 /// sagent CLI 主控制结构。
 ///
@@ -14,11 +17,13 @@ pub struct SAgentCLI {
     pub config: SAgentCLIConfig,
     pub compact: bool,
     pub tool_progress_mode: ToolProcessMode,
-    active_session_lease: Option<String>,
+    active_session_lease: Option<ActiveSessionLease>,
     /// 当前活动的对话会话 ID
     session_id: String,
     /// 是否是恢复的会话
     resumed: bool,
+    // Agent 实例
+    agent: Option<AIAgent>
 }
 
 
@@ -63,6 +68,7 @@ impl SAgentCLI {
             active_session_lease: None,
             session_id,
             resumed: resumed,
+            agent: None
         }
     }
 }
@@ -82,22 +88,79 @@ impl SAgentCLI {
     pub fn run(&mut self) -> anyhow::Result<()> {
         self.console.write_line("sagent 已启动")?;
         // self.claim_active_session(session_id);
-        if self.claim_active_session(Some("cli"), None){
+        if !self.claim_active_session(Some("cli"), None){
             return Ok(())
         }
+
+        utils::theme::detect_light_mode();
+        
+        // 清空屏幕
+        let (lines, _) = Term::stdout().size();
+        if lines > 2 {
+            let n = lines.saturating_sub(1);
+            io::stdout().write_all(&vec![b'\n'; n as usize])?;  // N 个 0x0A 字节
+            io::stdout().flush()?;
+        }
+
+        self.show_banner()?;
         Ok(())
     }
 
-    fn claim_active_session(&mut self, surface: Option<&str>, _stderr: Option<bool>) -> bool {
-        if let Some(_) = self.active_session_lease {
+    fn show_banner(&mut self) -> anyhow::Result<()>{
+        self.console.clear_screen()?;
+        let ctx_len = self.agent.as_ref()
+            .and_then(|a| a.context_compressor.as_ref())
+            .map(|cc| cc.engine_state.context_length);
+
+        // 是否使用紧凑模式
+        let (_, term_width) = Term::stdout().size();
+        if self.compact || term_width < 80{
+
+        }
+
+        Ok(())
+    }
+
+    fn 
+
+    /// 尝试获取活动会话租约。
+    ///
+    /// 如果已有租约，则直接返回 `true`；否则尝试获取新租约，并根据 `stderr` 参数决定是否输出错误信息。
+    fn claim_active_session(&mut self, surface: Option<&str>, stderr: Option<bool>) -> bool {
+        let _stderr = stderr.unwrap_or(false);
+
+        if self.active_session_lease.is_some() {
             return true;
         }
 
-        let _ = try_acquire_active_session(
+        match ActiveSessionLease::try_acquire_active_session(
             &self.session_id,
             surface,
             &self.config
-        );
-        false
+        ) {
+            Ok(lease) => {
+                self.active_session_lease = Some(lease);
+                true
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if _stderr {
+                    eprintln!("{}", msg);
+                } else {
+                    self._console_print(&format!("[bold red]{}[/]", msg)).ok();
+                }
+                false
+            }
+        }
+    }
+
+    /// 使用终端 console 输出信息。
+    ///
+    /// 封装 [`console::Term`] 的输出能力，提供统一的终端打印接口。
+    /// 未来可扩展为支持彩色前缀（如 `[INFO]`、`[WARN]`、`[ERROR]`）和
+    /// 更丰富的格式控制。
+    pub fn _console_print(&self, msg: &str) -> anyhow::Result<()> {
+        self.console.write_line(msg)?;
+        Ok(())
     }
 }

@@ -8,6 +8,11 @@ use fd_lock::RwLock;
 ///
 /// 使用 fd_lock（flock 系统调用）提供进程间文件级互斥。
 /// 锁的生命周期受 `run_with_lock` 闭包控制，闭包结束时自动释放。
+///
+/// 注意：在 Windows 上，`LockFileEx` 锁定的是文件区域，其他进程通过
+/// 独立句柄访问同一文件时会失败（os error 33）。因此 `FileLock` 应该
+/// 作用于独立的锁文件，而非数据文件本身。调用方传入的 `path` 应该是
+/// `.lock` 文件路径。
 pub struct FileLock {
     path: String,
 }
@@ -41,11 +46,11 @@ impl FileLock {
 
         let file = OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
             .read(true)
             .open(p)?;
 
-        let mut rw_lock = RwLock::new(&file);
+        let mut rw_lock = RwLock::new(file);
         let _guard = rw_lock.write()?;  // 阻塞等待排他锁
         f()  // guard 在此作用域结束时自动 drop → 释放锁
     }

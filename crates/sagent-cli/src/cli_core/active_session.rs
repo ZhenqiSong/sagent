@@ -6,26 +6,6 @@ use sagent_common::get_sagent_home;
 use sagent_core::utils::process::{pid_alive, process_start_time};
 use uuid::Uuid;
 
-pub(crate) struct ActiveSessionLease {
-    pub lease_id: String,
-    pub session_id: String,
-    pub surface: String,
-    pub enabled: bool,
-    pub released: bool,
-}
-
-impl ActiveSessionLease {
-    fn new(lease_id: &str, session_id: &str, surface: &str) -> Self{
-        Self {
-            lease_id: lease_id.to_string(),
-            session_id: session_id.to_string(),
-            surface: surface.to_string(),
-            enabled: true,
-            released: false,
-        }
-    }
-}
-
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SessionEntry{
@@ -112,7 +92,6 @@ fn state_path() -> PathBuf{
 }
 
 /// 获取活跃会话状态文件锁路径。
-#[allow(dead_code)]
 fn lock_path() -> PathBuf{
     state_dir().join("active_sessions.lock")
 }
@@ -129,81 +108,178 @@ fn prune_dead(entries: &[SessionEntry]) -> Vec<SessionEntry>{
     .collect()
 }
 
+#[derive(Debug)]
+pub(crate) struct ActiveSessionLease {
+    pub lease_id: String,
+    pub session_id: String,
+    pub surface: String,
+    pub enabled: bool,
+    pub released: bool,
+}
 
-/// 尝试获取活跃会话的租约。
-///
-/// # 参数
-///
-/// * `session_id` - 当前会话 ID
-/// * `surface` - 调用来源标识（如 "cli"、"tui"），None 表示使用默认值
-/// * `config` - CLI 配置引用
-///
-/// # 返回值
-///
-/// 返回 `Ok(true)` 表示成功获取租约，`Ok(false)` 表示已达上限。
-pub(crate) fn try_acquire_active_session(
-    session_id: &str,
-    surface: Option<&str>,
-    config: &SAgentCLIConfig,
-) -> (Option<ActiveSessionLease>, Option<String>) {
-    let _surface = surface.unwrap_or("cli");
-    let lease_id = uuid::Uuid::new_v4().simple().to_string();
-    // 未配置最大并发数时跳过会话限制检查
-    let Some(_max_sessions) = config.max_concurrent_sessions else {
-        return (
-            Some(ActiveSessionLease{
+impl ActiveSessionLease {
+    fn new(lease_id: &str, session_id: &str, surface: &str) -> Self{
+        Self {
+            lease_id: lease_id.to_string(),
+            session_id: session_id.to_string(),
+            surface: surface.to_string(),
+            enabled: true,
+            released: false,
+        }
+    }
+
+    /// 尝试获取活跃会话的租约。
+    ///
+    /// 在 sagent 运行时目录（`~/.sagent/runtime/active_sessions.json`）中
+    /// 登记当前会话，若已达最大并发会话数则拒绝。使用文件锁保证多进程下的
+    /// 原子性。
+    ///
+    /// # 流程
+    ///
+    /// 1. 若 `config.max_concurrent_sessions` 为 `None`，跳过限制检查，直接返回租约
+    /// 2. 加文件锁，读取并清理已退出会话（`prune_dead`）
+    /// 3. 若活跃会话数已达上限 → 返回错误 `"达到最大会话限制"`
+    /// 4. 否则登记当前会话到状态文件 → 返回租约
+    ///
+    /// # 参数
+    ///
+    /// * `session_id` - 当前会话唯一标识
+    /// * `surface` - 调用来源（如 `"cli"`、`"tui"`），`None` 时默认为 `"cli"`
+    /// * `config` - CLI 配置引用，从中读取 `max_concurrent_sessions`
+    ///
+    /// # 返回值
+    ///
+    /// * `Ok(lease)` — 成功获取租约，调用方应在会话结束时释放
+    /// * `Err(e)` — 文件加锁失败或已达最大并发限制
+    ///
+    /// # 示例
+    ///
+    /// ```ignore
+    /// let lease = ActiveSessionLease::try_acquire_active_session(
+    ///     "session-123", Some("cli"), &config
+    /// )?;
+    /// // ... 使用租约 ...
+    /// drop(lease); // 自动释放
+    /// ```
+    pub fn try_acquire_active_session(
+        session_id: &str,
+        surface: Option<&str>,
+        config: &SAgentCLIConfig,
+    ) -> anyhow::Result<Self> {
+        let _surface = surface.unwrap_or("cli");
+        let lease_id = uuid::Uuid::new_v4().simple().to_string();
+        // 未配置最大并发数时跳过会话限制检查
+        let Some(_max_sessions) = config.max_concurrent_sessions else {
+            return Ok(ActiveSessionLease{
                 lease_id: lease_id,
                 session_id: session_id.to_string(),
                 surface: _surface.to_string(),
                 enabled: true,
                 released: false,
-            }), None
-        )
-    };
+            })
+        };
 
-    let _now = chrono::Utc::now().timestamp() as f64 / 1000.0;
-    let _session_entry = SessionEntry::new(&lease_id, session_id, _surface);
+        let _now = chrono::Utc::now().timestamp() as f64 / 1000.0;
+        let _session_entry = SessionEntry::new(&lease_id, session_id, _surface);
 
-    let state_path = state_path();
-    let lock = FileLock::new(state_path.to_str().unwrap());
-    let limit_reached = match lock.run_with_lock(|| -> anyhow::Result<bool> {
-        let _raw_entries = SessionEntry::read_from(&state_path);
-        let mut _entries = prune_dead(&_raw_entries);
-        let pruned = _raw_entries.len() - _entries.len();
-        if pruned > 0 {
-            tracing::info!("已删除 {} 个已退出的会话", pruned);
-        }
-        let active_count = _entries.len();
-        if active_count >= _max_sessions as usize {
+        let state_path = state_path();
+        let lock = FileLock::new(lock_path().to_str().unwrap());
+        let limit_reached = match lock.run_with_lock(|| -> anyhow::Result<bool> {
+            let _raw_entries = SessionEntry::read_from(&state_path);
+            let mut _entries = prune_dead(&_raw_entries);
+            let pruned = _raw_entries.len() - _entries.len();
+            if pruned > 0 {
+                tracing::info!("已删除 {} 个已退出的会话", pruned);
+            }
+            let active_count = _entries.len();
+            if active_count >= _max_sessions as usize {
+                SessionEntry::write_to(&state_path, &_entries)?;
+                tracing::info!(
+                    active=%active_count, max=%_max_sessions, surface=%_surface,
+                    "达到最大会话限制"
+                );
+                return Ok(true);
+            }
+            // 未达上限：登记当前会话并写回状态文件
+            _entries.push(_session_entry);
             SessionEntry::write_to(&state_path, &_entries)?;
-            tracing::info!(
-                active=%active_count, max=%_max_sessions, surface=%_surface,
-                "达到最大会话限制"
-            );
-            return Ok(true);
-        }
-        // 未达上限：登记当前会话并写回状态文件
-        _entries.push(_session_entry);
-        SessionEntry::write_to(&state_path, &_entries)?;
-        Ok(false)
-    }) {
-        Ok(limit) => limit,
-        Err(e) => {
-            tracing::error!(error=%e, "文件加锁或写入失败，无法获取会话租约");
-            return (None, None);
-        }
-    };
+            Ok(false)
+        }) {
+            Ok(limit) => limit,
+            Err(e) => {
+                tracing::error!(error=%e, "文件加锁或写入失败，无法获取会话租约");
+                anyhow::bail!("会话租约获取失败: {}", e);
+            }
+        };
 
-    if limit_reached {
-        return (None, Some("达到最大会话限制".to_string()));
+        if limit_reached {
+            anyhow::bail!("达到最大会话限制");
+        }
+
+        Ok(ActiveSessionLease::new(&lease_id, session_id, _surface))
+        
     }
 
-
-    (
-        Some(ActiveSessionLease::new(&lease_id, session_id, _surface)),
-        None
-    )
+    /// 释放当前会话租约。
+    ///
+    /// 从运行时状态文件中移除本租约对应的条目，并将 `released` 标记为 `true`，
+    /// 防止 [`Drop`] 时重复释放。
+    ///
+    /// # 流程
+    ///
+    /// 1. 加文件锁，读取当前活跃会话列表
+    /// 2. 清理已退出会话（`prune_dead`）
+    /// 3. 过滤掉当前 `lease_id` 对应的条目
+    /// 4. 若有条目被移除，将剩余条目写回状态文件
+    /// 5. 标记 `self.released = true`
+    ///
+    /// # 错误处理
+    ///
+    /// 文件加锁或写入失败时仅记录错误日志，不向上传播（因为此方法由 [`Drop`] 调用，
+    /// Drop 中不允许 panic）。
+    fn release_active_session(&mut self) {
+        let state_path = state_path();
+        match FileLock::new(lock_path().to_str().unwrap()).run_with_lock(|| -> anyhow::Result<()> {
+            let _raw_entries = SessionEntry::read_from(&state_path);
+            let _entries = prune_dead(&_raw_entries);
+            let original_len = _entries.len();
+            let kept: Vec<_> = _entries
+                .into_iter()
+                .filter(|v| v.lease_id != self.lease_id)
+                .collect();
+            if kept.len() != original_len {
+                SessionEntry::write_to(&state_path, &kept)?;
+            }
+            Ok(())
+        }) {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!(error=%e, "文件加锁或写入失败，无法释放会话租约");
+            }
+        }
+        self.released = true;
+    }
 }
+
+impl Drop for ActiveSessionLease {
+    /// 自动释放会话租约。
+    ///
+    /// 当 `ActiveSessionLease` 离开作用域时自动调用，从运行时状态文件中
+    /// 移除当前会话条目，防止残留已退出会话占满并发配额。
+    ///
+    /// # 跳过条件
+    ///
+    /// * `released == true` — 已通过 [`release_active_session`] 显式释放
+    /// * `enabled == false` — 租约未启用（如未配置并发限制时创建的租约）
+    fn drop(&mut self) {
+        if self.released || !self.enabled {
+            return;
+        }
+        self.release_active_session();
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {
@@ -411,18 +487,14 @@ mod tests {
         assert_eq!(result[0].lease_id, alive.lease_id);
     }
 
-    // ── try_acquire_active_session ─────────────────────────────────────
+    // ── ActiveSessionLease::try_acquire_active_session ─────────────────
 
     #[test]
     fn test_acquire_with_no_max_limit_succeeds() {
         let config = make_config(None);
-        let (lease, err_msg) =
-            try_acquire_active_session("test-sess", Some("test"), &config);
+        let lease = ActiveSessionLease::try_acquire_active_session("test-sess", Some("test"), &config)
+            .expect("未设上限时应成功获取租约");
 
-        assert!(lease.is_some(), "未设上限时应成功获取租约");
-        assert!(err_msg.is_none(), "不应有错误消息");
-
-        let lease = lease.unwrap();
         assert_eq!(lease.session_id, "test-sess");
         assert_eq!(lease.surface, "test");
         assert!(!lease.released);
@@ -432,12 +504,11 @@ mod tests {
     #[test]
     fn test_acquire_defaults_surface_to_cli() {
         let config = make_config(None);
-        let (lease, _) =
-            try_acquire_active_session("default-sess", None, &config);
+        let lease = ActiveSessionLease::try_acquire_active_session("default-sess", None, &config)
+            .expect("未提供 surface 时应成功获取租约");
 
-        assert!(lease.is_some());
         assert_eq!(
-            lease.unwrap().surface,
+            lease.surface,
             "cli",
             "未提供 surface 时应默认为 'cli'"
         );
@@ -446,17 +517,15 @@ mod tests {
     #[test]
     fn test_acquire_generates_unique_lease_ids() {
         let config = make_config(None);
-        let (l1, _) =
-            try_acquire_active_session("s1", Some("test"), &config);
-        let (l2, _) =
-            try_acquire_active_session("s2", Some("test"), &config);
+        let l1 = ActiveSessionLease::try_acquire_active_session("s1", Some("test"), &config)
+            .expect("第一次获取租约应成功");
+        let l2 = ActiveSessionLease::try_acquire_active_session("s2", Some("test"), &config)
+            .expect("第二次获取租约应成功");
 
-        assert!(l1.is_some());
-        assert!(l2.is_some());
         // 每次调用应生成唯一的 lease_id
         assert_ne!(
-            l1.unwrap().lease_id,
-            l2.unwrap().lease_id,
+            l1.lease_id,
+            l2.lease_id,
             "每次获取租约应生成唯一 ID"
         );
     }
@@ -470,11 +539,10 @@ mod tests {
     fn test_acquire_with_max_sessions_not_exceeded_succeeds() {
         cleanup_state();
         let config = make_config(Some(5));
-        let (lease, err_msg) =
-            try_acquire_active_session("max-sess-test", Some("test"), &config);
+        let lease = ActiveSessionLease::try_acquire_active_session("max-sess-test", Some("test"), &config)
+            .expect("未达上限时应成功获取租约");
 
-        assert!(lease.is_some(), "未达上限时应成功获取租约");
-        assert!(err_msg.is_none());
+        assert_eq!(lease.session_id, "max-sess-test");
 
         // 验证状态文件包含我们的条目
         let entries = SessionEntry::read_from(&state_path());
@@ -497,14 +565,12 @@ mod tests {
 
         // 上限设为 1，当前已有 1 个活跃条目，应触发限流
         let config = make_config(Some(1));
-        let (lease, err_msg) =
-            try_acquire_active_session("blocked-sess", Some("test"), &config);
+        let result = ActiveSessionLease::try_acquire_active_session("blocked-sess", Some("test"), &config);
 
-        assert!(lease.is_none(), "达到上限时应返回 None");
-        assert!(
-            err_msg.as_deref() == Some("达到最大会话限制"),
-            "达到上限时应返回对应错误消息，实际为: {:?}",
-            err_msg
+        assert!(result.is_err(), "达到上限时应返回错误");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "达到最大会话限制"
         );
 
         cleanup_state();

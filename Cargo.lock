@@ -637,6 +637,7 @@ dependencies = [
  "clap",
  "console",
  "fd-lock",
+ "once_cell",
  "regex",
  "sagent-common",
  "sagent-core",

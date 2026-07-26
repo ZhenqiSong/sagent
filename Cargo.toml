@@ -25,6 +25,7 @@ clap = { version = "4", features = ["derive", "env"] }
 # 日志
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+once_cell = "1"
 
 # 本地 crate
 sagent-common = { path = "crates/sagent-common" }

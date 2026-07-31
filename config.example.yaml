@@ -1,0 +1,33 @@
+# sagent 配置示例文件
+# 复制为 config.yaml 并根据需要修改
+
+# Agent 基础配置
+agent:
+  name: "sagent"
+  version: "0.19.1"
+
+# LLM Provider 配置
+providers:
+  - id: "openai"
+    type: "openai"
+    endpoint: "https://api.openai.com/v1"
+    models:
+      - "gpt-4o"
+      - "gpt-4o-mini"
+
+# Gateway 平台配置
+gateway:
+  platforms:
+    - type: "telegram"
+      enabled: false
+      token: "${TELEGRAM_BOT_TOKEN}"
+
+# 工具配置
+tools:
+  enabled: true
+  timeout_secs: 30
+
+# 技能配置
+skills:
+  enabled: true
+  auto_load: false

@@ -1,8 +1,0 @@
-[package]
-name = "sagent-plugin"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-sagent-common.workspace = true

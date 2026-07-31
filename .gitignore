@@ -13,6 +13,8 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+.idea/
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
@@ -20,6 +22,9 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+
+# CodeBuddy AI editor local data (rules, plans, etc.) - not project source
+.codebuddy/
 
 # Added by cargo
 

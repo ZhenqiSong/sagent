@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Event Envelope",
+  "description": "Sagent 事件通知 envelope schema。事件是 JSON-RPC notification（不带 id 字段），seq 从 1 开始按 stream 严格递增。",
+  "type": "object",
+  "required": ["jsonrpc", "method", "params"],
+  "additionalProperties": false,
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0"
+    },
+    "method": {
+      "type": "string",
+      "minLength": 1
+    },
+    "params": {
+      "type": "object",
+      "required": ["event_id", "seq", "timestamp", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "event_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "turn_id": { "type": "string" },
+        "seq": { "type": "integer", "minimum": 1 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "data": { "type": "object" }
+      }
+    }
+  }
+}

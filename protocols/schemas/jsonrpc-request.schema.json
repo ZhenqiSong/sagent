@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JSON-RPC Request",
+  "description": "JSON-RPC 2.0 请求 schema。Request 必须包含 jsonrpc, id, method；params 必须是 object。",
+  "type": "object",
+  "required": ["jsonrpc", "id", "method"],
+  "additionalProperties": false,
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0"
+    },
+    "id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" }
+      ]
+    },
+    "method": {
+      "type": "string",
+      "minLength": 1
+    },
+    "params": {
+      "type": "object"
+    }
+  }
+}

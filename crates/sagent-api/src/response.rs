@@ -15,6 +15,7 @@ use crate::error::ErrorObject;
 ///
 /// response 必须包含 result 或 error 二者之一，不可同时存在或同时缺失。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SuccessResponse {
     /// JSON-RPC 版本，固定为 "2.0"
     pub jsonrpc: String,
@@ -26,6 +27,7 @@ pub struct SuccessResponse {
 
 /// JSON-RPC 2.0 错误响应。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ErrorResponse {
     /// JSON-RPC 版本，固定为 "2.0"
     pub jsonrpc: String,

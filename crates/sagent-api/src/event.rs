@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 /// 所有通过 stdio/WebSocket 发送的事件通知都使用此格式。
 /// 事件是 JSON-RPC notification（不带 `id` 字段）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EventEnvelope {
     /// JSON-RPC 版本，固定为 "2.0"
     pub jsonrpc: String,
@@ -25,6 +26,7 @@ pub struct EventEnvelope {
 
 /// 事件参数。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EventParams {
     /// 事件唯一标识（当前 event stream 内唯一）
     pub event_id: EventId,

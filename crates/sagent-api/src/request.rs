@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// 请求必须包含 `jsonrpc: "2.0"`、`id`、`method`。
 /// `params` 必须是 JSON object，没有参数时使用 `{}`。
+/// 协议 envelope 级别拒绝未知字段，防止协议不兼容。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Request {
     /// JSON-RPC 版本，固定为 "2.0"
     pub jsonrpc: String,
@@ -30,6 +32,7 @@ pub struct Request {
 ///
 /// 通知不期望 response，服务端不返回任何内容。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Notification {
     /// JSON-RPC 版本，固定为 "2.0"
     pub jsonrpc: String,

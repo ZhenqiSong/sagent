@@ -206,3 +206,24 @@ assistant 消息可以包含多个 `tool_calls`，每个 `tool_call` 需要对�
 - notification 不带 `id`，不返回 response
 - 每行一个完整的 JSON-RPC 消息（newline-delimited JSON）
 - stdout flush 保证即时响应
+
+### Python 测试场景映射（test_protocol.py）
+Python 协议测试覆盖的场景和对应的 Rust conformance 方向：
+- 合法 request/response 格式校验 → valid fixtures + schema 验证
+- 非法 JSON 输入（语法错误） → `-32700` ParseError
+- 缺少 method 的 request → `-32600` InvalidRequest
+- 未知 method → `-32601` MethodNotFound
+- params 类型错误 → `-32602` InvalidParams
+- notification 不返回 response → conformance 测试验证
+- 连续多 request 的顺序保证 → stdio 进程测试
+- 这些场景已映射到 `protocols/fixtures/invalid/` 中的对应 fixture
+
+### 完成原因分析（run_agent.py / conversation_loop.py）
+Python 实现中 Turn 的完成条件：
+1. `finish_reason == "stop"` — 正常完成，无 tool call
+2. `finish_reason == "tool_calls"` — 有 tool call，执行后继续循环
+3. `finish_reason == "length"` — 达到 token 限制，触发 continuation
+4. `agent._interrupt_requested` — 用户中断
+5. `iteration_budget.consume()` 返回 False — 预算耗尽
+6. `api_call_count >= agent.max_iterations` — 超过最大迭代次数
+这些已记录在 `protocols/protocol-decisions.md` 的 Decision #14 中。

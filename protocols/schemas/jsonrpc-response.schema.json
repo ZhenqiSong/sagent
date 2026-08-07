@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JSON-RPC Response",
+  "description": "JSON-RPC 2.0 响应 schema。Response 必须包含 result 或 error 二者之一，不可同时存在或同时缺失。",
+  "type": "object",
+  "required": ["jsonrpc", "id"],
+  "additionalProperties": false,
+  "oneOf": [
+    { "required": ["result"] },
+    { "required": ["error"] }
+  ],
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0"
+    },
+    "id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" }
+      ]
+    },
+    "result": {},
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "integer" },
+        "message": { "type": "string" },
+        "data": {}
+      }
+    }
+  }
+}

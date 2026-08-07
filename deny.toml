@@ -44,7 +44,11 @@ external-default-features = "allow"
 allow = []
 allow-workspace = false
 deny = []
-skip = []
+skip = [
+    # clap_derive 依赖 syn 3.x，其他依赖使用 syn 2.x
+    # 两者不兼容，属正常的跨大版本共存
+    { name = "syn", version = "3.0" },
+]
 skip-tree = []
 
 # ── 源码来源 ──

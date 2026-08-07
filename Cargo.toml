@@ -22,3 +22,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # JSON Schema 校验（用于 conformance 测试）
 jsonschema = "0.49"
+
+# CLI 参数解析
+clap = { version = "4", features = ["derive"] }
+
+# 测试辅助
+assert_cmd = "2"

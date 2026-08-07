@@ -9,5 +9,10 @@ publish = false
 
 [dependencies]
 serde_json = { workspace = true }
+tracing = { workspace = true }
+clap = { workspace = true }
 sagent-types = { path = "../../crates/sagent-types" }
 sagent-api = { path = "../../crates/sagent-api" }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }

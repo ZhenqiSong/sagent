@@ -1,4 +1,5 @@
-# cargo-deny 配置
+# cargo-deny 配置 (v0.20.x)
+# Sagent Phase 0 — 依赖审计、许可证合规、源码来源检查
 # 详见: https://embarkstudios.github.io/cargo-deny/
 
 [graph]
@@ -8,34 +9,54 @@ no-default-features = false
 [output]
 feature-depth = 1
 
+# ── 安全公告（advisories） ──
 [advisories]
-ignore = [
-    # 在此处添加需要忽略的 advisory ID
-]
+# 不默认忽略任何安全公告
+ignore = []
+# 拒绝 yanked crate
+# yanked 检查在 v0.20.x 中通过 deny 列表实现
 
+# ── 许可证合规 ──
 [licenses]
 allow = [
     "MIT",
     "Apache-2.0",
-    "BSD-3-Clause",
     "Unicode-3.0",
-    "ISC",
-    "MPL-2.0",
-    "Zlib",
 ]
 confidence-threshold = 0.8
+exceptions = []
 
 [licenses.private]
 ignore = false
+registries = []
 
+# ── 依赖禁止（bans） ──
 [bans]
-multiple-versions = "warn"
-wildcards = "allow"
+# 同一依赖多个版本视为错误
+multiple-versions = "deny"
+# 不允许使用通配符版本依赖（外部 crate）
+wildcards = "deny"
+# workspace 内部 path 依赖允许通配符（通过 Cargo workspace 版本管理）
+allow-wildcard-paths = true
+highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
+allow = []
+allow-workspace = false
+deny = []
+skip = []
+skip-tree = []
 
+# ── 源码来源 ──
 [sources]
-unknown-registry = "warn"
-unknown-git = "warn"
+# 未知 registry 视为错误
+unknown-registry = "deny"
+# 未知 git 来源视为错误
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

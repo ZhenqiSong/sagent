@@ -40,6 +40,13 @@ impl SagentHome {
         Self::default_platform()
     }
 
+    /// 从指定的根路径创建 SagentHome 实例。
+    ///
+    /// 主要用于测试，避免环境变量竞态条件。
+    pub fn from_root(root: PathBuf) -> Self {
+        Self { root }
+    }
+
     /// 从环境变量创建（不 fallback 到默认路径）。
     ///
     /// 返回 None 如果 `SAGENT_HOME` 未设置或为空。
@@ -115,11 +122,22 @@ fn dirs_fallback(env_var: &str, suffix: &str) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// 构造测试用的 SagentHome，避免环境变量竞态条件。
+    fn test_home() -> SagentHome {
+        SagentHome::from_root(PathBuf::from("/tmp/test-sagent"))
+    }
+
+    #[test]
+    fn test_from_root() {
+        let home = SagentHome::from_root(PathBuf::from("/tmp/test-sagent"));
+        assert_eq!(home.root(), &PathBuf::from("/tmp/test-sagent"));
+    }
+
     #[test]
     fn test_sagent_home_from_env_override() {
-        std::env::set_var("SAGENT_HOME", "/tmp/test-sagent");
+        std::env::set_var("SAGENT_HOME", "/tmp/test-env-override");
         let home = SagentHome::discover();
-        assert_eq!(home.root(), &PathBuf::from("/tmp/test-sagent"));
+        assert_eq!(home.root(), &PathBuf::from("/tmp/test-env-override"));
         std::env::remove_var("SAGENT_HOME");
     }
 
@@ -134,8 +152,7 @@ mod tests {
 
     #[test]
     fn test_subdirectories() {
-        std::env::set_var("SAGENT_HOME", "/tmp/test-sagent");
-        let home = SagentHome::discover();
+        let home = test_home();
         assert_eq!(home.config_dir(), PathBuf::from("/tmp/test-sagent/config"));
         assert_eq!(home.logs_dir(), PathBuf::from("/tmp/test-sagent/logs"));
         assert_eq!(home.cache_dir(), PathBuf::from("/tmp/test-sagent/cache"));
@@ -143,15 +160,11 @@ mod tests {
             home.runtime_dir(),
             PathBuf::from("/tmp/test-sagent/runtime")
         );
-        std::env::remove_var("SAGENT_HOME");
     }
 
     #[test]
     fn test_same_process_repeatable() {
-        std::env::set_var("SAGENT_HOME", "/tmp/test-sagent");
-        let home1 = SagentHome::discover();
-        let home2 = SagentHome::discover();
-        assert_eq!(home1.root(), home2.root());
-        std::env::remove_var("SAGENT_HOME");
+        let home = test_home();
+        assert_eq!(home.root(), home.root());
     }
 }

@@ -102,4 +102,40 @@ impl ErrorObject {
             data: None,
         }
     }
+
+    /// 创建一个 protocol version unsupported 错误。
+    pub fn protocol_version_unsupported(message: impl Into<String>) -> Self {
+        Self {
+            code: codes::PROTOCOL_VERSION_UNSUPPORTED,
+            message: message.into(),
+            data: None,
+        }
+    }
+
+    /// 创建一个 capability unsupported 错误。
+    pub fn capability_unsupported(message: impl Into<String>) -> Self {
+        Self {
+            code: codes::CAPABILITY_UNSUPPORTED,
+            message: message.into(),
+            data: None,
+        }
+    }
+
+    /// 创建一个 sequence violation 错误。
+    pub fn sequence_violation(message: impl Into<String>) -> Self {
+        Self {
+            code: codes::SEQUENCE_VIOLATION,
+            message: message.into(),
+            data: None,
+        }
+    }
+
+    /// 创建一个 shutdown 错误（服务正在有序退出）。
+    pub fn shutdown(message: impl Into<String>) -> Self {
+        Self {
+            code: codes::SHUTDOWN,
+            message: message.into(),
+            data: None,
+        }
+    }
 }

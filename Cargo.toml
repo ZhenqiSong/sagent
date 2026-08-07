@@ -19,3 +19,6 @@ thiserror = "2"
 # 日志（仅 stderr，不污染 stdout 协议通道）
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# JSON Schema 校验（用于 conformance 测试）
+jsonschema = "0.49"

@@ -6,40 +6,16 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+rust-version = "1.80"
 
 [workspace.dependencies]
-# 异步运行时 (阶段 0 仅引入，后续 I/O 均基于 tokio)
-tokio = { version = "1", features = ["full"] }
-
-# 序列化
+# 序列化（Phase 0 仅需 serde + serde_json）
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
-serde_with = "3"
 
 # 错误处理
 thiserror = "2"
-anyhow = "1"
 
-# CLI 解析
-clap = { version = "4", features = ["derive", "env"] }
-
-# 日志
+# 日志（仅 stderr，不污染 stdout 协议通道）
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-appender = "0.2"
-
-# 环境变量 (仅用于 secrets，行为配置一律进 config.yaml)
-dotenvy = "0.15"
-
-# 跨平台路径
-dirs = "6"
-
-# 敏感信息遮蔽 (redact 模块用)
-regex = "1"
-
-# 本地 crate
-sagent-common = { path = "crates/sagent-common" }
-sagent-proto = { path = "crates/sagent-proto" }
-sagent-config = { path = "crates/sagent-config" }
-sagent-cli = { path = "crates/sagent-cli" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

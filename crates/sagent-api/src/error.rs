@@ -1,10 +1,13 @@
 //! JSON-RPC 错误码和错误对象。
 //!
 //! 定义标准 JSON-RPC 错误码和 Sagent 扩展错误码。
+//! 每个错误码只有一个定义来源：`ErrorCode` enum。
+//! 相同输入错误在不同入口返回相同 code，不依赖错误字符串匹配。
 //!
 //! @author   songzq
 //! @created  2025-08-07
 //! @change   2025-08-07 初始版本：Phase 0 Step 0 错误码定义
+//! @change   2025-08-07 增强：添加 ErrorCode enum 提供类型安全映射
 
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +36,114 @@ pub mod codes {
     pub const SHUTDOWN: i32 = -32005;
 }
 
+/// 错误码枚举。
+///
+/// 提供类型安全的错误码表示，支持与 i32 的双向转换。
+/// 每个错误码只有一个定义来源。
+///
+/// # 示例
+///
+/// ```rust
+/// use sagent_api::error::ErrorCode;
+///
+/// let code = ErrorCode::MethodNotFound;
+/// assert_eq!(code.to_i32(), -32601);
+/// assert_eq!(code.default_message(), "Method not found");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCode {
+    /// 输入不是合法 JSON（-32700）
+    ParseError,
+    /// 顶层 JSON 不是合法 JSON-RPC request（-32600）
+    InvalidRequest,
+    /// method 未注册（-32601）
+    MethodNotFound,
+    /// params 缺少、类型错误或不满足 schema（-32602）
+    InvalidParams,
+    /// 未分类的服务端错误（-32603）
+    InternalError,
+    /// 客户端要求不支持的协议版本（-32001）
+    ProtocolVersionUnsupported,
+    /// 请求依赖未声明的 capability（-32002）
+    CapabilityUnsupported,
+    /// 单行或单个 payload 超过限制（-32003）
+    PayloadTooLarge,
+    /// 事件或请求序列违反协议约束（-32004）
+    SequenceViolation,
+    /// 服务正在有序退出（-32005）
+    Shutdown,
+}
+
+impl ErrorCode {
+    /// 返回错误码对应的整数值。
+    pub fn to_i32(self) -> i32 {
+        match self {
+            Self::ParseError => codes::PARSE_ERROR,
+            Self::InvalidRequest => codes::INVALID_REQUEST,
+            Self::MethodNotFound => codes::METHOD_NOT_FOUND,
+            Self::InvalidParams => codes::INVALID_PARAMS,
+            Self::InternalError => codes::INTERNAL_ERROR,
+            Self::ProtocolVersionUnsupported => codes::PROTOCOL_VERSION_UNSUPPORTED,
+            Self::CapabilityUnsupported => codes::CAPABILITY_UNSUPPORTED,
+            Self::PayloadTooLarge => codes::PAYLOAD_TOO_LARGE,
+            Self::SequenceViolation => codes::SEQUENCE_VIOLATION,
+            Self::Shutdown => codes::SHUTDOWN,
+        }
+    }
+
+    /// 返回错误码对应的默认人类可读消息。
+    pub fn default_message(self) -> &'static str {
+        match self {
+            Self::ParseError => "Parse error",
+            Self::InvalidRequest => "Invalid Request",
+            Self::MethodNotFound => "Method not found",
+            Self::InvalidParams => "Invalid params",
+            Self::InternalError => "Internal error",
+            Self::ProtocolVersionUnsupported => "Protocol version unsupported",
+            Self::CapabilityUnsupported => "Capability unsupported",
+            Self::PayloadTooLarge => "Payload too large",
+            Self::SequenceViolation => "Sequence violation",
+            Self::Shutdown => "Server is shutting down",
+        }
+    }
+
+    /// 从 i32 整数解析为 ErrorCode。
+    ///
+    /// 返回 `None` 表示未知的错误码。
+    pub fn from_i32(code: i32) -> Option<Self> {
+        match code {
+            codes::PARSE_ERROR => Some(Self::ParseError),
+            codes::INVALID_REQUEST => Some(Self::InvalidRequest),
+            codes::METHOD_NOT_FOUND => Some(Self::MethodNotFound),
+            codes::INVALID_PARAMS => Some(Self::InvalidParams),
+            codes::INTERNAL_ERROR => Some(Self::InternalError),
+            codes::PROTOCOL_VERSION_UNSUPPORTED => Some(Self::ProtocolVersionUnsupported),
+            codes::CAPABILITY_UNSUPPORTED => Some(Self::CapabilityUnsupported),
+            codes::PAYLOAD_TOO_LARGE => Some(Self::PayloadTooLarge),
+            codes::SEQUENCE_VIOLATION => Some(Self::SequenceViolation),
+            codes::SHUTDOWN => Some(Self::Shutdown),
+            _ => None,
+        }
+    }
+
+    /// 返回是否属于 JSON-RPC 标准错误码（-32768 到 -32000）。
+    pub fn is_standard(self) -> bool {
+        matches!(
+            self,
+            Self::ParseError
+                | Self::InvalidRequest
+                | Self::MethodNotFound
+                | Self::InvalidParams
+                | Self::InternalError
+        )
+    }
+
+    /// 返回是否属于 Sagent 扩展错误码（-32001 到 -32099）。
+    pub fn is_extension(self) -> bool {
+        !self.is_standard()
+    }
+}
+
 /// JSON-RPC 错误对象。
 ///
 /// 包含稳定的错误码和消息，可选 `data` 只能放机器可解析的安全诊断信息。
@@ -49,6 +160,32 @@ pub struct ErrorObject {
 }
 
 impl ErrorObject {
+    /// 使用 ErrorCode 和默认消息创建错误对象。
+    ///
+    /// # 示例
+    ///
+    /// ```rust
+    /// use sagent_api::error::{ErrorCode, ErrorObject};
+    /// let err = ErrorObject::from_code(ErrorCode::ParseError);
+    /// assert_eq!(err.code, -32700);
+    /// ```
+    pub fn from_code(code: ErrorCode) -> Self {
+        Self {
+            code: code.to_i32(),
+            message: code.default_message().to_string(),
+            data: None,
+        }
+    }
+
+    /// 使用 ErrorCode 和自定义消息创建错误对象。
+    pub fn from_code_with_message(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_i32(),
+            message: message.into(),
+            data: None,
+        }
+    }
+
     /// 创建一个 parse error（非法 JSON）。
     pub fn parse_error(message: impl Into<String>) -> Self {
         Self {
@@ -137,5 +274,13 @@ impl ErrorObject {
             message: message.into(),
             data: None,
         }
+    }
+
+    /// 为错误对象附加诊断数据。
+    ///
+    /// data 只能放机器可解析的安全诊断信息。
+    pub fn with_data(mut self, data: serde_json::Value) -> Self {
+        self.data = Some(data);
+        self
     }
 }

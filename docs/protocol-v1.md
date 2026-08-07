@@ -151,10 +151,42 @@ Sagent 基于 JSON-RPC 2.0，并在此基础上增加了以下约束：
 
 ### 4.3 错误响应规则
 
-- 每个错误码只有一个定义来源，相同输入错误在不同入口返回相同 code
-- 未知方法返回 `-32601`，非法 params 返回 `-32602`，两者不可混淆
+- 每个错误码只有一个定义来源（`ErrorCode` enum），相同输入错误在不同入口返回相同 code，不依赖错误字符串匹配
+- 未知方法返回 `-32601`（`MethodNotFound`），非法 params 返回 `-32602`（`InvalidParams`），两者不可混淆
 - 错误 response 保留 request `id`；无法解析 request 或无可识别 ID 时 `id` 设为 `null`
 - 错误 `data` 只能放机器可解析的安全诊断信息，不得包含 stack trace、API key、完整环境变量或本地绝对路径
+
+### 4.4 ErrorCode 类型安全映射
+
+Rust 实现中，所有错误码通过 `ErrorCode` enum 统一管理，提供类型安全的双向转换：
+
+- `ErrorCode::to_i32()` → 整数错误码
+- `ErrorCode::from_i32(code)` → 从整数解析为 enum（未知码返回 `None`）
+- `ErrorCode::default_message()` → 人类可读的默认错误消息
+- `ErrorCode::is_standard()` / `is_extension()` → 区分标准码与扩展码
+- `ErrorObject::from_code(code)` → 使用默认消息创建错误对象
+
+示例：
+```rust
+use sagent_api::error::{ErrorCode, ErrorObject};
+
+// 类型安全构造
+let err = ErrorObject::from_code(ErrorCode::MethodNotFound);
+assert_eq!(err.code, -32601);
+
+// 带自定义消息
+let err = ErrorObject::from_code_with_message(
+    ErrorCode::InvalidParams,
+    "field 'name' is required"
+);
+
+// 附加安全诊断数据
+let err = ErrorObject::from_code(ErrorCode::ProtocolVersionUnsupported)
+    .with_data(serde_json::json!({
+        "requested_version": 99,
+        "supported_version": 1
+    }));
+```
 
 ## 5. 协议版本协商
 
@@ -176,7 +208,35 @@ Sagent 基于 JSON-RPC 2.0，并在此基础上增加了以下约束：
 3. `runtime_version` 是 Sagent 发布版本，不能用于替代协议版本协商
 4. `features` 是 capability 名称列表；客户端只能调用服务端声明的能力
 5. 新增可选字段和新 capability 默认属于兼容变化；改变字段含义属于不兼容变化
-6. 客户端发送不支持的协议版本时，服务端返回 `-32001`，且不执行请求
+6. 客户端发送不支持的协议版本时，服务端返回 `-32001`（`ProtocolVersionUnsupported`），且不执行请求
+7. 客户端调用未在 `features` 中声明的方法时，服务端返回 `-32002`（`CapabilityUnsupported`）
+
+### 5.3 Capabilities 能力声明
+
+Phase 0 方法列表的权威来源是 `sagent_types::version::PHASE0_METHODS` 常量：
+
+```rust
+pub const PHASE0_METHODS: &[&str] = &["rpc.echo", "protocol.describe", "health.get"];
+```
+
+`Capabilities` 类型封装方法注册、查询和校验逻辑：
+
+```rust
+use sagent_types::version::Capabilities;
+
+let caps = Capabilities::phase0_defaults();
+
+// 查询能力
+assert!(caps.supports("rpc.echo"));
+assert!(!caps.supports("session.create"));
+
+// 校验方法是否在 capability 列表中
+if !caps.validate_method("unknown.method") {
+    // 返回 -32601 MethodNotFound
+}
+```
+
+**重要**：`protocol.describe` 返回的 `features` 列表必须与 `PHASE0_METHODS` 一致。测试 `protocol_version_features_match_phase0_methods` 强制执行此约束。
 
 ## 6. Phase 0 方法集合
 

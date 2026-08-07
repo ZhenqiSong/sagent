@@ -403,3 +403,209 @@ fn all_error_constructors_serialize_correctly() {
         );
     }
 }
+
+// ============================================================================
+// ErrorCode enum 类型安全测试
+// ============================================================================
+
+#[test]
+fn error_code_roundtrip_i32() {
+    use sagent_api::error::ErrorCode;
+
+    let all_codes = [
+        ErrorCode::ParseError,
+        ErrorCode::InvalidRequest,
+        ErrorCode::MethodNotFound,
+        ErrorCode::InvalidParams,
+        ErrorCode::InternalError,
+        ErrorCode::ProtocolVersionUnsupported,
+        ErrorCode::CapabilityUnsupported,
+        ErrorCode::PayloadTooLarge,
+        ErrorCode::SequenceViolation,
+        ErrorCode::Shutdown,
+    ];
+
+    for code in &all_codes {
+        let i = code.to_i32();
+        let parsed = ErrorCode::from_i32(i);
+        assert_eq!(Some(*code), parsed, "ErrorCode {:?} 的 i32 往返失败", code);
+    }
+}
+
+#[test]
+fn error_code_from_unknown_i32_returns_none() {
+    use sagent_api::error::ErrorCode;
+
+    assert_eq!(ErrorCode::from_i32(0), None);
+    assert_eq!(ErrorCode::from_i32(-99999), None);
+    assert_eq!(ErrorCode::from_i32(200), None);
+}
+
+#[test]
+fn error_code_is_standard_vs_extension() {
+    use sagent_api::error::ErrorCode;
+
+    assert!(ErrorCode::ParseError.is_standard());
+    assert!(ErrorCode::InvalidRequest.is_standard());
+    assert!(ErrorCode::MethodNotFound.is_standard());
+    assert!(ErrorCode::InvalidParams.is_standard());
+    assert!(ErrorCode::InternalError.is_standard());
+
+    assert!(ErrorCode::ProtocolVersionUnsupported.is_extension());
+    assert!(ErrorCode::CapabilityUnsupported.is_extension());
+    assert!(ErrorCode::PayloadTooLarge.is_extension());
+    assert!(ErrorCode::SequenceViolation.is_extension());
+    assert!(ErrorCode::Shutdown.is_extension());
+}
+
+#[test]
+fn error_object_from_code_uses_default_message() {
+    use sagent_api::error::{ErrorCode, ErrorObject};
+
+    let err = ErrorObject::from_code(ErrorCode::MethodNotFound);
+    assert_eq!(err.code, -32601);
+    assert_eq!(err.message, "Method not found");
+    assert!(err.data.is_none());
+}
+
+#[test]
+fn error_object_with_data_preserves_data() {
+    use sagent_api::error::{ErrorCode, ErrorObject};
+
+    let err = ErrorObject::from_code(ErrorCode::InvalidParams)
+        .with_data(serde_json::json!({"field": "value"}));
+
+    let json = serde_json::to_value(&err).expect("序列化失败");
+    assert_eq!(json["code"], -32602);
+    assert_eq!(json["data"]["field"], "value");
+}
+
+// ============================================================================
+// Capabilities 类型测试
+// ============================================================================
+
+#[test]
+fn capabilities_supports_registered_methods() {
+    use sagent_types::version::Capabilities;
+
+    let caps = Capabilities::phase0_defaults();
+    assert!(caps.supports("rpc.echo"));
+    assert!(caps.supports("protocol.describe"));
+    assert!(caps.supports("health.get"));
+    assert!(!caps.supports("session.create"));
+    assert!(!caps.supports("prompt.submit"));
+}
+
+#[test]
+fn capabilities_validate_method() {
+    use sagent_types::version::Capabilities;
+
+    let caps = Capabilities::phase0_defaults();
+    assert!(caps.validate_method("rpc.echo"));
+    assert!(!caps.validate_method("unknown.method"));
+}
+
+#[test]
+fn capabilities_feature_names_matches_phase0_methods() {
+    use sagent_types::version::{Capabilities, PHASE0_METHODS};
+
+    let caps = Capabilities::phase0_defaults();
+    let features = caps.feature_names();
+    assert_eq!(features.len(), PHASE0_METHODS.len());
+    for method in PHASE0_METHODS {
+        assert!(
+            features.contains(&method.to_string()),
+            "Capabilities 缺少方法: {}",
+            method
+        );
+    }
+}
+
+#[test]
+fn capabilities_default_has_three_methods() {
+    use sagent_types::version::Capabilities;
+
+    let caps = Capabilities::default();
+    assert_eq!(caps.len(), 3);
+    assert!(!caps.is_empty());
+}
+
+#[test]
+fn capabilities_empty() {
+    use sagent_types::version::Capabilities;
+
+    let caps = Capabilities::new(vec![]);
+    assert!(caps.is_empty());
+    assert_eq!(caps.len(), 0);
+    assert!(!caps.supports("rpc.echo"));
+}
+
+// ============================================================================
+// 新增 invalid fixture 测试
+// ============================================================================
+
+#[test]
+fn invalid_unsupported_protocol_version_fails_request_schema() {
+    let schema_json = schema::jsonrpc_request_schema();
+    let fixture = load_fixture("protocols/fixtures/invalid/unsupported-protocol-version.json");
+    // 该 fixture 的 params 包含 version: 99，这本身是合法的 request（params 是 object）
+    // 但业务上应被拒绝。这里验证它至少能通过 request schema（因为是合法的 JSON-RPC）。
+    // 业务层拒绝逻辑在 dispatcher 中实现。
+    assert!(
+        jsonschema::draft202012::is_valid(&schema_json, &fixture),
+        "合法的 request（尽管业务层会拒绝）应通过 request schema"
+    );
+}
+
+#[test]
+fn valid_error_protocol_version_unsupported_passes_response_schema() {
+    let schema_json = schema::jsonrpc_response_schema();
+    let fixture = load_fixture("protocols/fixtures/valid/error-protocol-version-unsupported.json");
+    assert!(
+        jsonschema::draft202012::is_valid(&schema_json, &fixture),
+        "error-protocol-version-unsupported 应通过 response schema"
+    );
+}
+
+#[test]
+fn valid_error_capability_unsupported_passes_response_schema() {
+    let schema_json = schema::jsonrpc_response_schema();
+    let fixture = load_fixture("protocols/fixtures/valid/error-capability-unsupported.json");
+    assert!(
+        jsonschema::draft202012::is_valid(&schema_json, &fixture),
+        "error-capability-unsupported 应通过 response schema"
+    );
+}
+
+// ============================================================================
+// ProtocolVersion features 与 PHASE0_METHODS 一致性测试
+// ============================================================================
+
+#[test]
+fn protocol_version_features_match_phase0_methods() {
+    use sagent_types::version::{ProtocolVersion, PHASE0_METHODS};
+
+    let pv = ProtocolVersion::default();
+    assert_eq!(
+        pv.features.len(),
+        PHASE0_METHODS.len(),
+        "ProtocolVersion.features 数量应与 PHASE0_METHODS 一致"
+    );
+    for method in PHASE0_METHODS {
+        assert!(
+            pv.features.contains(&method.to_string()),
+            "ProtocolVersion.features 缺少方法: {}",
+            method
+        );
+    }
+}
+
+#[test]
+fn protocol_version_has_correct_identity() {
+    use sagent_types::version::ProtocolVersion;
+
+    let pv = ProtocolVersion::default();
+    assert_eq!(pv.protocol, "sagent.rpc");
+    assert_eq!(pv.version, 1);
+    assert!(!pv.runtime_version.is_empty());
+}

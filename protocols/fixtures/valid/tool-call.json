@@ -1,0 +1,7 @@
+{
+  "id": "tc_1",
+  "name": "read_file",
+  "arguments": {
+    "path": "/tmp/test.txt"
+  }
+}

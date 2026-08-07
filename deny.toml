@@ -1,3 +1,18 @@
+# cargo-deny 配置
+# 详见: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+ignore = [
+    # 在此处添加需要忽略的 advisory ID
+]
+
 [licenses]
 allow = [
     "MIT",
@@ -8,12 +23,19 @@ allow = [
     "MPL-2.0",
     "Zlib",
 ]
+confidence-threshold = 0.8
 
-[advisories]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "warn"
-notice = "warn"
+[licenses.private]
+ignore = false
 
 [bans]
 multiple-versions = "warn"
+wildcards = "allow"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

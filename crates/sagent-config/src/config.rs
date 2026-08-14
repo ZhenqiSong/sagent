@@ -90,6 +90,28 @@ impl Default for DatabaseConfig {
     }
 }
 
+impl DatabaseConfig {
+    /// 校验数据库路径、busy timeout 和 synchronous 设置。
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        check_timeout("database.busy_timeout_ms", self.busy_timeout_ms)?;
+        if let Some(path) = &self.path {
+            if path.as_os_str().is_empty() {
+                return Err(ConfigError::InvalidValue {
+                    key_path: "database.path".to_string(),
+                    message: "路径不能为空".to_string(),
+                });
+            }
+            if path.to_string_lossy().contains('\0') {
+                return Err(ConfigError::InvalidValue {
+                    key_path: "database.path".to_string(),
+                    message: "路径不能包含 NUL 字符".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// JSON-RPC 限制。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -179,7 +201,7 @@ impl Config {
             "runtime.event_buffer_capacity",
             self.runtime.event_buffer_capacity,
         )?;
-        check_timeout("database.busy_timeout_ms", self.database.busy_timeout_ms)?;
+        self.database.validate()?;
         check_range(
             "rpc.max_line_bytes",
             self.rpc.max_line_bytes,
@@ -190,20 +212,6 @@ impl Config {
             self.rpc.max_response_bytes,
             defaults::MAX_RESPONSE_BYTES_LIMIT,
         )?;
-        if let Some(path) = &self.database.path {
-            if path.as_os_str().is_empty() {
-                return Err(ConfigError::InvalidValue {
-                    key_path: "database.path".to_string(),
-                    message: "路径不能为空".to_string(),
-                });
-            }
-            if path.to_string_lossy().contains('\0') {
-                return Err(ConfigError::InvalidValue {
-                    key_path: "database.path".to_string(),
-                    message: "路径不能包含 NUL 字符".to_string(),
-                });
-            }
-        }
         Ok(())
     }
 }

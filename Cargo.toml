@@ -14,6 +14,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 
+# SQLite 持久化（bundled 保证跨平台使用同一 SQLite 能力）
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+
 # 错误处理
 thiserror = "2"
 

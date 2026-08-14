@@ -1,0 +1,16 @@
+[package]
+name = "sagent-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+rusqlite = { workspace = true }
+sagent-config = { path = "../sagent-config" }
+sagent-types = { path = "../sagent-types" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

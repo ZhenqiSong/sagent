@@ -6,10 +6,13 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use sagent_config::config::LogLevel;
 use sagent_config::{Config, ConfigError, ConfigLoader, ConfigPaths, SynchronousMode};
+
+static TEST_ROOT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 struct TestRoot(PathBuf);
 
@@ -17,8 +20,11 @@ impl TestRoot {
     fn new() -> Self {
         let suffix =
             SystemTime::now().duration_since(UNIX_EPOCH).expect("系统时间应有效").as_nanos();
-        let path =
-            std::env::temp_dir().join(format!("sagent-config-{}-{suffix}", std::process::id()));
+        let sequence = TEST_ROOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "sagent-config-{}-{suffix}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(&path).expect("应创建测试目录");
         Self(path)
     }

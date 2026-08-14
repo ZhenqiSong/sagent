@@ -10,11 +10,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Phase 0 已注册的方法列表（权威来源）。
+/// 核心协议已注册的方法列表（权威来源）。
 ///
 /// 此常量是 `protocol.describe` 返回的 feature 列表的唯一定义来源。
 /// 新增方法必须在此注册。
-pub const PHASE0_METHODS: &[&str] = &["rpc.echo", "protocol.describe", "health.get"];
+pub const CORE_METHODS: &[&str] = &["rpc.echo", "protocol.describe", "health.get"];
 
 /// 协议版本信息。
 ///
@@ -38,7 +38,7 @@ impl Default for ProtocolVersion {
             protocol: "sagent.rpc".to_string(),
             version: 1,
             runtime_version: env!("CARGO_PKG_VERSION").to_string(),
-            features: PHASE0_METHODS.iter().map(|s| s.to_string()).collect(),
+            features: CORE_METHODS.iter().map(|s| s.to_string()).collect(),
         }
     }
 }
@@ -53,7 +53,7 @@ impl Default for ProtocolVersion {
 /// ```rust
 /// use sagent_types::version::Capabilities;
 ///
-/// let caps = Capabilities::phase0_defaults();
+/// let caps = Capabilities::default_capabilities();
 /// assert!(caps.supports("rpc.echo"));
 /// assert!(caps.supports("protocol.describe"));
 /// assert!(!caps.supports("session.create"));
@@ -64,10 +64,10 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
-    /// 使用 Phase 0 默认方法集合创建 Capabilities。
-    pub fn phase0_defaults() -> Self {
+    /// 使用核心协议默认方法集合创建 Capabilities。
+    pub fn default_capabilities() -> Self {
         Self {
-            methods: PHASE0_METHODS.iter().map(|s| s.to_string()).collect(),
+            methods: CORE_METHODS.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -111,6 +111,6 @@ impl Capabilities {
 
 impl Default for Capabilities {
     fn default() -> Self {
-        Self::phase0_defaults()
+        Self::default_capabilities()
     }
 }

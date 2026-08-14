@@ -506,7 +506,7 @@ fn error_object_with_data_preserves_data() {
 fn capabilities_supports_registered_methods() {
     use sagent_types::version::Capabilities;
 
-    let caps = Capabilities::phase0_defaults();
+    let caps = Capabilities::default_capabilities();
     assert!(caps.supports("rpc.echo"));
     assert!(caps.supports("protocol.describe"));
     assert!(caps.supports("health.get"));
@@ -518,19 +518,19 @@ fn capabilities_supports_registered_methods() {
 fn capabilities_validate_method() {
     use sagent_types::version::Capabilities;
 
-    let caps = Capabilities::phase0_defaults();
+    let caps = Capabilities::default_capabilities();
     assert!(caps.validate_method("rpc.echo"));
     assert!(!caps.validate_method("unknown.method"));
 }
 
 #[test]
-fn capabilities_feature_names_matches_phase0_methods() {
-    use sagent_types::version::{Capabilities, PHASE0_METHODS};
+fn capabilities_feature_names_matches_core_methods() {
+    use sagent_types::version::{Capabilities, CORE_METHODS};
 
-    let caps = Capabilities::phase0_defaults();
+    let caps = Capabilities::default_capabilities();
     let features = caps.feature_names();
-    assert_eq!(features.len(), PHASE0_METHODS.len());
-    for method in PHASE0_METHODS {
+    assert_eq!(features.len(), CORE_METHODS.len());
+    for method in CORE_METHODS {
         assert!(
             features.contains(&method.to_string()),
             "Capabilities 缺少方法: {}",
@@ -596,20 +596,20 @@ fn valid_error_capability_unsupported_passes_response_schema() {
 }
 
 // ============================================================================
-// ProtocolVersion features 与 PHASE0_METHODS 一致性测试
+// ProtocolVersion features 与 CORE_METHODS 一致性测试
 // ============================================================================
 
 #[test]
-fn protocol_version_features_match_phase0_methods() {
-    use sagent_types::version::{ProtocolVersion, PHASE0_METHODS};
+fn protocol_version_features_match_core_methods() {
+    use sagent_types::version::{ProtocolVersion, CORE_METHODS};
 
     let pv = ProtocolVersion::default();
     assert_eq!(
         pv.features.len(),
-        PHASE0_METHODS.len(),
-        "ProtocolVersion.features 数量应与 PHASE0_METHODS 一致"
+        CORE_METHODS.len(),
+        "ProtocolVersion.features 数量应与 CORE_METHODS 一致"
     );
-    for method in PHASE0_METHODS {
+    for method in CORE_METHODS {
         assert!(
             pv.features.contains(&method.to_string()),
             "ProtocolVersion.features 缺少方法: {}",

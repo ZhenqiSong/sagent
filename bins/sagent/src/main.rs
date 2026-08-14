@@ -115,7 +115,7 @@ fn generate_schemas() {
 ///
 /// stdout 写失败或 BrokenPipe 时有序退出，不 panic。
 fn run_stdio_server() {
-    let caps = Capabilities::phase0_defaults();
+    let caps = Capabilities::default_capabilities();
     let pv = sagent_types::version::ProtocolVersion::default();
 
     // 启动日志：记录协议版本、runtime 版本和 capabilities

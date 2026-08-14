@@ -213,10 +213,10 @@ let err = ErrorObject::from_code(ErrorCode::ProtocolVersionUnsupported)
 
 ### 5.3 Capabilities 能力声明
 
-Phase 0 方法列表的权威来源是 `sagent_types::version::PHASE0_METHODS` 常量：
+核心协议方法列表的权威来源是 `sagent_types::version::CORE_METHODS` 常量：
 
 ```rust
-pub const PHASE0_METHODS: &[&str] = &["rpc.echo", "protocol.describe", "health.get"];
+pub const CORE_METHODS: &[&str] = &["rpc.echo", "protocol.describe", "health.get"];
 ```
 
 `Capabilities` 类型封装方法注册、查询和校验逻辑：
@@ -224,7 +224,7 @@ pub const PHASE0_METHODS: &[&str] = &["rpc.echo", "protocol.describe", "health.g
 ```rust
 use sagent_types::version::Capabilities;
 
-let caps = Capabilities::phase0_defaults();
+let caps = Capabilities::default_capabilities();
 
 // 查询能力
 assert!(caps.supports("rpc.echo"));
@@ -236,7 +236,7 @@ if !caps.validate_method("unknown.method") {
 }
 ```
 
-**重要**：`protocol.describe` 返回的 `features` 列表必须与 `PHASE0_METHODS` 一致。测试 `protocol_version_features_match_phase0_methods` 强制执行此约束。
+**重要**：`protocol.describe` 返回的 `features` 列表必须与 `CORE_METHODS` 一致。测试 `protocol_version_features_match_core_methods` 强制执行此约束。
 
 ## 6. Phase 0 方法集合
 

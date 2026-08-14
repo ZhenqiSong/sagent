@@ -18,5 +18,15 @@ Repository 写事务成功后更新；失败事务不会发布成功事件，也
 Step 5 的 `SessionActor::spawn` 接收已由 Repository 恢复的快照。它不创建 Session row，
 不补发历史 `message.appended` 事件，也不把未提交的调用方 draft 放入内存。
 
-Runtime Supervisor 在后续 Step 负责启动顺序、live Actor registry、`session.recovered` 事件、
-进程重启和数据库所有权。Actor 本身不负责跨 Session registry、RPC 或 CLI。
+Runtime Supervisor 负责启动顺序、live Actor registry、进程重启和数据库所有权。Step 6 的
+Supervisor 在启动时完成数据库初始化后才接受请求，
+registry 只保存 live handle 和 task；`get/list` 在 shutdown 开始后拒绝新请求。Actor 本身不负责
+跨 Session registry、RPC 或 CLI。
+
+## Runtime Shutdown
+
+- shutdown 首先将 Runtime 标记为不再接受请求。
+- 之后逐个向 live Actor 发送 shutdown，等待其已接受命令完成并回收 task。
+- 每个等待都受 `runtime.shutdown_timeout_ms` 的总体 deadline 约束；超时会 abort Actor task，
+  然后释放 Supervisor Repository。
+- 重复 shutdown 是幂等的；数据库 connection 在所有 Actor task 释放后才关闭。

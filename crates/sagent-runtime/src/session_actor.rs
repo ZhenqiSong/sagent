@@ -96,7 +96,12 @@ impl SessionHandle {
 
     /// 等待 Actor 处理已接受命令后退出。
     pub async fn shutdown(&self) -> Result<(), ActorError> {
-        match self.request(|reply| ActorCommand::Shutdown { reply }).await? {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(ActorCommand::Shutdown { reply })
+            .await
+            .map_err(|_| ActorError::Shutdown(self.session_id.clone()))?;
+        match result.await.map_err(|_| ActorError::ReplyClosed(self.session_id.clone()))?? {
             CommandReply::Ack => Ok(()),
             _ => unreachable!("Shutdown reply type mismatch"),
         }

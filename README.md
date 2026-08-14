@@ -100,7 +100,6 @@ Linux / macOS / Windows 三平台，含 fmt → check → test → clippy → de
 ```text
 ~/.sagent/
 ├── config.yaml
-├── secrets.env
 ├── state.db
 ├── logs/
 ├── skills/
@@ -109,14 +108,15 @@ Linux / macOS / Windows 三平台，含 fmt → check → test → clippy → de
 └── runs/
 ```
 
-行为配置在 `config.yaml`，密钥在环境变量/`secrets.env`。示例配置见 [config.example.yaml](config.example.yaml)。
+行为配置在 `config.yaml`，Phase 1 不读取 `.env` 或保存模型密钥。配置规范见
+[docs/config-v1.md](docs/config-v1.md)，示例见 [config.example.yaml](config.example.yaml)。
 
 ## 开发阶段
 
 | Phase | 状态 | 内容 |
 | --- | --- | --- |
 | **Phase 0** | ✅ 完成 | 项目基础与协议设计 |
-| Phase 1 | 🔜 待开始 | 基础设施（sagent-config, sagent-session, SQLite） |
+| Phase 1 | 🚧 进行中 | 基础设施（sagent-config, sagent-session, SQLite） |
 | Phase 2 | 📋 计划中 | Agent 内核（Agent Loop, Session Actor, Tool Registry） |
 | Phase 3+ | 📋 计划中 | 可靠性与安全、子代理/Skills/MCP、前端接入、生态扩展 |
 

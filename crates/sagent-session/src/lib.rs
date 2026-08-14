@@ -1,7 +1,6 @@
-//! sagent-session — SQLite 连接和版本化 schema 基础设施。
+//! sagent-session — SQLite 连接、版本化 schema 和 Session Repository。
 //!
-//! 本 crate 当前只负责数据库生命周期、PRAGMA 和 migration；Repository 会在 Step 4 实现。
-//! 不向业务层暴露裸 SQLite connection。
+//! 本 crate 不依赖 JSON-RPC 或 Runtime，也不向业务层暴露裸 SQLite connection。
 //!
 //! @author   songzq
 //! @created  2026-08-14

@@ -61,5 +61,5 @@ WAL 或 schema 校验不满足要求时初始化失败，不降级为未声明�
 ## 失败和恢复
 
 Step 3 已使用真实 SQLite 文件测试首次创建、重复打开、foreign key、PRAGMA、损坏 migration
-rollback、旧数据库拒绝和 future schema 拒绝。Repository 的事务性消息写入、并发 append 和
-Session 生命周期留到 Step 4。
+rollback、旧数据库拒绝和 future schema 拒绝。Step 4 已补充 Repository 的事务性消息写入、并发
+append 和 Session 生命周期测试；Step 5 的 Actor 在 commit 后更新快照并发布 live event。

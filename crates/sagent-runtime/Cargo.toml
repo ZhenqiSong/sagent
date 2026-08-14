@@ -1,0 +1,17 @@
+[package]
+name = "sagent-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+sagent-session = { path = "../sagent-session" }
+sagent-types = { path = "../sagent-types" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+sagent-config = { path = "../sagent-config" }

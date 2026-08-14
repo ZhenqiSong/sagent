@@ -32,3 +32,6 @@ clap = { version = "4", features = ["derive"] }
 
 # 测试辅助
 assert_cmd = "2"
+
+# 异步 Actor mailbox
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

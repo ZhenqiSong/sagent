@@ -6,8 +6,10 @@
 //! @author   songzq
 //! @created  2025-08-07
 //! @change   2025-08-07 初始版本：Phase 0 Step 0 基础 ID 类型
+//! @change   2025-08-12 增强：Phase 0 Step 9 为 RequestId 添加 Display
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Session 唯一标识符
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -37,4 +39,13 @@ pub enum RequestId {
     String(String),
     /// 数字类型 ID
     Number(i64),
+}
+
+impl fmt::Display for RequestId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::String(s) => write!(f, "{}", s),
+            Self::Number(n) => write!(f, "{}", n),
+        }
+    }
 }

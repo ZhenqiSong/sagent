@@ -307,11 +307,11 @@ pub struct ToolDefinition {
 7. **id 上限**：256 字节。
 8. **stdin EOF**：正常退出，返回码 0。
 9. **BrokenPipe**：干净退出，不 panic。
-10. **写入串行化**：stdout 写入通过 Mutex 保护。
+10. **写入串行化**：Phase 0 单线程主循环通过 `LineWriter` 所有权保证 stdout 写入串行化。
 
-**对应 Rust 类型**：`bins/sagent/src/stdio.rs`（待实现）、`sagent_api::error::codes::PAYLOAD_TOO_LARGE`。
+**对应 Rust 类型**：`bins/sagent/src/stdio.rs`、`sagent_api::error::codes::PAYLOAD_TOO_LARGE`。
 
-**与 Python 差异**：Python 使用 `threading.Lock` + `_real_stdout` 全局变量。Sagent 使用 `Mutex<BufWriter<Stdout>>`。
+**与 Python 差异**：Python 使用 `threading.Lock` + `_real_stdout` 全局变量。Sagent 不使用共享全局 stdout 状态。
 
 ---
 

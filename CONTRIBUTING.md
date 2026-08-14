@@ -25,10 +25,14 @@ cargo test --workspace
 # 4. Clippy 静态检查（零警告）
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# 5. 依赖审计
+# 5. Schema 生成一致性检查
+cargo run --quiet --bin sagent -- protocol generate-schemas
+git diff --exit-code -- protocols/schemas
+
+# 6. 依赖审计
 cargo deny check
 
-# 6. 安全漏洞扫描
+# 7. 安全漏洞扫描
 cargo audit
 ```
 

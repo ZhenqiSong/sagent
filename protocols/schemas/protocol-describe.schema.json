@@ -1,25 +1,32 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Protocol Describe Response",
-  "description": "protocol.describe 方法的响应 schema。返回协议版本、runtime 版本和 capabilities。",
-  "type": "object",
-  "required": ["protocol", "version", "runtime_version", "features"],
   "additionalProperties": false,
+  "description": "protocol.describe 方法的响应 schema。返回协议版本、runtime 版本和 capabilities。",
   "properties": {
-    "protocol": {
-      "type": "string",
-      "const": "sagent.rpc"
+    "features": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
-    "version": {
-      "type": "integer",
-      "minimum": 1
+    "protocol": {
+      "const": "sagent.rpc",
+      "type": "string"
     },
     "runtime_version": {
       "type": "string"
     },
-    "features": {
-      "type": "array",
-      "items": { "type": "string" }
+    "version": {
+      "minimum": 1,
+      "type": "integer"
     }
-  }
+  },
+  "required": [
+    "protocol",
+    "version",
+    "runtime_version",
+    "features"
+  ],
+  "title": "Protocol Describe Response",
+  "type": "object"
 }

@@ -32,7 +32,7 @@ pub struct ErrorResponse {
     /// JSON-RPC 版本，固定为 "2.0"
     pub jsonrpc: String,
     /// 对应的请求 ID
-    pub id: RequestId,
+    pub id: Option<RequestId>,
     /// 错误对象
     pub error: ErrorObject,
 }

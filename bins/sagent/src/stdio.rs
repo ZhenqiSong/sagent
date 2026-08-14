@@ -6,6 +6,7 @@
 //! @author   songzq
 //! @created  2025-08-07
 //! @change   2025-08-07 初始版本：Phase 0 Step 7 stdio transport
+//! @change   2026-08-14 增强：暴露超长输入判断供协议错误处理
 
 use std::io::{self, BufRead, BufReader, Write};
 
@@ -13,18 +14,24 @@ use std::io::{self, BufRead, BufReader, Write};
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 
 /// method 最大字节数。
-#[allow(dead_code)]
 pub const MAX_METHOD_BYTES: usize = 256;
 
 /// request id 最大字节数（序列化后）。
-#[allow(dead_code)]
 pub const MAX_ID_BYTES: usize = 256;
+
+const LINE_TOO_LARGE_PREFIX: &str = "line exceeds ";
 
 /// stdio 行读取器。
 ///
 /// 从 stdin 逐行读取，跳过空行，限制单行最大长度。
 pub struct LineReader {
     reader: BufReader<io::Stdin>,
+}
+
+/// 判断读取错误是否表示单行超过协议限制。
+pub fn is_line_too_large(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::InvalidData
+        && error.to_string().starts_with(LINE_TOO_LARGE_PREFIX)
 }
 
 impl LineReader {

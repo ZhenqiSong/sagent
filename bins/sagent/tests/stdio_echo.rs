@@ -262,6 +262,67 @@ fn test_wrong_jsonrpc_version_returns_invalid_request() {
     child.wait().expect("子进程退出失败");
 }
 
+#[test]
+fn test_unknown_envelope_field_returns_invalid_request() {
+    let mut child = spawn_server();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut stdout = std::io::BufReader::new(stdout);
+
+    let resp = send_request(
+        &mut stdin,
+        &mut stdout,
+        r#"{"jsonrpc":"2.0","id":"1","method":"rpc.echo","params":{},"extra":true}"#,
+    );
+    assert_eq!(resp["error"]["code"], -32600);
+    assert_eq!(resp["id"], "1");
+
+    drop(stdin);
+    child.wait().expect("子进程退出失败");
+}
+
+#[test]
+fn test_method_too_long_returns_payload_too_large() {
+    let mut child = spawn_server();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut stdout = std::io::BufReader::new(stdout);
+    let method = "a".repeat(257);
+    let request = format!(
+        r#"{{"jsonrpc":"2.0","id":"1","method":"{}","params":{{}}}}"#,
+        method
+    );
+
+    let resp = send_request(&mut stdin, &mut stdout, &request);
+    assert_eq!(resp["error"]["code"], -32003);
+
+    drop(stdin);
+    child.wait().expect("子进程退出失败");
+}
+
+#[test]
+fn test_oversized_line_returns_payload_too_large_and_continues() {
+    let mut child = spawn_server();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut stdout = std::io::BufReader::new(stdout);
+    let oversized = format!("{{\"padding\":\"{}\"}}", "a".repeat(1024 * 1024));
+
+    let oversized_response = send_request(&mut stdin, &mut stdout, &oversized);
+    assert_eq!(oversized_response["error"]["code"], -32003);
+
+    let response = send_request(
+        &mut stdin,
+        &mut stdout,
+        r#"{"jsonrpc":"2.0","id":"after","method":"rpc.echo","params":{"ok":true}}"#,
+    );
+    assert_eq!(response["id"], "after");
+    assert_eq!(response["result"]["ok"], true);
+
+    drop(stdin);
+    child.wait().expect("子进程退出失败");
+}
+
 // ============================================================================
 // Response 不变量测试
 // ============================================================================

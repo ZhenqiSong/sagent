@@ -733,9 +733,9 @@ SagentHome::runtime_dir()
 
 | 平台 | 默认 home |
 | --- | --- |
-| Linux | `$XDG_DATA_HOME/sagent`，否则 `~/.local/share/sagent` |
-| macOS | `~/Library/Application Support/sagent` |
-| Windows | `%LOCALAPPDATA%\\sagent` |
+| Linux | `$HOME/.sagent` |
+| macOS | `$HOME/.sagent` |
+| Windows | `%USERPROFILE%\\.sagent` |
 
 允许 `SAGENT_HOME` 覆盖默认路径。该变量属于内部/部署覆盖，不应在用户文档中扩展成大量
 行为开关。所有目录都使用 `PathBuf`，不能拼接硬编码 `/`。

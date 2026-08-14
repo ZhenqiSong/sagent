@@ -52,6 +52,11 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Verify generated schemas
+        run: |
+          cargo run --quiet --bin sagent -- protocol generate-schemas
+          git diff --exit-code -- protocols/schemas
+
   # ── 跨平台基础编译检查 ──
   cross-check:
     name: Cross Check (${{ matrix.target }})

@@ -146,6 +146,8 @@ fn invalid_request_fixtures_fail_request_schema() {
         "missing-method",
         "params-is-array",
         "params-is-string",
+        "unknown-envelope-field",
+        "null-request-id",
     ];
     for name in &fixtures {
         let fixture = load_fixture(&format!("protocols/fixtures/invalid/{}.json", name));
@@ -178,7 +180,12 @@ fn invalid_response_fixtures_fail_response_schema() {
 #[test]
 fn invalid_event_fixtures_fail_event_schema() {
     let schema_json = schema::event_envelope_schema();
-    let fixtures = ["event-with-id", "seq-zero", "event-missing-event-id"];
+    let fixtures = [
+        "event-with-id",
+        "seq-zero",
+        "seq-negative",
+        "event-missing-event-id",
+    ];
     for name in &fixtures {
         let fixture = load_fixture(&format!("protocols/fixtures/invalid/{}.json", name));
         assert!(
@@ -187,6 +194,17 @@ fn invalid_event_fixtures_fail_event_schema() {
             name
         );
     }
+}
+
+#[test]
+fn invalid_method_too_long_fails_request_schema() {
+    let schema_json = schema::jsonrpc_request_schema();
+    let fixture = load_fixture("protocols/fixtures/invalid/method-too-long.json");
+    // method 长度限制属于 request schema 和 runtime 的共同约束。
+    assert!(
+        !jsonschema::draft202012::is_valid(&schema_json, &fixture),
+        "method-too-long 错误地通过了 request schema 校验"
+    );
 }
 
 // ============================================================================
@@ -238,7 +256,7 @@ fn error_response_serialize_output_passes_schema() {
 
     let resp = ErrorResponse {
         jsonrpc: "2.0".to_string(),
-        id: RequestId::String("test-1".to_string()),
+        id: Some(RequestId::String("test-1".to_string())),
         error: ErrorObject::invalid_params("missing field"),
     };
     let json = serde_json::to_value(&resp).expect("序列化失败");

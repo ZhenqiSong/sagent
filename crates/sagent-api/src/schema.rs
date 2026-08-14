@@ -10,7 +10,7 @@
 
 /// 生成 JSON-RPC request 的 JSON Schema。
 ///
-/// 约束：jsonrpc 必须为 "2.0"；id 为 string 或 integer；method 非空；
+/// 约束：jsonrpc 必须为 "2.0"；id 为 string 或 integer；method 非空且不超过 256 字节；
 /// params 为 object；拒绝未知字段。
 pub fn jsonrpc_request_schema() -> serde_json::Value {
     serde_json::json!({
@@ -33,7 +33,8 @@ pub fn jsonrpc_request_schema() -> serde_json::Value {
             },
             "method": {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "maxLength": 256
             },
             "params": {
                 "type": "object"
@@ -66,7 +67,8 @@ pub fn jsonrpc_response_schema() -> serde_json::Value {
             "id": {
                 "oneOf": [
                     { "type": "string" },
-                    { "type": "integer" }
+                    { "type": "integer" },
+                    { "type": "null" }
                 ]
             },
             "result": {},

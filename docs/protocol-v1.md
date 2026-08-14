@@ -87,7 +87,7 @@ Sagent 基于 JSON-RPC 2.0，并在此基础上增加了以下约束：
 }
 ```
 
-必填字段：`jsonrpc`、`id`、`error`。`error.code` 为整数，`error.message` 为字符串，`error.data` 可选。
+必填字段：`jsonrpc`、`id`、`error`。`error.code` 为整数，`error.message` 为字符串，`error.data` 可选。无法识别原始 request ID 时，错误响应的 `id` 使用 JSON `null`。
 
 **重要**：Response 必须包含 `result` 或 `error` 二者之一，不可同时存在或同时缺失。
 
@@ -310,7 +310,37 @@ Sagent 是独立 Rust 实现，不兼容以下 Python 组件：
 
 Schema 文件由单一 Rust 类型来源生成，禁止手工维护漂移副本。修改 Rust 类型后必须重新生成 schema 文件，CI 会检查生成结果无 diff。
 
-## 10. 参考
+生成命令：
+```bash
+cargo run --bin sagent -- protocol generate-schemas
+git diff --exit-code -- protocols/schemas
+```
+
+## 10. 日志系统
+
+### 10.1 通道隔离
+
+- **stdout**：纯 JSON-RPC 协议通道，每行合法 JSON
+- **stderr**：所有日志输出，使用 tracing 框架
+
+### 10.2 日志级别
+
+默认 `info`，通过 `RUST_LOG` 环境变量覆盖：
+```bash
+RUST_LOG=debug cargo run --bin sagent -- rpc stdio
+```
+
+### 10.3 结构化字段
+
+每条日志包含：`timestamp`、`level`、`target`、`message`。RPC request 处理期间自动携带 `request_id` span 字段。
+
+### 10.4 敏感数据保护
+
+日志自动脱敏以下字段名（大小写不敏感）的值：`token`、`secret`、`password`、`api_key`、`apikey`、`authorization`、`credential`、`private_key`、`access_key`。敏感值替换为 `***REDACTED***`。
+
+详见 `docs/logging.md`。
+
+## 11. 参考
 
 - [JSON-RPC 2.0 规范](https://www.jsonrpc.org/specification)
 - `protocols/protocol-decisions.md`：17 项协议决策记录

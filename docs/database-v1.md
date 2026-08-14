@@ -41,6 +41,23 @@ Session 持久化投影，后续 Repository 必须在同一写事务中更新。
 
 WAL 或 schema 校验不满足要求时初始化失败，不降级为未声明的数据库行为。
 
+## Repository 事务
+
+`sagent-session::Repository` 持有已初始化的数据库连接，只暴露 typed Session/Message API，不
+暴露 SQLite connection 或 SQL。其写入边界如下：
+
+- `create_session` 在单事务中写入 Session 和初始 metadata。
+- `append_message` 使用 `BEGIN IMMEDIATE`，校验 Session 状态，按 `MAX(sequence) + 1` 分配顺序，
+  插入 Message，并在同一事务中更新 `message_count`、`updated_at` 和 `revision`。
+- `close_session` 在单事务中更新状态、时间和 revision；重复关闭幂等。
+- 任一步失败都会 rollback；成功 commit 前不会返回成功 Message 或更新投影。
+- Session list 按 `updated_at DESC, id ASC` 稳定排序；Message 按 `sequence ASC` 排序，所有读取
+  都有上限。
+- `resume_session` 校验 message_count、最后 sequence 和实际消息窗口的一致性；不一致时 fail
+  closed，不静默截断历史。
+- 多个 Repository 实例可以通过 SQLite WAL 和 busy timeout 并发写入；同一 Session 的 sequence
+  由数据库事务分配，不会重复或丢失。
+
 ## 失败和恢复
 
 Step 3 已使用真实 SQLite 文件测试首次创建、重复打开、foreign key、PRAGMA、损坏 migration

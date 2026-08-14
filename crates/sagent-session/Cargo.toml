@@ -10,6 +10,7 @@ publish = false
 rusqlite = { workspace = true }
 sagent-config = { path = "../sagent-config" }
 sagent-types = { path = "../sagent-types" }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

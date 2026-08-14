@@ -10,7 +10,14 @@
 pub mod connection;
 pub mod error;
 pub mod migrations;
+pub mod models;
+pub mod repository;
 
 pub use connection::{DatabaseConnection, PragmaState};
 pub use error::DatabaseError;
 pub use migrations::{Migration, MIGRATIONS};
+pub use models::{
+    AppendMessage, CreateSession, ListSessions, MessageRange, SessionCursor, SessionSnapshot,
+    SessionSummary, MAX_LIST_LIMIT, MAX_MESSAGE_LIMIT,
+};
+pub use repository::{Repository, RepositoryError};

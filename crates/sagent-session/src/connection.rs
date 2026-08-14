@@ -118,6 +118,14 @@ impl DatabaseConnection {
     pub fn table_columns(&self, name: &str) -> Result<Vec<String>, DatabaseError> {
         migrations::table_columns(&self.connection, name)
     }
+
+    pub(crate) fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+
+    pub(crate) fn connection_ref(&self) -> &Connection {
+        &self.connection
+    }
 }
 
 fn create_parent(path: &Path) -> Result<(), DatabaseError> {

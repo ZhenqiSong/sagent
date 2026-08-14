@@ -13,6 +13,9 @@ pub mod ids;
 /// 消息类型模块（Role、ContentPart、Message）
 pub mod message;
 
+/// Session 类型模块（Session、SessionStatus）
+pub mod session;
+
 /// 工具类型模块（ToolCall、ToolDefinition）
 pub mod tool;
 

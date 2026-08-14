@@ -11,6 +11,7 @@ use sagent_types::envelope::Envelope;
 use sagent_types::event::*;
 use sagent_types::ids::*;
 use sagent_types::message::*;
+use sagent_types::session::*;
 use sagent_types::tool::*;
 use sagent_types::version::ProtocolVersion;
 
@@ -183,6 +184,7 @@ fn test_content_part_rejects_missing_type() {
 fn test_message_user_roundtrip() {
     let msg = Message {
         message_id: MessageId("msg_1".to_string()),
+        session_id: SessionId("sess_1".to_string()),
         role: Role::User,
         content: vec![ContentPart::Text {
             text: "Hello".to_string(),
@@ -190,6 +192,8 @@ fn test_message_user_roundtrip() {
         tool_calls: vec![],
         tool_call_id: None,
         created_at: "2026-08-07T12:00:00Z".to_string(),
+        sequence: 1,
+        metadata: Default::default(),
     };
     let json = serde_json::to_string(&msg).unwrap();
     let parsed: Message = serde_json::from_str(&json).unwrap();
@@ -219,6 +223,7 @@ fn test_message_assistant_with_tool_calls() {
 
     let msg = Message {
         message_id: MessageId("msg_2".to_string()),
+        session_id: SessionId("sess_1".to_string()),
         role: Role::Assistant,
         content: vec![ContentPart::Text {
             text: "Let me read that file.".to_string(),
@@ -226,6 +231,8 @@ fn test_message_assistant_with_tool_calls() {
         tool_calls: vec![tc],
         tool_call_id: None,
         created_at: "2026-08-07T12:00:01Z".to_string(),
+        sequence: 2,
+        metadata: Default::default(),
     };
 
     let json = serde_json::to_string(&msg).unwrap();
@@ -240,6 +247,7 @@ fn test_message_assistant_with_tool_calls() {
 fn test_message_tool_result() {
     let msg = Message {
         message_id: MessageId("msg_3".to_string()),
+        session_id: SessionId("sess_1".to_string()),
         role: Role::Tool,
         content: vec![ContentPart::Text {
             text: "file contents here".to_string(),
@@ -247,6 +255,8 @@ fn test_message_tool_result() {
         tool_calls: vec![],
         tool_call_id: Some(ToolCallId("tc_1".to_string())),
         created_at: "2026-08-07T12:00:02Z".to_string(),
+        sequence: 3,
+        metadata: Default::default(),
     };
 
     let json = serde_json::to_string(&msg).unwrap();
@@ -270,6 +280,27 @@ fn test_message_missing_message_id() {
 }
 
 #[test]
+fn test_message_missing_session_id_or_content() {
+    let missing_session_id = r#"{
+        "message_id": "msg_1",
+        "role": "user",
+        "content": [{"type": "text", "text": "hello"}],
+        "created_at": "2026-08-07T12:00:00Z",
+        "sequence": 1
+    }"#;
+    assert!(serde_json::from_str::<Message>(missing_session_id).is_err());
+
+    let missing_content = r#"{
+        "message_id": "msg_1",
+        "session_id": "sess_1",
+        "role": "user",
+        "created_at": "2026-08-07T12:00:00Z",
+        "sequence": 1
+    }"#;
+    assert!(serde_json::from_str::<Message>(missing_content).is_err());
+}
+
+#[test]
 fn test_message_missing_role() {
     let json = r#"{
         "message_id": "msg_1",
@@ -286,9 +317,11 @@ fn test_message_default_tool_calls_and_id() {
     // tool_calls 和 tool_call_id 应有默认值
     let json = r#"{
         "message_id": "msg_1",
+        "session_id": "sess_1",
         "role": "user",
         "content": [{"type": "text", "text": "hello"}],
-        "created_at": "2026-08-07T12:00:00Z"
+        "created_at": "2026-08-07T12:00:00Z",
+        "sequence": 1
     }"#;
     let msg: Message = serde_json::from_str(json).unwrap();
     assert!(msg.tool_calls.is_empty());
@@ -582,6 +615,7 @@ use serde::{Deserialize, Serialize};
 fn test_envelope_with_message() {
     let msg = Message {
         message_id: MessageId("msg_1".to_string()),
+        session_id: SessionId("sess_1".to_string()),
         role: Role::System,
         content: vec![ContentPart::Text {
             text: "system prompt".to_string(),
@@ -589,6 +623,8 @@ fn test_envelope_with_message() {
         tool_calls: vec![],
         tool_call_id: None,
         created_at: "2026-08-07T12:00:00Z".to_string(),
+        sequence: 1,
+        metadata: Default::default(),
     };
 
     let env: Envelope<Message> = Envelope {
@@ -658,6 +694,7 @@ fn test_timestamp_is_rfc3339_string() {
     // 确保时间戳字段是 RFC 3339 字符串格式
     let msg = Message {
         message_id: MessageId("m1".to_string()),
+        session_id: SessionId("sess_1".to_string()),
         role: Role::System,
         content: vec![ContentPart::Text {
             text: "test".to_string(),
@@ -665,6 +702,8 @@ fn test_timestamp_is_rfc3339_string() {
         tool_calls: vec![],
         tool_call_id: None,
         created_at: "2026-08-07T12:00:00Z".to_string(),
+        sequence: 1,
+        metadata: Default::default(),
     };
     let json = serde_json::to_string(&msg).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -680,6 +719,7 @@ fn test_message_content_is_always_array() {
     // content 序列化后始终是 JSON 数组
     let msg = Message {
         message_id: MessageId("m1".to_string()),
+        session_id: SessionId("sess_1".to_string()),
         role: Role::User,
         content: vec![ContentPart::Text {
             text: "hi".to_string(),
@@ -687,6 +727,8 @@ fn test_message_content_is_always_array() {
         tool_calls: vec![],
         tool_call_id: None,
         created_at: "2026-08-07T12:00:00Z".to_string(),
+        sequence: 1,
+        metadata: Default::default(),
     };
     let json = serde_json::to_string(&msg).unwrap();
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -717,6 +759,8 @@ fn test_fixture_message_matches_derive() {
     .unwrap();
 
     assert_eq!(fixture.role, Role::User);
+    assert_eq!(fixture.session_id, SessionId("sess_1".to_string()));
+    assert_eq!(fixture.sequence, 1);
     assert_eq!(fixture.content.len(), 1);
     assert!(fixture.tool_calls.is_empty());
     assert!(fixture.tool_call_id.is_none());
@@ -726,6 +770,91 @@ fn test_fixture_message_matches_derive() {
     let re_parsed: Message = serde_json::from_str(&re_json).unwrap();
     assert_eq!(fixture.message_id, re_parsed.message_id);
     assert_eq!(fixture.role, re_parsed.role);
+}
+
+#[test]
+fn test_session_roundtrip_and_projection_invariants() {
+    let session = Session {
+        id: SessionId("sess_1".to_string()),
+        source: "stdio".to_string(),
+        title: Some("Test session".to_string()),
+        created_at: "2026-08-07T12:00:00Z".to_string(),
+        updated_at: "2026-08-07T12:00:00Z".to_string(),
+        status: SessionStatus::Active,
+        cwd: Some("/tmp/workspace".to_string()),
+        metadata: serde_json::json!({"kind": "test"}).as_object().expect("object").clone(),
+        message_count: 0,
+        revision: 0,
+    };
+    session.validate().expect("合法 Session 应通过校验");
+    let json = serde_json::to_string(&session).expect("Session 应可序列化");
+    let parsed: Session = serde_json::from_str(&json).expect("Session 应可反序列化");
+    assert_eq!(parsed.id, session.id);
+    assert_eq!(parsed.status, SessionStatus::Active);
+    assert_eq!(parsed.message_count, 0);
+    assert_eq!(parsed.revision, 0);
+
+    let after_message = session.after_message_commit("2026-08-07T12:00:01Z".to_string());
+    assert_eq!(after_message.message_count, 1);
+    assert_eq!(after_message.revision, 1);
+    assert_eq!(after_message.status, SessionStatus::Active);
+
+    let after_close = after_message.after_close_commit("2026-08-07T12:00:02Z".to_string());
+    assert_eq!(after_close.message_count, 1);
+    assert_eq!(after_close.revision, 2);
+    assert_eq!(after_close.status, SessionStatus::Closed);
+}
+
+#[test]
+fn test_persisted_message_validation_requires_session_and_sequence() {
+    let message = Message {
+        message_id: MessageId("msg_1".to_string()),
+        session_id: SessionId("sess_1".to_string()),
+        role: Role::User,
+        content: vec![ContentPart::Text {
+            text: "hello".to_string(),
+        }],
+        tool_calls: vec![],
+        tool_call_id: None,
+        created_at: "2026-08-07T12:00:00Z".to_string(),
+        sequence: 1,
+        metadata: Default::default(),
+    };
+    message.validate().expect("合法消息应通过校验");
+
+    let mut invalid = message.clone();
+    invalid.session_id = SessionId(String::new());
+    assert_eq!(
+        invalid.validate(),
+        Err(MessageValidationError::EmptySessionId)
+    );
+    invalid.session_id = SessionId("sess_1".to_string());
+    invalid.sequence = 0;
+    assert_eq!(
+        invalid.validate(),
+        Err(MessageValidationError::InvalidSequence)
+    );
+}
+
+#[test]
+fn test_session_status_rejects_agent_execution_states() {
+    assert!(serde_json::from_str::<SessionStatus>(r#""active""#).is_ok());
+    assert!(serde_json::from_str::<SessionStatus>(r#""closed""#).is_ok());
+    assert!(serde_json::from_str::<SessionStatus>(r#""recovering""#).is_ok());
+    assert!(serde_json::from_str::<SessionStatus>(r#""thinking""#).is_err());
+}
+
+#[test]
+fn test_session_fixture_matches_derive() {
+    let fixture: Session = serde_json::from_str(include_str!(
+        "../../../protocols/fixtures/valid/session.json"
+    ))
+    .expect("Session fixture 应可反序列化");
+    fixture.validate().expect("fixture 应满足 Session 不变量");
+    assert_eq!(fixture.id, SessionId("sess_1".to_string()));
+    assert_eq!(fixture.status, SessionStatus::Active);
+    assert_eq!(fixture.message_count, 1);
+    assert_eq!(fixture.revision, 1);
 }
 
 #[test]

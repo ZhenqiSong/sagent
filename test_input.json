@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","id":"1","method":"protocol.describe","params":{}}
+{"jsonrpc":"2.0","id":"2","method":"rpc.echo","params":{"value":"ok"}}
+{"jsonrpc":"2.0","id":"3","method":"health.get","params":{}}

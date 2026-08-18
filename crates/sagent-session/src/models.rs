@@ -10,6 +10,7 @@ use sagent_types::ids::{SessionId, ToolCallId};
 use sagent_types::message::{ContentPart, Role};
 use sagent_types::session::{Session, SessionStatus};
 use sagent_types::tool::ToolCall;
+use serde::{Deserialize, Serialize};
 
 /// 创建 Session 的输入。
 #[derive(Debug, Clone)]
@@ -78,7 +79,7 @@ pub struct ListSessions {
 }
 
 /// Session 列表稳定游标。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCursor {
     /// 游标记录的 updated_at。
     pub updated_at: String,
@@ -96,7 +97,7 @@ pub struct MessageRange {
 }
 
 /// Session 列表的轻量投影。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
     /// Session ID。
     pub id: SessionId,

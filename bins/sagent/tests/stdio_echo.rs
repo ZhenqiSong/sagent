@@ -9,11 +9,19 @@
 
 use std::io::{BufRead, Write};
 use std::process::{Child, Command as StdCommand, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 启动 sagent stdio server 子进程。
 fn spawn_server() -> Child {
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let home = std::env::temp_dir().join(format!(
+        "sagent-stdio-{}-{}",
+        std::process::id(),
+        TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
     StdCommand::new(assert_cmd::cargo::cargo_bin("sagent"))
         .args(["rpc", "stdio"])
+        .env("SAGENT_HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -209,7 +217,7 @@ fn test_missing_method_returns_invalid_request() {
 }
 
 #[test]
-fn test_unknown_method_returns_method_not_found() {
+fn test_session_create_is_supported_in_phase1() {
     let mut child = spawn_server();
     let mut stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
@@ -220,7 +228,64 @@ fn test_unknown_method_returns_method_not_found() {
         &mut stdout,
         r#"{"jsonrpc":"2.0","id":"1","method":"session.create","params":{}}"#,
     );
-    assert_eq!(resp["error"]["code"], -32601);
+    assert!(resp["result"]["id"].as_str().is_some());
+    assert_eq!(resp["result"]["message_count"], 0);
+
+    drop(stdin);
+    child.wait().expect("子进程退出失败");
+}
+
+#[test]
+fn test_session_list_get_resume_and_subscribe() {
+    let mut child = spawn_server();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let mut stdout = std::io::BufReader::new(stdout);
+
+    let create = send_request(
+        &mut stdin,
+        &mut stdout,
+        r#"{"jsonrpc":"2.0","id":"create","method":"session.create","params":{"source":"stdio","title":"demo"}}"#,
+    );
+    let session_id = create["result"]["id"].as_str().expect("create 应返回 session id");
+
+    let list = send_request(
+        &mut stdin,
+        &mut stdout,
+        r#"{"jsonrpc":"2.0","id":"list","method":"session.list","params":{}}"#,
+    );
+    assert_eq!(list["result"][0]["id"], session_id);
+
+    let get_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "get",
+        "method": "session.get",
+        "params": {"session_id": session_id}
+    })
+    .to_string();
+    let get = send_request(&mut stdin, &mut stdout, &get_request);
+    assert_eq!(get["result"]["session"]["id"], session_id);
+    assert!(get["result"]["messages"].as_array().unwrap().is_empty());
+
+    let resume_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "resume",
+        "method": "session.resume",
+        "params": {"session_id": session_id}
+    })
+    .to_string();
+    let resume = send_request(&mut stdin, &mut stdout, &resume_request);
+    assert_eq!(resume["result"]["session"]["id"], session_id);
+
+    let subscribe_request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": "subscribe",
+        "method": "session.subscribe",
+        "params": {"session_id": session_id}
+    })
+    .to_string();
+    let subscribe = send_request(&mut stdin, &mut stdout, &subscribe_request);
+    assert_eq!(subscribe["result"]["subscribed"], true);
 
     drop(stdin);
     child.wait().expect("子进程退出失败");

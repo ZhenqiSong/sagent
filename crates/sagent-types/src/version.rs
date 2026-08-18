@@ -16,6 +16,15 @@ use serde::{Deserialize, Serialize};
 /// 新增方法必须在此注册。
 pub const CORE_METHODS: &[&str] = &["rpc.echo", "protocol.describe", "health.get"];
 
+/// Phase 1 Session RPC 方法列表。
+pub const SESSION_METHODS: &[&str] = &[
+    "session.create",
+    "session.list",
+    "session.get",
+    "session.resume",
+    "session.subscribe",
+];
+
 /// 协议版本信息。
 ///
 /// 协议版本与 Runtime 版本分离，独立演进。
@@ -68,6 +77,21 @@ impl Capabilities {
     pub fn default_capabilities() -> Self {
         Self {
             methods: CORE_METHODS.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// 创建当前 Runtime 注册的全部能力集合。
+    pub fn runtime_capabilities() -> Self {
+        let mut methods = CORE_METHODS.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        methods.extend(SESSION_METHODS.iter().map(|s| s.to_string()));
+        Self { methods }
+    }
+
+    /// 使用指定能力集合构造协议描述。
+    pub fn protocol_version(&self) -> ProtocolVersion {
+        ProtocolVersion {
+            features: self.feature_names(),
+            ..ProtocolVersion::default()
         }
     }
 

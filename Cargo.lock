@@ -1424,8 +1424,13 @@ dependencies = [
  "assert_cmd",
  "clap",
  "sagent-api",
+ "sagent-config",
+ "sagent-runtime",
+ "sagent-session",
  "sagent-types",
+ "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -1473,6 +1478,7 @@ dependencies = [
  "rusqlite",
  "sagent-config",
  "sagent-types",
+ "serde",
  "serde_json",
  "thiserror",
 ]

@@ -86,6 +86,11 @@ impl EventReceiver {
     pub async fn recv(&mut self) -> Option<SessionEvent> {
         self.receiver.recv().await
     }
+
+    /// 非阻塞读取一条事件，供同步 stdio transport drain notification。
+    pub fn try_recv(&mut self) -> Result<SessionEvent, mpsc::error::TryRecvError> {
+        self.receiver.try_recv()
+    }
 }
 
 impl EventBus {

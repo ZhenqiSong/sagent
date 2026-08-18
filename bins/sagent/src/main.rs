@@ -14,6 +14,8 @@ mod dispatcher;
 mod stdio;
 
 use clap::{Parser, Subcommand};
+use sagent_config::Config;
+use sagent_runtime::Runtime;
 use sagent_types::version::Capabilities;
 use tracing::{error, info, warn};
 
@@ -115,8 +117,20 @@ fn generate_schemas() {
 ///
 /// stdout 写失败或 BrokenPipe 时有序退出，不 panic。
 fn run_stdio_server() {
-    let caps = Capabilities::default_capabilities();
-    let pv = sagent_types::version::ProtocolVersion::default();
+    let runtime = match Runtime::open(Config::default()) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            error!(error = %error, "Runtime 初始化失败，拒绝接受 RPC");
+            return;
+        },
+    };
+    let caps = Capabilities::runtime_capabilities();
+    let pv = caps.protocol_version();
+    let async_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("创建 Tokio runtime 失败");
+    let mut subscriptions = dispatcher::Subscriptions::new();
 
     // 启动日志：记录协议版本、runtime 版本和 capabilities
     info!(
@@ -162,8 +176,23 @@ fn run_stdio_server() {
             },
         };
 
+        // 先发出已排队的 live event，再处理下一条请求。
+        for event in dispatcher::drain_events(&mut subscriptions) {
+            if let Err(error) = writer.write_value(&event) {
+                warn!(error = %error, "事件写入失败，退出");
+                break;
+            }
+        }
+
         // 分发处理
-        match dispatcher::dispatch(&line, &caps) {
+        let result = dispatcher::dispatch_runtime(
+            &line,
+            &caps,
+            &runtime,
+            &async_runtime,
+            &mut subscriptions,
+        );
+        match result {
             Ok(Some(response)) => {
                 // 成功响应 → 写 stdout
                 if let Err(e) = writer.write_value(&response) {
@@ -195,5 +224,8 @@ fn run_stdio_server() {
         }
     }
 
+    if let Err(error) = async_runtime.block_on(runtime.shutdown()) {
+        warn!(error = %error, "Runtime shutdown 失败");
+    }
     info!("sagent stdio JSON-RPC server 已停止");
 }

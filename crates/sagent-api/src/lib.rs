@@ -27,3 +27,6 @@ pub mod logging;
 
 /// 路径解析模块（SAGENT_HOME）
 pub mod paths;
+
+/// Session RPC 参数类型。
+pub mod session;

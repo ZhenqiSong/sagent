@@ -34,6 +34,22 @@ pub mod codes {
     pub const SEQUENCE_VIOLATION: i32 = -32004;
     /// 服务正在有序退出
     pub const SHUTDOWN: i32 = -32005;
+    /// Session 不存在。
+    pub const SESSION_NOT_FOUND: i32 = -32006;
+    /// Session 已关闭。
+    pub const SESSION_ALREADY_CLOSED: i32 = -32007;
+    /// transcript 超过恢复或读取上限。
+    pub const TRANSCRIPT_TOO_LARGE: i32 = -32008;
+    /// 数据库不可用。
+    pub const DATABASE_UNAVAILABLE: i32 = -32009;
+    /// 数据库 schema 不受支持。
+    pub const DATABASE_SCHEMA_UNSUPPORTED: i32 = -32010;
+    /// Actor mailbox 已满。
+    pub const MAILBOX_FULL: i32 = -32011;
+    /// Runtime 正在关闭。
+    pub const RUNTIME_SHUTTING_DOWN: i32 = -32012;
+    /// 无法从 durable event log 补发序列。
+    pub const SEQUENCE_UNAVAILABLE: i32 = -32013;
 }
 
 /// 错误码枚举。
@@ -72,6 +88,22 @@ pub enum ErrorCode {
     SequenceViolation,
     /// 服务正在有序退出（-32005）
     Shutdown,
+    /// Session 不存在（-32006）
+    SessionNotFound,
+    /// Session 已关闭（-32007）
+    SessionAlreadyClosed,
+    /// transcript 超过上限（-32008）
+    TranscriptTooLarge,
+    /// 数据库不可用（-32009）
+    DatabaseUnavailable,
+    /// schema 不受支持（-32010）
+    DatabaseSchemaUnsupported,
+    /// mailbox 已满（-32011）
+    MailboxFull,
+    /// Runtime 正在关闭（-32012）
+    RuntimeShuttingDown,
+    /// event sequence 无法补发（-32013）
+    SequenceUnavailable,
 }
 
 impl ErrorCode {
@@ -88,6 +120,14 @@ impl ErrorCode {
             Self::PayloadTooLarge => codes::PAYLOAD_TOO_LARGE,
             Self::SequenceViolation => codes::SEQUENCE_VIOLATION,
             Self::Shutdown => codes::SHUTDOWN,
+            Self::SessionNotFound => codes::SESSION_NOT_FOUND,
+            Self::SessionAlreadyClosed => codes::SESSION_ALREADY_CLOSED,
+            Self::TranscriptTooLarge => codes::TRANSCRIPT_TOO_LARGE,
+            Self::DatabaseUnavailable => codes::DATABASE_UNAVAILABLE,
+            Self::DatabaseSchemaUnsupported => codes::DATABASE_SCHEMA_UNSUPPORTED,
+            Self::MailboxFull => codes::MAILBOX_FULL,
+            Self::RuntimeShuttingDown => codes::RUNTIME_SHUTTING_DOWN,
+            Self::SequenceUnavailable => codes::SEQUENCE_UNAVAILABLE,
         }
     }
 
@@ -104,6 +144,14 @@ impl ErrorCode {
             Self::PayloadTooLarge => "Payload too large",
             Self::SequenceViolation => "Sequence violation",
             Self::Shutdown => "Server is shutting down",
+            Self::SessionNotFound => "Session not found",
+            Self::SessionAlreadyClosed => "Session is already closed",
+            Self::TranscriptTooLarge => "Transcript too large",
+            Self::DatabaseUnavailable => "Database unavailable",
+            Self::DatabaseSchemaUnsupported => "Database schema unsupported",
+            Self::MailboxFull => "Session mailbox is full",
+            Self::RuntimeShuttingDown => "Runtime is shutting down",
+            Self::SequenceUnavailable => "Event sequence unavailable",
         }
     }
 
@@ -122,6 +170,14 @@ impl ErrorCode {
             codes::PAYLOAD_TOO_LARGE => Some(Self::PayloadTooLarge),
             codes::SEQUENCE_VIOLATION => Some(Self::SequenceViolation),
             codes::SHUTDOWN => Some(Self::Shutdown),
+            codes::SESSION_NOT_FOUND => Some(Self::SessionNotFound),
+            codes::SESSION_ALREADY_CLOSED => Some(Self::SessionAlreadyClosed),
+            codes::TRANSCRIPT_TOO_LARGE => Some(Self::TranscriptTooLarge),
+            codes::DATABASE_UNAVAILABLE => Some(Self::DatabaseUnavailable),
+            codes::DATABASE_SCHEMA_UNSUPPORTED => Some(Self::DatabaseSchemaUnsupported),
+            codes::MAILBOX_FULL => Some(Self::MailboxFull),
+            codes::RUNTIME_SHUTTING_DOWN => Some(Self::RuntimeShuttingDown),
+            codes::SEQUENCE_UNAVAILABLE => Some(Self::SequenceUnavailable),
             _ => None,
         }
     }

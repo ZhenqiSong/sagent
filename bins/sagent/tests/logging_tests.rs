@@ -9,11 +9,19 @@
 
 use std::io::{BufRead, Read, Write};
 use std::process::{Child, Command as StdCommand, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 启动 sagent stdio server 子进程，捕获 stderr。
 fn spawn_server() -> Child {
+    static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let home = std::env::temp_dir().join(format!(
+        "sagent-logging-{}-{}",
+        std::process::id(),
+        TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
     StdCommand::new(assert_cmd::cargo::cargo_bin("sagent"))
         .args(["rpc", "stdio"])
+        .env("SAGENT_HOME", home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -124,7 +132,7 @@ fn test_stderr_contains_error_log_for_unknown_method() {
     let _resp = send_request(
         &mut stdin,
         &mut stdout_reader,
-        r#"{"jsonrpc":"2.0","id":"req-err","method":"session.create","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":"req-err","method":"unknown.method","params":{}}"#,
     );
 
     drop(stdin);

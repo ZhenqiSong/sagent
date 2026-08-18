@@ -10,7 +10,8 @@ protocols/
 │   ├── jsonrpc-request.schema.json
 │   ├── jsonrpc-response.schema.json
 │   ├── event-envelope.schema.json
-│   └── protocol-describe.schema.json
+│   ├── protocol-describe.schema.json
+│   └── session-rpc.schema.json
 ├── fixtures/             # 协议 fixture（valid + invalid）
 │   ├── valid/            # 合法 fixture，应通过 schema 校验
 │   └── invalid/          # 非法 fixture，应被 schema 拒绝
@@ -54,6 +55,7 @@ Schema 的权威来源是 `crates/sagent-api/src/schema.rs` 中的 Rust 函数�
 | `tool-call.json` | ToolCall 类型 fixture |
 | `tool-definition.json` | ToolDefinition 类型 fixture |
 | `model-event.json` | ModelEvent 类型 fixture |
+| `session-*-request.json` | Phase 1 Session RPC 请求 |
 
 ### Invalid fixtures
 
@@ -92,4 +94,4 @@ cargo test -p sagent --test stdio_echo
 
 ## 协议版本
 
-当前协议版本：`sagent.rpc` v1。协议版本与 Runtime 版本独立管理。Phase 0 方法集合：`rpc.echo`、`protocol.describe`、`health.get`。
+当前协议版本：`sagent.rpc` v1。协议版本与 Runtime 版本独立管理。Phase 1 方法集合新增：`session.create`、`session.list`、`session.get`、`session.resume`、`session.subscribe`。

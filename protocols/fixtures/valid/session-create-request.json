@@ -1,0 +1,8 @@
+{
+  "method": "session.create",
+  "params": {
+    "source": "stdio",
+    "title": "demo",
+    "metadata": {}
+  }
+}

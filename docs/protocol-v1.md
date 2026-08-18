@@ -148,6 +148,14 @@ Sagent 基于 JSON-RPC 2.0，并在此基础上增加了以下约束：
 | `-32003` | `PayloadTooLarge` | 单行或单个 payload 超过限制 |
 | `-32004` | `SequenceViolation` | 事件或请求序列违反协议约束 |
 | `-32005` | `Shutdown` | 服务正在有序退出 |
+| `-32006` | `SessionNotFound` | Session 不存在 |
+| `-32007` | `SessionAlreadyClosed` | Session 已关闭 |
+| `-32008` | `TranscriptTooLarge` | transcript 超过读取或恢复上限 |
+| `-32009` | `DatabaseUnavailable` | 数据库不可用 |
+| `-32010` | `DatabaseSchemaUnsupported` | 数据库 schema 不受支持 |
+| `-32011` | `MailboxFull` | Session Actor mailbox 已满 |
+| `-32012` | `RuntimeShuttingDown` | Runtime 正在关闭 |
+| `-32013` | `SequenceUnavailable` | 无法补发客户端要求的事件序列 |
 
 ### 4.3 错误响应规则
 
@@ -236,9 +244,25 @@ if !caps.validate_method("unknown.method") {
 }
 ```
 
-**重要**：`protocol.describe` 返回的 `features` 列表必须与 `CORE_METHODS` 一致。测试 `protocol_version_features_match_core_methods` 强制执行此约束。
+**重要**：Phase 0 的 `ProtocolVersion::default()` 返回 `CORE_METHODS`；运行中的 Phase 1 stdio server 返回核心方法和 `SESSION_METHODS` 的合并列表。
 
-## 6. Phase 0 方法集合
+## 6. Phase 1 Session 方法
+
+Phase 1 通过 Runtime 暴露以下 Session 操作。API 层不直接访问 SQLite。
+
+| 方法 | 作用 |
+| --- | --- |
+| `session.create` | 创建并持久化 Session，返回 revision=0、message_count=0 |
+| `session.list` | 按 updated_at DESC、id ASC 稳定列出 Session summary |
+| `session.get` | 返回 Session metadata 和受限消息窗口 |
+| `session.resume` | 加载已提交状态并取得 live Actor，不重复创建 Session row |
+| `session.subscribe` | 订阅当前 stdio 连接上的 live Session event |
+
+`session.subscribe` 的 `after_seq` 在 Phase 1 只用于检测过期客户端；没有 durable event log 时返回
+`-32013 SequenceUnavailable`，不会伪造历史事件。事件 notification 不包含 `id`，事件 `seq`
+在单个 Session stream 内从 1 开始递增。
+
+## 7. Phase 0 方法集合
 
 | 方法 | 类型 | 作用 |
 | --- | --- | --- |
@@ -246,17 +270,17 @@ if !caps.validate_method("unknown.method") {
 | `protocol.describe` | request/response | 返回协议版本和 capabilities |
 | `health.get` | request/response | 返回进程和协议健康状态 |
 
-未来方法（如 `session.create`、`prompt.submit`）在后续 Phase 实现，Phase 0 server 不假装支持这些方法。
+Phase 2 及以后方法（如 `prompt.submit`、Provider 和 Tool 方法）不会出现在当前 capabilities 中。
 
-## 7. 传输层约束
+## 8. 传输层约束
 
-### 7.1 stdio 通道分工
+### 8.1 stdio 通道分工
 
 - **stdin**：一行一个 JSON-RPC request 或 notification
 - **stdout**：一行一个 JSON-RPC response 或 event notification（纯协议通道）
 - **stderr**：日志和诊断（不得出现协议 response）
 
-### 7.2 处理顺序
+### 8.2 处理顺序
 
 1. 从 stdin 读取一整行
 2. 忽略空行并继续等待
@@ -268,7 +292,7 @@ if !caps.validate_method("unknown.method") {
 8. stdout 写失败或 BrokenPipe 时有序退出
 9. stdin EOF 时正常退出（返回码 0）
 
-### 7.3 行为约束
+### 8.3 行为约束
 
 - 一个 request 对应一个 response
 - 两个连续 request 输出两行且顺序不乱
@@ -276,9 +300,9 @@ if !caps.validate_method("unknown.method") {
 - 协议错误不能让整个进程 panic
 - 不使用 `println!` 把日志写到 stdout
 
-## 8. 兼容性
+## 9. 兼容性
 
-### 8.1 与 Python Hermes Agent 的不兼容
+### 9.1 与 Python Hermes Agent 的不兼容
 
 Sagent 是独立 Rust 实现，不兼容以下 Python 组件：
 
@@ -289,7 +313,7 @@ Sagent 是独立 Rust 实现，不兼容以下 Python 组件：
 - `~/.hermes` 路径和 `hermes_constants.py` 的默认目录
 - Python 模块名作为 Rust 模块名
 
-### 8.2 协议兼容策略
+### 9.2 协议兼容策略
 
 - 新增可选字段：兼容变化，不影响现有客户端
 - 新增 capability：兼容变化
@@ -297,7 +321,7 @@ Sagent 是独立 Rust 实现，不兼容以下 Python 组件：
 - 改变字段含义：不兼容变化，需递增主版本
 - 移除 method 或 capability：不兼容变化
 
-## 9. Schema 文件
+## 10. Schema 文件
 
 协议 schema 文件位于 `protocols/schemas/`，由 Rust 代码（`sagent-api/src/schema.rs`）生成：
 
@@ -307,6 +331,7 @@ Sagent 是独立 Rust 实现，不兼容以下 Python 组件：
 | `jsonrpc-response.schema.json` | Response 校验 |
 | `event-envelope.schema.json` | Event 校验 |
 | `protocol-describe.schema.json` | protocol.describe 响应校验 |
+| `session-rpc.schema.json` | Phase 1 Session 方法参数校验 |
 
 Schema 文件由单一 Rust 类型来源生成，禁止手工维护漂移副本。修改 Rust 类型后必须重新生成 schema 文件，CI 会检查生成结果无 diff。
 
@@ -316,31 +341,31 @@ cargo run --bin sagent -- protocol generate-schemas
 git diff --exit-code -- protocols/schemas
 ```
 
-## 10. 日志系统
+## 11. 日志系统
 
-### 10.1 通道隔离
+### 11.1 通道隔离
 
 - **stdout**：纯 JSON-RPC 协议通道，每行合法 JSON
 - **stderr**：所有日志输出，使用 tracing 框架
 
-### 10.2 日志级别
+### 11.2 日志级别
 
 默认 `info`，通过 `RUST_LOG` 环境变量覆盖：
 ```bash
 RUST_LOG=debug cargo run --bin sagent -- rpc stdio
 ```
 
-### 10.3 结构化字段
+### 11.3 结构化字段
 
 每条日志包含：`timestamp`、`level`、`target`、`message`。RPC request 处理期间自动携带 `request_id` span 字段。
 
-### 10.4 敏感数据保护
+### 11.4 敏感数据保护
 
 日志自动脱敏以下字段名（大小写不敏感）的值：`token`、`secret`、`password`、`api_key`、`apikey`、`authorization`、`credential`、`private_key`、`access_key`。敏感值替换为 `***REDACTED***`。
 
 详见 `docs/logging.md`。
 
-## 11. 参考
+## 12. 参考
 
 - [JSON-RPC 2.0 规范](https://www.jsonrpc.org/specification)
 - `protocols/protocol-decisions.md`：17 项协议决策记录

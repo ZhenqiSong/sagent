@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Phase 1 Session JSON-RPC 方法参数和结果契约。",
+  "oneOf": [
+    {
+      "properties": {
+        "method": {
+          "const": "session.create"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "metadata": {
+              "type": "object"
+            },
+            "source": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "session.create",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "session.list"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "enum": [
+                "active",
+                "closed",
+                "recovering",
+                null
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "session.list",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "session.get"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "after_sequence": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "limit": {
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "session_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "session.get",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "session.resume"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "session_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "session.resume",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "const": "session.subscribe"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "after_seq": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "session_id": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "session.subscribe",
+      "type": "object"
+    }
+  ],
+  "title": "Session RPC"
+}

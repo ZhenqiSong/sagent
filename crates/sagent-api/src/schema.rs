@@ -156,6 +156,103 @@ pub fn protocol_describe_schema() -> serde_json::Value {
     })
 }
 
+/// 生成 Phase 1 Session RPC 请求参数契约 schema。
+pub fn session_rpc_schema() -> serde_json::Value {
+    let session_id = serde_json::json!({ "type": "string", "minLength": 1 });
+    let metadata = serde_json::json!({ "type": "object" });
+    serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Session RPC",
+        "description": "Phase 1 Session JSON-RPC 方法参数和结果契约。",
+        "oneOf": [
+            {
+                "title": "session.create",
+                "type": "object",
+                "required": ["method", "params"],
+                "properties": {
+                    "method": { "const": "session.create" },
+                    "params": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "source": { "type": "string", "minLength": 1 },
+                            "title": { "type": ["string", "null"] },
+                            "cwd": { "type": ["string", "null"] },
+                            "metadata": metadata
+                        }
+                    }
+                }
+            },
+            {
+                "title": "session.list",
+                "type": "object",
+                "required": ["method", "params"],
+                "properties": {
+                    "method": { "const": "session.list" },
+                    "params": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+                            "source": { "type": ["string", "null"] },
+                            "status": { "enum": ["active", "closed", "recovering", null] }
+                        }
+                    }
+                }
+            },
+            {
+                "title": "session.get",
+                "type": "object",
+                "required": ["method", "params"],
+                "properties": {
+                    "method": { "const": "session.get" },
+                    "params": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["session_id"],
+                        "properties": {
+                            "session_id": session_id,
+                            "after_sequence": { "type": "integer", "minimum": 0 },
+                            "limit": { "type": "integer", "minimum": 1, "maximum": 10000 }
+                        }
+                    }
+                }
+            },
+            {
+                "title": "session.resume",
+                "type": "object",
+                "required": ["method", "params"],
+                "properties": {
+                    "method": { "const": "session.resume" },
+                    "params": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["session_id"],
+                        "properties": { "session_id": session_id }
+                    }
+                }
+            },
+            {
+                "title": "session.subscribe",
+                "type": "object",
+                "required": ["method", "params"],
+                "properties": {
+                    "method": { "const": "session.subscribe" },
+                    "params": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["session_id"],
+                        "properties": {
+                            "session_id": session_id,
+                            "after_seq": { "type": "integer", "minimum": 0 }
+                        }
+                    }
+                }
+            }
+        ]
+    })
+}
+
 /// 获取所有 schema 的列表，用于批量生成。
 ///
 /// 返回 (文件名, schema JSON) 的迭代器，方便 CLI 命令一次性写出所有 schema 文件。
@@ -165,7 +262,7 @@ pub fn protocol_describe_schema() -> serde_json::Value {
 /// ```rust
 /// use sagent_api::schema::all_schemas;
 /// let schemas = all_schemas();
-/// assert_eq!(schemas.len(), 4);
+/// assert_eq!(schemas.len(), 5);
 /// ```
 pub fn all_schemas() -> Vec<(&'static str, serde_json::Value)> {
     vec![
@@ -173,5 +270,6 @@ pub fn all_schemas() -> Vec<(&'static str, serde_json::Value)> {
         ("jsonrpc-response.schema.json", jsonrpc_response_schema()),
         ("event-envelope.schema.json", event_envelope_schema()),
         ("protocol-describe.schema.json", protocol_describe_schema()),
+        ("session-rpc.schema.json", session_rpc_schema()),
     ]
 }

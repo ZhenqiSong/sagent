@@ -75,6 +75,13 @@ fn rust_generated_protocol_describe_schema_matches_static() {
     );
 }
 
+#[test]
+fn rust_generated_session_schema_matches_static() {
+    let rust_schema = schema::session_rpc_schema();
+    let static_schema = load_fixture("protocols/schemas/session-rpc.schema.json");
+    assert_eq!(rust_schema, static_schema);
+}
+
 // ============================================================================
 // Schema 正向校验：所有 valid fixtures 必须通过对应 schema
 // ============================================================================
@@ -95,6 +102,31 @@ fn valid_request_fixtures_pass_request_schema() {
             name
         );
     }
+}
+
+#[test]
+fn valid_session_fixtures_pass_session_schema() {
+    let schema_json = schema::session_rpc_schema();
+    for name in [
+        "session-create-request",
+        "session-list-request",
+        "session-get-request",
+        "session-resume-request",
+        "session-subscribe-request",
+    ] {
+        let fixture = load_fixture(&format!("protocols/fixtures/valid/{name}.json"));
+        assert!(
+            jsonschema::draft202012::is_valid(&schema_json, &fixture),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn invalid_session_fixture_fails_session_schema() {
+    let schema_json = schema::session_rpc_schema();
+    let fixture = load_fixture("protocols/fixtures/invalid/session-get-missing-id.json");
+    assert!(!jsonschema::draft202012::is_valid(&schema_json, &fixture));
 }
 
 #[test]

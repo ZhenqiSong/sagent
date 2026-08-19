@@ -1,7 +1,6 @@
 //! sagent CLI 入口。
 //!
-//! Phase 0 提供 `rpc stdio` 和 `protocol generate-schemas` 子命令。
-//! 后续 Phase 将添加 `config`、`session` 等子命令。
+//! 提供 stdio JSON-RPC、协议管理、健康检查和基础 Session CLI 子命令。
 //!
 //! @author   songzq
 //! @created  2025-08-07
@@ -10,6 +9,7 @@
 //! @change   2025-08-12 增强：Phase 0 Step 9 结构化日志、request_id span、BrokenPipe 日志
 //! @change   2025-08-12 增强：Phase 0 Step 10 schema 生成命令
 
+mod cli;
 mod dispatcher;
 mod stdio;
 
@@ -41,6 +41,17 @@ enum Commands {
         #[command(subcommand)]
         action: ProtocolAction,
     },
+    /// Session 管理子命令
+    Session {
+        #[command(subcommand)]
+        action: cli::SessionAction,
+    },
+    /// 检查 Runtime 和数据库是否可用
+    Health {
+        /// 输出 JSON。
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -53,6 +64,12 @@ enum RpcMode {
 enum ProtocolAction {
     /// 生成 JSON Schema 文件到 protocols/schemas/ 目录
     GenerateSchemas,
+    /// 输出协议版本和 capabilities。
+    Describe {
+        /// 输出 JSON。
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -67,7 +84,17 @@ fn main() {
         },
         Commands::Protocol { action } => match action {
             ProtocolAction::GenerateSchemas => generate_schemas(),
+            ProtocolAction::Describe { json } => exit_on_error(cli::run_protocol_describe(json)),
         },
+        Commands::Session { action } => exit_on_error(cli::run_session(action)),
+        Commands::Health { json } => exit_on_error(cli::run_health(json)),
+    }
+}
+
+fn exit_on_error(result: Result<(), cli::CliError>) {
+    if let Err(error) = result {
+        eprintln!("错误: {error}");
+        std::process::exit(1);
     }
 }
 

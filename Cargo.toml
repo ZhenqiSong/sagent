@@ -35,3 +35,7 @@ assert_cmd = "2"
 
 # 异步 Actor mailbox
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+# 异步 trait 与任务取消
+async-trait = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }

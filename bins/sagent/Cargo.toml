@@ -15,6 +15,7 @@ clap = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 sagent-types = { path = "../../crates/sagent-types" }
+sagent-core = { path = "../../crates/sagent-core" }
 sagent-api = { path = "../../crates/sagent-api" }
 sagent-config = { path = "../../crates/sagent-config" }
 sagent-session = { path = "../../crates/sagent-session" }

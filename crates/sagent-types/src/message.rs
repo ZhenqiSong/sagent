@@ -4,7 +4,8 @@ use crate::{MessageId, SessionId};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredMessage {
-    pub id: i64,
+    /// SQLite messages.id，对外保留强类型边界。
+    pub id: MessageId,
     pub session_id: SessionId,
     pub role: String,
     pub content: String,

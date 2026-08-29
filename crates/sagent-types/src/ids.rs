@@ -30,7 +30,19 @@ impl SessionId {
 /// 持久化消息标识；与 `SessionId` 保持不同类型以防止参数错传。
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct MessageId(String);
+pub struct MessageId(i64);
+
+impl MessageId {
+    /// 用 SQLite messages.id 创建强类型消息标识。
+    pub fn new(value: i64) -> Self {
+        Self(value)
+    }
+
+    /// 返回用于 SQL 参数绑定的整数主键。
+    pub fn get(&self) -> i64 {
+        self.0
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -54,9 +66,9 @@ mod tests {
     }
 
     #[test]
-    fn message_id_deserializes_from_a_plain_json_string() {
-        let id: MessageId = serde_json::from_str("\"message-1\"").expect("应能反序列化");
+    fn message_id_deserializes_from_a_plain_json_number() {
+        let id: MessageId = serde_json::from_str("7").expect("应能反序列化");
 
-        assert_eq!(id.0, "message-1");
+        assert_eq!(id.get(), 7);
     }
 }

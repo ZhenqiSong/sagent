@@ -5,10 +5,28 @@
 //! 作者：SongZQ
 
 use anyhow::{Context, Result};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, Row, params};
 use sagent_types::{SessionId, SessionSummary};
 
 use crate::Store;
+
+/// 将会话查询的固定列顺序转换为公共摘要类型。
+///
+/// list_sessions 与 get_session 共用该映射，避免两个入口的字段语义逐渐偏离。
+fn map_session_summary(row: &Row<'_>) -> rusqlite::Result<SessionSummary> {
+    Ok(SessionSummary {
+        id: SessionId::new(row.get::<_, String>(0)?),
+        source: row.get(1)?,
+        model: row.get(2)?,
+        title: row.get(3)?,
+        started_at: row.get(4)?,
+        ended_at: row.get(5)?,
+        end_reason: row.get(6)?,
+        last_active: row.get(7)?,
+        preview: row.get(8)?,
+        message_count: row.get(9)?,
+    })
+}
 
 impl Store {
     /// 按最后活动时间倒序读取未归档、未隐藏的会话摘要。
@@ -52,24 +70,55 @@ impl Store {
             .context("准备会话列表查询失败")?;
 
         let rows = statement
-            .query_map(params![i64::from(limit), i64::from(offset)], |row| {
-                Ok(SessionSummary {
-                    id: SessionId::new(row.get::<_, String>(0)?),
-                    source: row.get(1)?,
-                    model: row.get(2)?,
-                    title: row.get(3)?,
-                    started_at: row.get(4)?,
-                    ended_at: row.get(5)?,
-                    end_reason: row.get(6)?,
-                    last_active: row.get(7)?,
-                    preview: row.get(8)?,
-                    message_count: row.get(9)?,
-                })
-            })
+            .query_map(
+                params![i64::from(limit), i64::from(offset)],
+                map_session_summary,
+            )
             .context("执行会话列表查询失败")?;
 
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .context("读取会话列表记录失败")
+    }
+
+    /// 根据完整会话 ID 读取一条会话摘要。
+    ///
+    /// 与 list_sessions 不同，此方法不排除归档或隐藏会话：调用者已经提供了精确 ID，
+    /// 因此可以用于恢复、检查或管理这些会话。不存在时返回 Ok(None)。
+    pub fn get_session(&self, session_id: &SessionId) -> Result<Option<SessionSummary>> {
+        self.connection
+            .query_row(
+                "SELECT
+                    s.id,
+                    s.source,
+                    s.model,
+                    s.title,
+                    s.started_at,
+                    s.ended_at,
+                    s.end_reason,
+                    COALESCE(
+                        (SELECT MAX(m.timestamp)
+                         FROM messages AS m
+                         WHERE m.session_id = s.id),
+                        s.started_at
+                    ) AS last_active,
+                    COALESCE(
+                        (SELECT substr(m.content, 1, 60)
+                         FROM messages AS m
+                         WHERE m.session_id = s.id
+                           AND m.role = 'user'
+                           AND m.content IS NOT NULL
+                         ORDER BY m.timestamp ASC, m.id ASC
+                         LIMIT 1),
+                        ''
+                    ) AS preview,
+                    s.message_count
+                 FROM sessions AS s
+                 WHERE s.id = ?1",
+                [session_id.as_str()],
+                map_session_summary,
+            )
+            .optional()
+            .context("读取会话详情失败")
     }
 }
 
@@ -175,6 +224,41 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.as_str(), "old");
 
+        remove(&path);
+    }
+
+    #[test]
+    fn gets_session_by_exact_id_even_when_archived() {
+        let path = test_path("get");
+        remove(&path);
+        create_fixture(&path);
+        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+
+        let session = store
+            .get_session(&sagent_types::SessionId::new("archived"))
+            .expect("查询不应失败")
+            .expect("归档会话仍应可通过精确 ID 查询");
+
+        assert_eq!(session.id.as_str(), "archived");
+        assert_eq!(session.title.as_deref(), Some("已归档"));
+        assert_eq!(session.last_active.as_deref(), Some("2026-08-29T12:00:00Z"));
+        assert_eq!(session.preview.as_deref(), Some(""));
+
+        remove(&path);
+    }
+
+    #[test]
+    fn returns_none_for_unknown_session_id() {
+        let path = test_path("missing");
+        remove(&path);
+        create_fixture(&path);
+        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+
+        let session = store
+            .get_session(&sagent_types::SessionId::new("does-not-exist"))
+            .expect("查询不应失败");
+
+        assert!(session.is_none());
         remove(&path);
     }
 }

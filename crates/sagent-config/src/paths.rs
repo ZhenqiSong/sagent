@@ -1,3 +1,8 @@
+//! Sagent Home 与 Profile 路径解析。
+//!
+//! 作者：SongZQ
+//! 创建日期：2026-08-29
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -7,6 +12,9 @@ use anyhow::{Result, bail};
 
 use crate::ProfileName;
 
+/// 一个已解析的 Sagent 数据目录及其第一阶段需要访问的文件路径。
+///
+/// 该结构只描述路径，不创建目录或文件，也不打开数据库。
 #[derive(Debug)]
 pub struct SagentPaths {
     pub sagent_home: PathBuf,
@@ -18,6 +26,7 @@ pub fn resolve_paths(
     home_override: Option<&Path>,
     profile: Option<&ProfileName>,
 ) -> Result<SagentPaths> {
+    // 显式命令行参数优先，随后才是进程环境；这让测试和嵌入式调用无需修改环境变量。
     let root = match home_override {
         Some(path) => path.to_path_buf(),
         None => std::env::var_os("SAGENT_HOME")
@@ -26,6 +35,7 @@ pub fn resolve_paths(
     };
 
     if !root.is_absolute() {
+        // 相对路径会随工作目录变化，且可能把状态写入意外位置，因此在边界处拒绝。
         bail!("SAGENT_HOME 必须是绝对路径");
     }
 
@@ -33,6 +43,7 @@ pub fn resolve_paths(
         None => root,
         Some(profile) if profile.as_str() == "default" => profile_root(&root),
         Some(profile) => {
+            // 命名 Profile 始终是根目录下的直接子目录，不能由 profile 名称逃逸此边界。
             let profile_dir = profile_root(&root).join("profiles").join(profile.as_str());
 
             if !profile_dir.is_dir() {
@@ -54,6 +65,9 @@ pub fn resolve_paths(
 ///
 /// Windows: %LOCALAPPDATA%\sagent
 /// POSIX:   ~/.sagent
+///
+/// 当系统未提供用户目录环境变量时，退回当前工作目录。该退回路径仍保持绝对形式，
+/// 以满足 `resolve_paths()` 的安全约束。
 pub fn platform_default_home() -> PathBuf {
     if cfg!(windows) {
         let base = env::var_os("LOCALAPPDATA")
@@ -83,6 +97,8 @@ pub fn platform_default_home() -> PathBuf {
 }
 
 pub fn profile_root(home: &Path) -> PathBuf {
+    // `SAGENT_HOME` 可能已经指向 `<root>/profiles/<name>`。此时 profile 操作仍必须
+    // 回到 `<root>`，否则会错误计算成 `<root>/profiles/<name>/profiles/<other>`。
     match (home.parent(), home.parent().and_then(Path::parent)) {
         (Some(parent), Some(root)) if parent.file_name().is_some_and(|name| name == "profiles") => {
             root.to_path_buf()

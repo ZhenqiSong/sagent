@@ -1,7 +1,0 @@
-{
-  "method": "session.subscribe",
-  "params": {
-    "session_id": "sess-1",
-    "after_seq": 0
-  }
-}

@@ -1,6 +1,0 @@
-{
-  "jsonrpc": "1.0",
-  "id": "req-1",
-  "method": "rpc.echo",
-  "params": {}
-}

@@ -1,6 +1,0 @@
-{
-  "method": "session.resume",
-  "params": {
-    "session_id": "sess-1"
-  }
-}

@@ -1,8 +1,0 @@
-{
-  "method": "session.get",
-  "params": {
-    "session_id": "sess-1",
-    "after_sequence": 0,
-    "limit": 50
-  }
-}

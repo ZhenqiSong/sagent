@@ -1,7 +1,0 @@
-{
-  "method": "session.list",
-  "params": {
-    "limit": 20,
-    "status": "active"
-  }
-}

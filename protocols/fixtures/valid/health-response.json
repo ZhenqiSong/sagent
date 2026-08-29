@@ -1,9 +1,0 @@
-{
-  "jsonrpc": "2.0",
-  "id": "health-1",
-  "result": {
-    "status": "ok",
-    "protocol": "sagent.rpc",
-    "version": 1
-  }
-}

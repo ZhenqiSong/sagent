@@ -1,5 +1,0 @@
-{
-  "id": "req-1",
-  "method": "rpc.echo",
-  "params": {}
-}

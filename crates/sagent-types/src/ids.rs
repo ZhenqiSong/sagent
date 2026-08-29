@@ -15,6 +15,18 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct SessionId(String);
 
+impl SessionId {
+    /// 用数据库或外部协议中的会话标识创建强类型 ID。
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// 返回用于 SQL 参数绑定、日志或显示的原始字符串。
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// 持久化消息标识；与 `SessionId` 保持不同类型以防止参数错传。
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -26,12 +38,19 @@ mod tests {
 
     #[test]
     fn session_id_serializes_as_a_plain_json_string() {
-        let id = SessionId("20260829_123000_abcdefgh".to_owned());
+        let id = SessionId::new("20260829_123000_abcdefgh");
 
         assert_eq!(
             serde_json::to_string(&id).expect("应能序列化"),
             "\"20260829_123000_abcdefgh\""
         );
+    }
+
+    #[test]
+    fn session_id_exposes_its_sql_value() {
+        let id = SessionId::new("session-1");
+
+        assert_eq!(id.as_str(), "session-1");
     }
 
     #[test]

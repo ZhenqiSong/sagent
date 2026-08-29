@@ -1,41 +1,19 @@
 [workspace]
-members = ["crates/*", "bins/*"]
-resolver = "2"
+resolver="2"
+members = [
+    "crates/sagent-cli",
+    "crates/sagent-store",
+    "crates/sagent-types",
+    "crates/sagent-config",
+]
 
 [workspace.package]
-version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
-rust-version = "1.80"
+rust-version = "1.88"
 
 [workspace.dependencies]
-# 序列化
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-
-# SQLite 持久化（bundled 保证跨平台使用同一 SQLite 能力）
-rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
-
-# 错误处理
-thiserror = "2"
-
-# 日志（仅 stderr，不污染 stdout 协议通道）
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# JSON Schema 校验（用于 conformance 测试）
-jsonschema = "0.49"
-
-# CLI 参数解析
-clap = { version = "4", features = ["derive"] }
-
-# 测试辅助
-assert_cmd = "2"
-
-# 异步 Actor mailbox
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
-
-# 异步 trait 与任务取消
-async-trait = "0.1"
-tokio-util = { version = "0.7", features = ["rt"] }
+anyhow="1"
+serde={version="1", features=["derive"]}
+serde_json="1"
+serde_yaml="0.9"

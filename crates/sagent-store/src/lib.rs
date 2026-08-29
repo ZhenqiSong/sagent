@@ -8,9 +8,11 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 
+pub mod message;
 pub mod schema;
 pub mod session;
 
+pub use message::MessageQuery;
 pub use schema::DatabaseInfo;
 
 /// Sagent 持久化存储的只读访问入口。

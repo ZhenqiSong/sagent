@@ -3,7 +3,11 @@
 //! 作者：SongZQ
 //! 创建日期：2026-08-29
 
-use std::{fs, path::Path};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 
@@ -16,6 +20,106 @@ impl ProfileName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// 根目录中保存当前命名 profile 的选择文件名。
+const ACTIVE_PROFILE_FILE: &str = "active-profile";
+
+/// 返回当前 profile 选择文件的固定位置。
+pub fn active_profile_path(root: &Path) -> PathBuf {
+    root.join(ACTIVE_PROFILE_FILE)
+}
+
+/// 读取当前选中的 profile。
+///
+/// 缺少选择文件时默认使用 default。对于命名 profile，同时验证目录仍存在，
+/// 让损坏的选择状态在路径解析前就能得到明确错误。
+pub fn read_active_profile(root: &Path) -> Result<ProfileName> {
+    if !root.is_absolute() {
+        bail!("Sagent 根目录必须是绝对路径");
+    }
+
+    let marker = active_profile_path(root);
+    let content = match fs::read_to_string(&marker) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ProfileName("default".to_owned()));
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("读取当前 profile 失败：{}", marker.display()));
+        }
+    };
+    let profile = normalize_profile_name(&content)
+        .with_context(|| format!("当前 profile 文件内容无效：{}", marker.display()))?;
+    if profile.as_str() != "default" && !root.join("profiles").join(profile.as_str()).is_dir() {
+        bail!("当前 profile '{}' 的目录不存在", profile.as_str());
+    }
+    Ok(profile)
+}
+
+/// 原子地选择一个已存在的 profile。
+///
+/// default 不需要持久化为特殊状态，删除选择文件即可回到默认根目录。命名
+/// profile 通过同目录临时文件和 rename 发布，读取方只能看到旧选择或完整新选择。
+pub fn set_active_profile(root: &Path, profile: &ProfileName) -> Result<()> {
+    if !root.is_absolute() {
+        bail!("Sagent 根目录必须是绝对路径");
+    }
+    if !root.is_dir() {
+        bail!("Sagent 根目录不存在：{}", root.display());
+    }
+
+    let marker = active_profile_path(root);
+    if profile.as_str() == "default" {
+        match fs::remove_file(&marker) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("清除当前 profile 失败：{}", marker.display()));
+            }
+        }
+    }
+
+    if !root.join("profiles").join(profile.as_str()).is_dir() {
+        bail!("profile '{}' 不存在", profile.as_str());
+    }
+
+    let temporary = create_active_profile_temp_file(root, profile.as_str())?;
+    if let Err(error) = fs::rename(&temporary, &marker) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("发布当前 profile 失败：{}", marker.display()));
+    }
+    Ok(())
+}
+
+/// 在选择文件的同目录创建并同步临时内容，以支持原子发布。
+fn create_active_profile_temp_file(root: &Path, profile: &str) -> Result<PathBuf> {
+    for attempt in 0..100 {
+        let temporary = root.join(format!(
+            ".{ACTIVE_PROFILE_FILE}-{}-{attempt}.tmp",
+            std::process::id()
+        ));
+        let opened = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary);
+        let Ok(mut file) = opened else {
+            continue;
+        };
+        if let Err(error) = file
+            .write_all(format!("{profile}\n").as_bytes())
+            .and_then(|()| file.sync_all())
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(error).with_context(|| {
+                format!("写入当前 profile 临时文件失败：{}", temporary.display())
+            });
+        }
+        return Ok(temporary);
+    }
+    bail!("无法创建当前 profile 临时文件")
 }
 
 /// 返回指定 Sagent 根目录中可用的 profile。
@@ -98,7 +202,10 @@ pub fn normalize_profile_name(value: &str) -> Result<ProfileName> {
 mod tests {
     use std::fs;
 
-    use super::{list_profile_names, normalize_profile_name};
+    use super::{
+        active_profile_path, list_profile_names, normalize_profile_name, read_active_profile,
+        set_active_profile,
+    };
 
     #[test]
     fn normalizes_whitespace_and_ascii_case() {
@@ -168,5 +275,52 @@ mod tests {
             vec!["default"]
         );
         fs::remove_dir_all(root).expect("应能清理 profile 测试目录");
+    }
+
+    #[test]
+    fn active_profile_defaults_to_default_and_can_switch_back() {
+        let root =
+            std::env::temp_dir().join(format!("sagent-active-profile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("profiles").join("coder")).expect("应能创建 profile");
+
+        assert_eq!(
+            read_active_profile(&root)
+                .expect("缺少选择文件时应使用 default")
+                .as_str(),
+            "default"
+        );
+        let coder = normalize_profile_name("coder").expect("名称应合法");
+        set_active_profile(&root, &coder).expect("应能选择已有 profile");
+        assert_eq!(
+            fs::read_to_string(active_profile_path(&root)).expect("应能读取选择文件"),
+            "coder\n"
+        );
+        assert_eq!(
+            read_active_profile(&root)
+                .expect("应能读取当前 profile")
+                .as_str(),
+            "coder"
+        );
+
+        let default = normalize_profile_name("default").expect("名称应合法");
+        set_active_profile(&root, &default).expect("应能切回 default");
+        assert!(!active_profile_path(&root).exists());
+        fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
+    fn active_profile_rejects_missing_target_and_invalid_marker() {
+        let root =
+            std::env::temp_dir().join(format!("sagent-active-invalid-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("应能创建测试根目录");
+
+        let missing = normalize_profile_name("missing").expect("名称应合法");
+        assert!(set_active_profile(&root, &missing).is_err());
+
+        fs::write(active_profile_path(&root), "../unsafe").expect("应能写入损坏选择文件");
+        assert!(read_active_profile(&root).is_err());
+        fs::remove_dir_all(root).expect("应能清理测试目录");
     }
 }

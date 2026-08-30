@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::ProfileName;
+use crate::{ProfileName, read_active_profile};
 
 /// 一个已解析的 Sagent 数据目录及其第一阶段需要访问的文件路径。
 ///
@@ -59,6 +59,36 @@ pub fn resolve_paths(
         config_yaml: sagent_home.join("config.yaml"),
         sagent_home,
     })
+}
+
+/// 解析当前应使用的 profile 路径。
+///
+/// profile_override 用于显式命令行选择，优先级高于根目录中的 active-profile；
+/// 未提供覆盖项时，缺少选择文件会自然回退到 default。
+pub fn resolve_active_paths(
+    home_override: Option<&Path>,
+    profile_override: Option<&ProfileName>,
+) -> Result<SagentPaths> {
+    let root = match home_override {
+        Some(path) => path.to_path_buf(),
+        None => std::env::var_os("SAGENT_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(platform_default_home),
+    };
+    if !root.is_absolute() {
+        bail!("SAGENT_HOME 必须是绝对路径");
+    }
+
+    let root = profile_root(&root);
+    let active_profile;
+    let profile = match profile_override {
+        Some(profile) => profile,
+        None => {
+            active_profile = read_active_profile(&root)?;
+            &active_profile
+        }
+    };
+    resolve_paths(Some(&root), Some(profile))
 }
 
 /// 返回当前平台默认的 Sagent 数据目录。
@@ -111,8 +141,8 @@ pub fn profile_root(home: &Path) -> PathBuf {
 mod tests {
     use std::{fs, path::Path};
 
-    use super::{platform_default_home, profile_root, resolve_paths};
-    use crate::normalize_profile_name;
+    use super::{platform_default_home, profile_root, resolve_active_paths, resolve_paths};
+    use crate::{normalize_profile_name, set_active_profile};
 
     #[test]
     fn profile_home_resolves_to_root() {
@@ -199,5 +229,25 @@ mod tests {
             resolve_paths(Some(Path::new("relative-home")), None).expect_err("相对路径必须报错");
 
         assert!(error.to_string().contains("绝对路径"));
+    }
+
+    #[test]
+    fn active_path_resolution_uses_saved_profile_unless_explicitly_overridden() {
+        let root =
+            std::env::temp_dir().join(format!("sagent-config-active-{}", std::process::id()));
+        let coder_home = root.join("profiles").join("coder");
+        fs::create_dir_all(&coder_home).expect("应能创建命名 profile");
+        let coder = normalize_profile_name("coder").expect("名称应合法");
+        set_active_profile(&root, &coder).expect("应能选择 coder");
+
+        let active = resolve_active_paths(Some(&root), None).expect("应能解析保存的当前 profile");
+        assert_eq!(active.sagent_home, coder_home);
+
+        let default = normalize_profile_name("default").expect("名称应合法");
+        let explicit =
+            resolve_active_paths(Some(&root), Some(&default)).expect("显式 default 应覆盖当前选择");
+        assert_eq!(explicit.sagent_home, root);
+
+        fs::remove_dir_all(root).expect("应能清理测试目录");
     }
 }

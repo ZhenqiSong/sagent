@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sagent_config::{
     list_profile_names, normalize_profile_name, paths::platform_default_home, paths::profile_root,
-    read_active_profile, set_active_profile,
+    read_active_profile, resolve_active_paths, set_active_profile,
 };
 use sagent_store::Store;
 
@@ -22,6 +22,9 @@ struct Cli {
     /// 覆盖 Sagent 根目录；必须是绝对路径，主要用于隔离部署和测试。
     #[arg(long, global = true)]
     home: Option<PathBuf>,
+    /// 仅对本次命令覆盖当前 profile，不修改 active-profile。
+    #[arg(long, global = true)]
+    profile: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -33,6 +36,11 @@ enum Command {
     Profile {
         #[command(subcommand)]
         command: ProfileCommand,
+    },
+    /// 查看当前 profile 的持久化会话。
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
     },
 }
 
@@ -53,12 +61,27 @@ enum ProfileCommand {
     },
 }
 
+/// session 子命令。
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    /// 按最后活动时间倒序列出会话。
+    List {
+        /// 最多返回的会话数量。
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// 跳过前面的会话数量。
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+    },
+}
+
 /// 解析 profile list 所使用的根目录。
 ///
 /// 当 home 恰好指向某个命名 profile 时，仍回到其父根目录列出全部 profile。
 fn profile_list_root(home: Option<&Path>) -> Result<PathBuf> {
     let home = home
         .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("SAGENT_HOME").map(PathBuf::from))
         .unwrap_or_else(platform_default_home);
     if !home.is_absolute() {
         anyhow::bail!("--home 必须是绝对路径");
@@ -151,6 +174,40 @@ fn use_profile(home: Option<&Path>, name: &str) -> Result<String> {
     Ok(profile.as_str().to_owned())
 }
 
+/// 解析当前命令实际访问的 profile 路径。
+fn current_paths(
+    home: Option<&Path>,
+    profile_override: Option<&str>,
+) -> Result<sagent_config::SagentPaths> {
+    let profile = profile_override.map(normalize_profile_name).transpose()?;
+    resolve_active_paths(home, profile.as_ref())
+}
+
+/// 返回 session list 的稳定文本行。
+fn session_list_lines(
+    home: Option<&Path>,
+    profile_override: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<String>> {
+    let paths = current_paths(home, profile_override)?;
+    let store = Store::open_readonly(&paths.state_db)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    Ok(store
+        .list_sessions(limit, offset)?
+        .into_iter()
+        .map(|session| {
+            format!(
+                "{}\t{}\t{}\t{}",
+                session.id.as_str(),
+                session.title.as_deref().unwrap_or("-"),
+                session.message_count,
+                session.last_active.as_deref().unwrap_or("-")
+            )
+        })
+        .collect())
+}
+
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Profile {
@@ -172,6 +229,15 @@ fn run(cli: Cli) -> Result<()> {
             let profile = use_profile(cli.home.as_deref(), &name)?;
             println!("当前 profile: {profile}");
         }
+        Command::Session {
+            command: SessionCommand::List { limit, offset },
+        } => {
+            for line in
+                session_list_lines(cli.home.as_deref(), cli.profile.as_deref(), limit, offset)?
+            {
+                println!("{line}");
+            }
+        }
     }
     Ok(())
 }
@@ -185,11 +251,11 @@ mod tests {
     use std::fs;
 
     use clap::Parser;
-    use sagent_store::Store;
+    use sagent_store::{NewSession, Store};
 
     use super::{
         Cli, create_profile, create_profile_with_initializer, profile_list_lines,
-        profile_list_root, use_profile,
+        profile_list_root, session_list_lines, use_profile,
     };
 
     #[test]
@@ -296,6 +362,54 @@ mod tests {
             vec!["  default", "* coder"]
         );
         assert!(use_profile(Some(&root), "missing").is_err());
+        fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
+    fn session_list_uses_active_profile_and_honors_explicit_override() {
+        let root =
+            std::env::temp_dir().join(format!("sagent-cli-session-list-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("应能创建测试根目录");
+        create_profile(Some(&root), "coder").expect("应能创建 coder profile");
+        use_profile(Some(&root), "coder").expect("应能选择 coder");
+
+        let coder_db = root.join("profiles").join("coder").join("state.db");
+        let mut coder_store = Store::open_readwrite(&coder_db).expect("应能打开 coder 数据库");
+        coder_store
+            .create_session(&NewSession {
+                id: sagent_types::SessionId::new("coder-session"),
+                source: Some("cli".to_owned()),
+                model: None,
+                title: Some("Coder 会话".to_owned()),
+                started_at: "2026-08-30T12:00:00Z".to_owned(),
+            })
+            .expect("应能创建 coder 会话");
+
+        let default_db = root.join("state.db");
+        let mut default_store =
+            Store::open_readwrite(&default_db).expect("应能初始化 default 数据库");
+        default_store
+            .create_session(&NewSession {
+                id: sagent_types::SessionId::new("default-session"),
+                source: Some("cli".to_owned()),
+                model: None,
+                title: Some("默认会话".to_owned()),
+                started_at: "2026-08-30T12:01:00Z".to_owned(),
+            })
+            .expect("应能创建默认会话");
+
+        assert_eq!(
+            session_list_lines(Some(&root), None, 20, 0).expect("应能列出当前 profile 会话"),
+            vec!["coder-session\tCoder 会话\t0\t2026-08-30T12:00:00Z"]
+        );
+        assert_eq!(
+            session_list_lines(Some(&root), Some("default"), 20, 0)
+                .expect("显式 profile 应覆盖当前选择"),
+            vec!["default-session\t默认会话\t0\t2026-08-30T12:01:00Z"]
+        );
+        drop(coder_store);
+        drop(default_store);
         fs::remove_dir_all(root).expect("应能清理测试目录");
     }
 }

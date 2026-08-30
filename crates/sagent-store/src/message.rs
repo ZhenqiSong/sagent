@@ -27,6 +27,17 @@ pub struct MessageQuery {
     pub after_id: Option<MessageId>,
 }
 
+/// 围绕某条消息加载的局部会话上下文。
+#[derive(Clone, Debug)]
+pub struct MessageWindow {
+    /// 包含锚点的消息窗口，始终按消息 ID 正序排列。
+    pub messages: Vec<StoredMessage>,
+    /// 当前窗口中位于锚点之前的消息数量；小于请求窗口时表示已到会话开头。
+    pub messages_before: u32,
+    /// 当前窗口中位于锚点之后的消息数量；小于请求窗口时表示已到会话末尾。
+    pub messages_after: u32,
+}
+
 impl MessageQuery {
     /// 验证无法同时成立的分页组合。
     fn validate(&self) -> Result<()> {
@@ -100,6 +111,36 @@ fn query_messages(
         .context("读取消息记录失败")
 }
 
+/// 查询锚点一侧的消息，并复用所有公共消息字段的映射规则。
+fn query_message_window_side(
+    connection: &Connection,
+    session_id: &SessionId,
+    visibility_clause: &str,
+    id_operator: &str,
+    message_id: &MessageId,
+    descending: bool,
+    limit: u32,
+) -> Result<Vec<StoredMessage>> {
+    let order = if descending { "DESC" } else { "ASC" };
+    let sql = format!(
+        "SELECT id, session_id, role, COALESCE(content, ''), timestamp,
+                tool_call_id, tool_name, tool_calls, reasoning, finish_reason,
+                display_kind, display_metadata, active, compacted
+         FROM messages
+         WHERE session_id = ? AND {visibility_clause} AND id {id_operator} ?
+         ORDER BY id {order} LIMIT ?"
+    );
+    let mut statement = connection.prepare(&sql).context("准备消息窗口查询失败")?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![session_id.as_str(), message_id.get(), i64::from(limit)],
+            map_stored_message,
+        )
+        .context("执行消息窗口查询失败")?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .context("读取消息窗口失败")
+}
+
 /// 压缩代之间判定同一展示消息的键。
 type DisplayMessageKey = (
     String,
@@ -152,7 +193,9 @@ impl Store {
     ) -> Result<Vec<StoredMessage>> {
         query.validate()?;
 
-        if query.include_compacted {
+        // include_inactive 的语义是审计模式：调用方要求查看全部物理消息，
+        // 因而不能再应用压缩代去重规则。
+        if query.include_compacted && !query.include_inactive {
             let rows = query_messages(
                 &self.connection,
                 session_id,
@@ -202,6 +245,59 @@ impl Store {
             messages.reverse();
         }
         Ok(messages)
+    }
+
+    /// 读取以指定消息为锚点的前后上下文。
+    ///
+    /// 返回 None 表示锚点不存在、不属于指定会话，或在默认可见性规则下不可见。
+    /// 每侧至多读取 window 条消息，结果仍保持按消息 ID 正序。
+    pub fn get_messages_around(
+        &self,
+        session_id: &SessionId,
+        message_id: MessageId,
+        window: u32,
+        include_inactive: bool,
+    ) -> Result<Option<MessageWindow>> {
+        let visibility_clause = if include_inactive {
+            "1 = 1"
+        } else {
+            "active = 1"
+        };
+        // 第一侧包含锚点本身，因此限制为 window + 1；u32 转 i64 后仍安全。
+        let mut before = query_message_window_side(
+            &self.connection,
+            session_id,
+            visibility_clause,
+            "<=",
+            &message_id,
+            true,
+            window.saturating_add(1),
+        )?;
+
+        // 未找到锚点时，不能把另一会话或默认隐藏的消息暴露给调用方。
+        if before.first().map(|message| message.id.get()) != Some(message_id.get()) {
+            return Ok(None);
+        }
+
+        let after = query_message_window_side(
+            &self.connection,
+            session_id,
+            visibility_clause,
+            ">",
+            &message_id,
+            false,
+            window,
+        )?;
+        before.reverse();
+        let messages_before = before.len().saturating_sub(1) as u32;
+        let messages_after = after.len() as u32;
+        before.extend(after);
+
+        Ok(Some(MessageWindow {
+            messages: before,
+            messages_before,
+            messages_after,
+        }))
     }
 }
 
@@ -323,6 +419,26 @@ mod tests {
     }
 
     #[test]
+    fn inactive_query_takes_precedence_over_compacted_deduplication() {
+        let path = test_path("inactive-and-compacted");
+        remove(&path);
+        create_fixture(&path);
+        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let query = MessageQuery {
+            include_inactive: true,
+            include_compacted: true,
+            ..MessageQuery::default()
+        };
+
+        let messages = store
+            .get_messages(&SessionId::new("session-1"), &query)
+            .expect("审计模式应返回全部消息");
+
+        assert_eq!(message_ids(&messages), vec![1, 2, 3, 4, 5, 6]);
+        remove(&path);
+    }
+
+    #[test]
     fn latest_page_is_returned_in_chronological_order() {
         let path = test_path("latest");
         remove(&path);
@@ -370,6 +486,75 @@ mod tests {
                 .get_messages(&SessionId::new("session-1"), &invalid)
                 .is_err()
         );
+        remove(&path);
+    }
+
+    #[test]
+    fn gets_a_chronological_window_around_an_active_message() {
+        let path = test_path("around-middle");
+        remove(&path);
+        create_fixture(&path);
+        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+
+        let result = store
+            .get_messages_around(&SessionId::new("session-1"), MessageId::new(4), 1, false)
+            .expect("应能加载消息窗口")
+            .expect("活动锚点应存在");
+
+        assert_eq!(message_ids(&result.messages), vec![1, 4, 5]);
+        assert_eq!(result.messages_before, 1);
+        assert_eq!(result.messages_after, 1);
+        remove(&path);
+    }
+
+    #[test]
+    fn window_counts_expose_session_boundaries() {
+        let path = test_path("around-boundary");
+        remove(&path);
+        create_fixture(&path);
+        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+
+        let result = store
+            .get_messages_around(&SessionId::new("session-1"), MessageId::new(1), 2, false)
+            .expect("应能加载消息窗口")
+            .expect("活动锚点应存在");
+
+        assert_eq!(message_ids(&result.messages), vec![1, 4, 5]);
+        assert_eq!(result.messages_before, 0);
+        assert_eq!(result.messages_after, 2);
+        remove(&path);
+    }
+
+    #[test]
+    fn window_rejects_wrong_session_and_honors_inactive_visibility() {
+        let path = test_path("around-visibility");
+        remove(&path);
+        create_fixture(&path);
+        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+
+        assert!(
+            store
+                .get_messages_around(
+                    &SessionId::new("other-session"),
+                    MessageId::new(4),
+                    1,
+                    false,
+                )
+                .expect("跨会话查询本身应成功")
+                .is_none()
+        );
+        assert!(
+            store
+                .get_messages_around(&SessionId::new("session-1"), MessageId::new(2), 1, false,)
+                .expect("隐藏锚点查询本身应成功")
+                .is_none()
+        );
+
+        let result = store
+            .get_messages_around(&SessionId::new("session-1"), MessageId::new(2), 1, true)
+            .expect("审计模式应能加载窗口")
+            .expect("非活动锚点应在审计模式中存在");
+        assert_eq!(message_ids(&result.messages), vec![1, 2, 3]);
         remove(&path);
     }
 }

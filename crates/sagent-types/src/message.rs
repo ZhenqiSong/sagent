@@ -23,9 +23,13 @@ pub struct StoredMessage {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SearchHit {
+    /// 命中消息所属的会话。
     pub session_id: SessionId,
+    /// FTS 行关联的消息 ID；未来会话级搜索可不提供此值。
     pub message_id: Option<MessageId>,
+    /// 由 SQLite FTS5 生成的、带命中标记的上下文片段。
     pub snippet: String,
+    /// FTS5 bm25 相关度；数值越小表示匹配越相关。
     pub rank: Option<f64>,
 }
 

@@ -10,10 +10,12 @@ use rusqlite::{Connection, OpenFlags};
 
 pub mod message;
 pub mod schema;
+pub mod search;
 pub mod session;
 
-pub use message::MessageQuery;
+pub use message::{MessageQuery, MessageWindow};
 pub use schema::DatabaseInfo;
+pub use search::MessageSearchQuery;
 
 /// Sagent 持久化存储的只读访问入口。
 #[derive(Debug)]

@@ -14,7 +14,7 @@ use sagent_config::{
     list_profile_names, normalize_profile_name, paths::platform_default_home, paths::profile_root,
     read_active_profile, resolve_active_paths, set_active_profile,
 };
-use sagent_store::{MessageQuery, NewSession, Store};
+use sagent_store::{MessageQuery, MessageSearchQuery, NewSession, Store};
 use sagent_types::SessionId;
 use uuid::Uuid;
 
@@ -86,6 +86,17 @@ enum SessionCommand {
         /// 从最新消息向前跳过的数量。
         #[arg(long, default_value_t = 0)]
         offset: u32,
+    },
+    /// 在当前 profile 的消息历史中全文搜索。
+    Search {
+        /// FTS5 查询表达式。
+        query: String,
+        /// 最多返回的命中数量。
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// 限定到一个会话；默认搜索当前 profile 的全部会话。
+        #[arg(long)]
+        session_id: Option<String>,
     },
     /// 按最后活动时间倒序列出会话。
     List {
@@ -277,6 +288,38 @@ fn session_show_lines(
     Ok(lines)
 }
 
+/// 返回 session search 的稳定文本行。
+///
+/// 默认搜索活动消息和压缩归档消息；回退、重试前等普通非活动消息由 Store
+/// 过滤，避免搜索结果泄露已经被用户撤回的分支。
+fn session_search_lines(
+    home: Option<&Path>,
+    profile_override: Option<&str>,
+    query: &str,
+    limit: u32,
+    session_id: Option<&str>,
+) -> Result<Vec<String>> {
+    let paths = current_paths(home, profile_override)?;
+    let store = Store::open_readonly(&paths.state_db)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    let mut search = MessageSearchQuery::new(query);
+    search.limit = limit;
+    search.session_id = session_id.map(SessionId::new);
+    Ok(store
+        .search_messages(&search)?
+        .into_iter()
+        .map(|hit| {
+            format!(
+                "{}\t{}\t{:.6}\t{}",
+                hit.session_id.as_str(),
+                hit.message_id.expect("消息搜索命中必须包含消息 ID").get(),
+                hit.rank.unwrap_or_default(),
+                hit.snippet
+            )
+        })
+        .collect())
+}
+
 /// 把 Unix 秒数转换为 UTC 公历日期。
 ///
 /// 采用公历 400 年周期算法，避免仅为 CLI 创建时间戳引入额外时间库。
@@ -412,6 +455,24 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Session {
+            command:
+                SessionCommand::Search {
+                    query,
+                    limit,
+                    session_id,
+                },
+        } => {
+            for line in session_search_lines(
+                cli.home.as_deref(),
+                cli.profile.as_deref(),
+                &query,
+                limit,
+                session_id.as_deref(),
+            )? {
+                println!("{line}");
+            }
+        }
+        Command::Session {
             command: SessionCommand::List { limit, offset },
         } => {
             for line in
@@ -438,7 +499,7 @@ mod tests {
     use super::{
         Cli, create_profile, create_profile_with_initializer, create_session_with_id,
         profile_list_lines, profile_list_root, rfc3339_now, session_id_from_clock,
-        session_list_lines, session_show_lines, use_profile,
+        session_list_lines, session_search_lines, session_show_lines, use_profile,
     };
 
     #[test]
@@ -712,6 +773,81 @@ mod tests {
             session_show_lines(Some(&root), None, "missing-session", 50, 0).is_err(),
             "不存在的会话必须报错"
         );
+        fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
+    fn session_search_scopes_results_and_hides_rewound_messages() {
+        let root =
+            std::env::temp_dir().join(format!("sagent-cli-session-search-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("应能创建测试根目录");
+        create_profile(Some(&root), "coder").expect("应能创建 coder profile");
+        use_profile(Some(&root), "coder").expect("应能选择 coder");
+
+        let kept_session = create_session_with_id(
+            Some(&root),
+            None,
+            sagent_types::SessionId::new("search-keep"),
+            None,
+            None,
+            "2026-08-30T15:00:00.000Z".to_owned(),
+        )
+        .expect("应能创建保留会话");
+        let database = root.join("profiles").join("coder").join("state.db");
+        let mut store = Store::open_readwrite(&database).expect("应能打开数据库");
+        store
+            .append_message(&NewMessage::new(
+                kept_session.clone(),
+                "user",
+                "sagentterm 保留消息",
+                "2026-08-30T15:01:00.000Z",
+            ))
+            .expect("应能写入可搜索消息");
+
+        let rewound_session = sagent_types::SessionId::new("search-rewound");
+        store
+            .create_session(&NewSession {
+                id: rewound_session.clone(),
+                source: Some("cli".to_owned()),
+                model: None,
+                title: None,
+                started_at: "2026-08-30T15:02:00.000Z".to_owned(),
+            })
+            .expect("应能创建回退会话");
+        let rewound_message = store
+            .append_message(&NewMessage::new(
+                rewound_session.clone(),
+                "user",
+                "sagentterm 已回退消息",
+                "2026-08-30T15:03:00.000Z",
+            ))
+            .expect("应能写入待回退消息");
+        store
+            .rewind_to_message(
+                &rewound_session,
+                rewound_message,
+                "2026-08-30T15:04:00.000Z",
+            )
+            .expect("应能回退消息");
+        drop(store);
+
+        let hits = session_search_lines(Some(&root), None, "sagentterm", 20, None)
+            .expect("应能搜索当前 profile");
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].starts_with("search-keep\t"));
+        assert!(hits[0].contains("[sagentterm]"));
+
+        let scoped = session_search_lines(
+            Some(&root),
+            None,
+            "sagentterm",
+            20,
+            Some(kept_session.as_str()),
+        )
+        .expect("应能按会话限定搜索");
+        assert_eq!(scoped.len(), 1);
+        assert!(session_search_lines(Some(&root), None, "   ", 20, None).is_err());
         fs::remove_dir_all(root).expect("应能清理测试目录");
     }
 

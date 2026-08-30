@@ -5,7 +5,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -17,9 +16,7 @@ use sagent_config::{
 };
 use sagent_store::{NewSession, Store};
 use sagent_types::SessionId;
-
-/// 为同一进程内连续创建的会话提供额外唯一性。
-static NEXT_SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+use uuid::Uuid;
 
 /// Sagent 命令行参数。
 #[derive(Debug, Parser)]
@@ -259,15 +256,20 @@ fn rfc3339_now(now: SystemTime) -> Result<String> {
     ))
 }
 
-/// 由同一时钟来源生成本地状态库内唯一的会话 ID。
-fn session_id_from_clock(now: SystemTime, sequence: u64) -> Result<SessionId> {
-    let duration = now
-        .duration_since(UNIX_EPOCH)
-        .context("系统时间早于 Unix epoch，无法创建会话 ID")?;
+/// 生成与 Python Hermes 兼容的时间前缀，并使用完整 UUID v4 防止碰撞。
+fn session_id_from_clock(now: SystemTime) -> Result<SessionId> {
+    let timestamp = rfc3339_now(now)?;
+    let (date, time_with_zone) = timestamp
+        .split_once('T')
+        .context("无法生成会话 ID 时间前缀")?;
+    let time = time_with_zone
+        .get(..8)
+        .context("无法读取会话 ID 的时间部分")?;
+    let prefix = format!("{}_{}", date.replace('-', ""), time.replace(':', ""));
     Ok(SessionId::new(format!(
-        "s_{:016x}_{:08x}_{sequence:016x}",
-        duration.as_millis(),
-        std::process::id()
+        "{}_{}",
+        prefix,
+        Uuid::new_v4().simple()
     )))
 }
 
@@ -278,9 +280,8 @@ fn create_session(
     title: Option<String>,
     model: Option<String>,
 ) -> Result<SessionId> {
-    let sequence = NEXT_SESSION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let now = SystemTime::now();
-    let session_id = session_id_from_clock(now, sequence)?;
+    let session_id = session_id_from_clock(now)?;
     let started_at = rfc3339_now(now)?;
     create_session_with_id(home, profile_override, session_id, title, model, started_at)
 }
@@ -566,16 +567,17 @@ mod tests {
     }
 
     #[test]
-    fn session_clock_helpers_produce_stable_rfc3339_and_distinct_ids() {
+    fn session_clock_helpers_produce_stable_timestamp_and_distinct_uuid_ids() {
         let epoch = std::time::UNIX_EPOCH;
 
         assert_eq!(
             rfc3339_now(epoch).expect("epoch 应可格式化"),
             "1970-01-01T00:00:00.000Z"
         );
-        let first = session_id_from_clock(epoch, 1).expect("应能生成 ID");
-        let second = session_id_from_clock(epoch, 2).expect("应能生成 ID");
+        let first = session_id_from_clock(epoch).expect("应能生成 ID");
+        let second = session_id_from_clock(epoch).expect("应能生成 ID");
         assert_ne!(first, second);
-        assert!(first.as_str().starts_with("s_"));
+        assert!(first.as_str().starts_with("19700101_000000_"));
+        assert_eq!(first.as_str().len(), 16 + 32);
     }
 }

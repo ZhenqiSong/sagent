@@ -19,7 +19,7 @@ pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
-pub use write::{NewMessage, NewSession, RewindCheckpoint, RewindResult};
+pub use write::{NewMessage, NewSession, RetryCheckpoint, RewindCheckpoint, RewindResult};
 
 /// Sagent 持久化存储的只读访问入口。
 #[derive(Debug)]
@@ -522,6 +522,249 @@ mod tests {
                 .map(|message| message.id.get())
                 .collect::<Vec<_>>(),
             vec![1, 2, 5]
+        );
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn replaces_active_messages_without_losing_auditable_history() {
+        let path = test_path("replace-active");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("replace-session");
+        let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: None,
+                model: None,
+                title: None,
+                started_at: "2026-08-30T10:00:00Z".to_owned(),
+            })
+            .expect("应能创建会话");
+        for (role, content, timestamp) in [
+            ("user", "oldbranch question", "2026-08-30T10:01:00Z"),
+            ("assistant", "oldbranch answer", "2026-08-30T10:02:00Z"),
+        ] {
+            store
+                .append_message(&NewMessage::new(
+                    session_id.clone(),
+                    role,
+                    content,
+                    timestamp,
+                ))
+                .expect("应能追加原活动消息");
+        }
+
+        let replacements = [
+            NewMessage::new(
+                session_id.clone(),
+                "user",
+                "newbranch question",
+                "2026-08-30T10:03:00Z",
+            ),
+            NewMessage::new(
+                session_id.clone(),
+                "assistant",
+                "newbranch answer",
+                "2026-08-30T10:04:00Z",
+            ),
+        ];
+        let inserted_ids = store
+            .replace_active_messages(&session_id, &replacements, "2026-08-30T10:05:00Z")
+            .expect("应能替换活动消息");
+        assert_eq!(
+            inserted_ids.iter().map(MessageId::get).collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        assert_eq!(
+            store
+                .get_messages(&session_id, &MessageQuery::default())
+                .expect("应能读取新活动消息")
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        assert_eq!(
+            store
+                .get_messages(
+                    &session_id,
+                    &MessageQuery {
+                        include_inactive: true,
+                        ..MessageQuery::default()
+                    },
+                )
+                .expect("审计模式应能读取所有分支")
+                .len(),
+            4
+        );
+        assert!(
+            store
+                .search_messages(&MessageSearchQuery::new("oldbranch"))
+                .expect("默认搜索应成功")
+                .is_empty()
+        );
+        let mut audit_search = MessageSearchQuery::new("oldbranch");
+        audit_search.include_inactive = true;
+        assert_eq!(
+            store
+                .search_messages(&audit_search)
+                .expect("审计搜索应能找到旧分支")
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .get_session(&session_id)
+                .expect("应能读取会话")
+                .expect("会话应存在")
+                .message_count,
+            2
+        );
+
+        let invalid_replacements = [NewMessage::new(
+            SessionId::new("other-session"),
+            "user",
+            "错误的会话消息",
+            "2026-08-30T10:06:00Z",
+        )];
+        assert!(
+            store
+                .replace_active_messages(
+                    &session_id,
+                    &invalid_replacements,
+                    "2026-08-30T10:06:00Z",
+                )
+                .is_err(),
+            "跨会话替换必须在写入前失败"
+        );
+        assert_eq!(
+            store
+                .get_messages(&session_id, &MessageQuery::default())
+                .expect("失败后活动消息不应改变")
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn retries_only_the_latest_assistant_message_with_a_checkpoint() {
+        let path = test_path("retry");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("retry-session");
+        let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: None,
+                model: None,
+                title: None,
+                started_at: "2026-08-30T10:00:00Z".to_owned(),
+            })
+            .expect("应能创建会话");
+        store
+            .append_message(&NewMessage::new(
+                session_id.clone(),
+                "user",
+                "retry question",
+                "2026-08-30T10:01:00Z",
+            ))
+            .expect("应能写入用户消息");
+        store
+            .append_message(&NewMessage::new(
+                session_id.clone(),
+                "assistant",
+                "oldretry answer",
+                "2026-08-30T10:02:00Z",
+            ))
+            .expect("应能写入旧回答");
+
+        assert!(
+            store.prepare_retry(&session_id, MessageId::new(1)).is_err(),
+            "用户消息不能重试"
+        );
+        let checkpoint = store
+            .prepare_retry(&session_id, MessageId::new(2))
+            .expect("最新 assistant 消息应可重试");
+        assert_eq!(checkpoint.expected_active_head_id.get(), 2);
+        assert_eq!(
+            store
+                .apply_retry(
+                    &checkpoint,
+                    &NewMessage::new(
+                        session_id.clone(),
+                        "assistant",
+                        "newretry answer",
+                        "2026-08-30T10:03:00Z",
+                    ),
+                    "2026-08-30T10:03:00Z",
+                )
+                .expect("应能写入重试回答")
+                .get(),
+            3
+        );
+        assert_eq!(
+            store
+                .get_messages(&session_id, &MessageQuery::default())
+                .expect("应能读取活动分支")
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        assert!(
+            store
+                .search_messages(&MessageSearchQuery::new("oldretry"))
+                .expect("默认搜索应成功")
+                .is_empty()
+        );
+        let mut audit_search = MessageSearchQuery::new("oldretry");
+        audit_search.include_inactive = true;
+        assert_eq!(
+            store
+                .search_messages(&audit_search)
+                .expect("审计搜索应找到旧回答")
+                .len(),
+            1
+        );
+
+        let stale_checkpoint = store
+            .prepare_retry(&session_id, MessageId::new(3))
+            .expect("新回答仍是最新 assistant 消息");
+        store
+            .append_message(&NewMessage::new(
+                session_id.clone(),
+                "user",
+                "concurrent follow-up",
+                "2026-08-30T10:04:00Z",
+            ))
+            .expect("应能模拟并发的新消息");
+        assert!(
+            store
+                .apply_retry(
+                    &stale_checkpoint,
+                    &NewMessage::new(
+                        session_id.clone(),
+                        "assistant",
+                        "must not persist",
+                        "2026-08-30T10:05:00Z",
+                    ),
+                    "2026-08-30T10:05:00Z",
+                )
+                .is_err(),
+            "检查点失效后必须拒绝重试"
+        );
+        assert_eq!(
+            store
+                .get_messages(&session_id, &MessageQuery::default())
+                .expect("失败后活动分支不应改变")
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![1, 3, 4]
         );
         remove_if_exists(&path);
     }

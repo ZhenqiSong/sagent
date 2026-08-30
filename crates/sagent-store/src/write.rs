@@ -3,7 +3,7 @@
 //! 作者：SongZQ
 
 use anyhow::{Context, Result};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 use sagent_types::{MessageId, SessionId, StoredMessage};
 
 use crate::{Store, message::map_stored_message};
@@ -70,6 +70,17 @@ pub struct RewindCheckpoint {
     pub expected_active_head_id: Option<MessageId>,
 }
 
+/// 在模型调用前确认的最新 assistant 消息重试许可。
+#[derive(Clone, Debug)]
+pub struct RetryCheckpoint {
+    /// 重试所在会话。
+    pub session_id: SessionId,
+    /// 即将被新回答替换的 assistant 消息。
+    pub target_message_id: MessageId,
+    /// 创建许可时的活动消息头，用于发现并发追加的新分支。
+    pub expected_active_head_id: MessageId,
+}
+
 impl NewMessage {
     /// 用消息的必要字段创建记录，其余展示与工具元数据默认为空。
     pub fn new(
@@ -92,6 +103,32 @@ impl NewMessage {
             display_metadata: None,
         }
     }
+}
+
+/// 在调用方已创建的事务中写入一条消息，供追加与整段替换复用。
+fn insert_message(transaction: &Transaction<'_>, message: &NewMessage) -> Result<MessageId> {
+    transaction
+        .execute(
+            "INSERT INTO messages (
+                session_id, role, content, timestamp, tool_call_id, tool_name, tool_calls,
+                reasoning, finish_reason, display_kind, display_metadata
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                message.session_id.as_str(),
+                message.role,
+                message.content,
+                message.timestamp,
+                message.tool_call_id,
+                message.tool_name,
+                message.tool_calls,
+                message.reasoning,
+                message.finish_reason,
+                message.display_kind,
+                message.display_metadata,
+            ],
+        )
+        .context("写入消息失败")?;
+    Ok(MessageId::new(transaction.last_insert_rowid()))
 }
 
 impl Store {
@@ -122,28 +159,7 @@ impl Store {
             .connection
             .transaction()
             .context("开始消息追加事务失败")?;
-        transaction
-            .execute(
-                "INSERT INTO messages (
-                    session_id, role, content, timestamp, tool_call_id, tool_name, tool_calls,
-                    reasoning, finish_reason, display_kind, display_metadata
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    message.session_id.as_str(),
-                    message.role,
-                    message.content,
-                    message.timestamp,
-                    message.tool_call_id,
-                    message.tool_name,
-                    message.tool_calls,
-                    message.reasoning,
-                    message.finish_reason,
-                    message.display_kind,
-                    message.display_metadata,
-                ],
-            )
-            .context("写入消息失败")?;
-        let id = MessageId::new(transaction.last_insert_rowid());
+        let id = insert_message(&transaction, message)?;
         let changed = transaction
             .execute(
                 "UPDATE sessions
@@ -159,6 +175,213 @@ impl Store {
         }
         transaction.commit().context("提交消息追加事务失败")?;
         Ok(id)
+    }
+
+    /// 软归档当前活动消息，并原子写入一组新的活动消息。
+    ///
+    /// replacements 必须全部属于 session_id。空替换集是合法操作，表示清空活动
+    /// 上下文但仍保留旧消息供审计；不会删除物理消息或其 FTS 索引条目。
+    pub fn replace_active_messages(
+        &mut self,
+        session_id: &SessionId,
+        replacements: &[NewMessage],
+        updated_at: &str,
+    ) -> Result<Vec<MessageId>> {
+        self.ensure_writable()?;
+        if replacements
+            .iter()
+            .any(|message| message.session_id != *session_id)
+        {
+            anyhow::bail!("替换消息中存在不属于目标会话的记录");
+        }
+
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始消息替换事务失败")?;
+        let session_exists = transaction
+            .query_row(
+                "SELECT 1 FROM sessions WHERE id = ?1",
+                [session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .context("验证替换会话失败")?
+            .is_some();
+        if !session_exists {
+            anyhow::bail!("替换会话不存在：{}", session_id.as_str());
+        }
+        transaction
+            .execute(
+                "UPDATE messages
+                 SET active = 0, compacted = 0
+                 WHERE session_id = ?1 AND active = 1",
+                [session_id.as_str()],
+            )
+            .context("软归档原活动消息失败")?;
+
+        let mut inserted_ids = Vec::with_capacity(replacements.len());
+        for message in replacements {
+            inserted_ids.push(insert_message(&transaction, message)?);
+        }
+        let latest_timestamp = replacements
+            .last()
+            .map(|message| message.timestamp.as_str());
+        transaction
+            .execute(
+                "UPDATE sessions
+                 SET message_count = ?1,
+                     last_activity_at = COALESCE(?2, last_activity_at),
+                     updated_at = ?3
+                 WHERE id = ?4",
+                params![
+                    replacements.len() as i64,
+                    latest_timestamp,
+                    updated_at,
+                    session_id.as_str()
+                ],
+            )
+            .context("更新替换后的会话状态失败")?;
+        transaction.commit().context("提交消息替换事务失败")?;
+        Ok(inserted_ids)
+    }
+
+    /// 为最新活动 assistant 消息创建重试检查点。
+    ///
+    /// 第一版只支持最新回答的重试，避免中间回答重试导致后续分支含义不明确。
+    /// 实际模型调用应发生在本方法与 apply_retry 之间的事务外。
+    pub fn prepare_retry(
+        &self,
+        session_id: &SessionId,
+        assistant_message_id: MessageId,
+    ) -> Result<RetryCheckpoint> {
+        let target = self
+            .connection
+            .query_row(
+                "SELECT role, active FROM messages
+                 WHERE id = ?1 AND session_id = ?2",
+                params![assistant_message_id.get(), session_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0)),
+            )
+            .optional()
+            .context("读取重试目标消息失败")?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "消息 {} 不存在或不属于会话 {}",
+                    assistant_message_id.get(),
+                    session_id.as_str()
+                )
+            })?;
+        if target.0 != "assistant" {
+            anyhow::bail!("重试目标必须是 assistant 消息，实际角色为 {}", target.0);
+        }
+        if !target.1 {
+            anyhow::bail!("重试目标不是活动消息");
+        }
+        let active_head_id = self
+            .connection
+            .query_row(
+                "SELECT MAX(id) FROM messages WHERE session_id = ?1 AND active = 1",
+                [session_id.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .context("读取活动消息头失败")?
+            .map(MessageId::new)
+            .ok_or_else(|| anyhow::anyhow!("会话不存在活动消息"))?;
+        if active_head_id != assistant_message_id {
+            anyhow::bail!("第一版仅支持重试最新 assistant 消息");
+        }
+
+        Ok(RetryCheckpoint {
+            session_id: session_id.clone(),
+            target_message_id: assistant_message_id,
+            expected_active_head_id: active_head_id,
+        })
+    }
+
+    /// 用新 assistant 消息替换检查点指向的最新活动回答。
+    ///
+    /// 调用前可在事务外执行模型请求；提交时重新检查活动消息头，以保证新的用户
+    /// 输入或其他窗口写入不会被覆盖。
+    pub fn apply_retry(
+        &mut self,
+        checkpoint: &RetryCheckpoint,
+        replacement: &NewMessage,
+        updated_at: &str,
+    ) -> Result<MessageId> {
+        self.ensure_writable()?;
+        if replacement.session_id != checkpoint.session_id {
+            anyhow::bail!("替换消息不属于重试会话");
+        }
+        if replacement.role != "assistant" {
+            anyhow::bail!("重试替换消息必须是 assistant 角色");
+        }
+
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始消息重试事务失败")?;
+        let current_head_id = transaction
+            .query_row(
+                "SELECT MAX(id) FROM messages WHERE session_id = ?1 AND active = 1",
+                [checkpoint.session_id.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .context("读取重试前活动消息头失败")?
+            .map(MessageId::new);
+        if current_head_id.as_ref() != Some(&checkpoint.expected_active_head_id) {
+            anyhow::bail!("重试期间出现新的活动消息，不能覆盖当前分支");
+        }
+        let target_is_still_active: Option<i64> = transaction
+            .query_row(
+                "SELECT 1 FROM messages
+                 WHERE id = ?1 AND session_id = ?2
+                   AND role = 'assistant' AND active = 1",
+                params![
+                    checkpoint.target_message_id.get(),
+                    checkpoint.session_id.as_str()
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("验证重试目标失败")?;
+        if target_is_still_active.is_none() {
+            anyhow::bail!("重试目标已不再是活动 assistant 消息");
+        }
+        transaction
+            .execute(
+                "UPDATE messages
+                 SET active = 0, compacted = 0
+                 WHERE id = ?1 AND session_id = ?2 AND active = 1",
+                params![
+                    checkpoint.target_message_id.get(),
+                    checkpoint.session_id.as_str()
+                ],
+            )
+            .context("软归档旧 assistant 回答失败")?;
+        let replacement_id = insert_message(&transaction, replacement)?;
+        let active_count: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND active = 1",
+                [checkpoint.session_id.as_str()],
+                |row| row.get(0),
+            )
+            .context("重新统计重试后的活动消息失败")?;
+        transaction
+            .execute(
+                "UPDATE sessions
+                 SET message_count = ?1, last_activity_at = ?2, updated_at = ?3
+                 WHERE id = ?4",
+                params![
+                    active_count,
+                    replacement.timestamp,
+                    updated_at,
+                    checkpoint.session_id.as_str()
+                ],
+            )
+            .context("更新重试后的会话状态失败")?;
+        transaction.commit().context("提交消息重试事务失败")?;
+        Ok(replacement_id)
     }
 
     /// 更新会话的最近活动与更新时间；不存在时返回 false。

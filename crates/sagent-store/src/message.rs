@@ -9,6 +9,7 @@ use rusqlite::{Connection, Row, params_from_iter, types::Value};
 use sagent_types::{MessageId, SessionId, StoredMessage};
 
 use crate::Store;
+use crate::write::HIDDEN_DISPLAY_KIND;
 
 /// 读取一段会话消息时使用的筛选与分页条件。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -183,6 +184,38 @@ fn page_messages(mut messages: Vec<StoredMessage>, query: &MessageQuery) -> Vec<
 }
 
 impl Store {
+    /// 为下一次模型调用加载活动上下文。
+    ///
+    /// 隐藏压缩摘要必须保留：它是模型理解早期对话的唯一压缩表示。
+    /// 回退分支和被压缩的原始消息都不能进入该上下文。
+    pub fn get_messages_for_model(
+        &self,
+        session_id: &SessionId,
+        query: &MessageQuery,
+    ) -> Result<Vec<StoredMessage>> {
+        if query.include_inactive || query.include_compacted {
+            anyhow::bail!("模型上下文读取不能包含回退或压缩归档消息");
+        }
+        self.get_messages(session_id, query)
+    }
+
+    /// 为聊天记录界面加载用户可见的历史。
+    ///
+    /// 原始压缩历史（active=0, compacted=1）应继续展示；压缩摘要本身
+    /// 则通过 display_kind=hidden 排除，避免用户看到内部上下文。
+    pub fn get_messages_for_display(
+        &self,
+        session_id: &SessionId,
+        query: &MessageQuery,
+    ) -> Result<Vec<StoredMessage>> {
+        if query.include_inactive {
+            anyhow::bail!("展示历史不能包含回退的消息；审计请调用 get_messages");
+        }
+        let mut query = query.clone();
+        query.include_compacted = true;
+        self.get_messages(session_id, &query)
+    }
+
     /// 读取会话消息，默认仅返回活动消息且按插入顺序排列。
     ///
     /// 消息使用 SQLite 自增 ID 排序，而不是 timestamp；系统时间回拨不会改变对话顺序。
@@ -199,7 +232,9 @@ impl Store {
             let rows = query_messages(
                 &self.connection,
                 session_id,
-                "(active = 1 OR compacted = 1)",
+                &format!(
+                    "(active = 1 OR compacted = 1) AND (display_kind IS NULL OR display_kind != '{HIDDEN_DISPLAY_KIND}')"
+                ),
                 None,
                 false,
                 None,

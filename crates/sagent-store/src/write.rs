@@ -8,6 +8,9 @@ use sagent_types::{MessageId, SessionId, StoredMessage};
 
 use crate::{Store, message::map_stored_message};
 
+/// 不应被聊天记录界面渲染、但仍会进入模型上下文的消息类型。
+pub const HIDDEN_DISPLAY_KIND: &str = "hidden";
+
 /// 创建会话所需的稳定元数据。
 #[derive(Clone, Debug)]
 pub struct NewSession {
@@ -102,6 +105,24 @@ impl NewMessage {
             display_kind: None,
             display_metadata: None,
         }
+    }
+
+    /// 创建上下文压缩生成的隐藏摘要。
+    ///
+    /// 摘要仍是活动消息，因此会在会话恢复时提供给模型；但展示层应依据
+    /// \`display_kind = "hidden"\` 将它排除，改为展示被归档的原始消息。
+    /// role 由压缩器按相邻消息的角色交替规则决定，通常为 assistant，
+    /// 必要时可以为 user，不能在存储层被固定为 system。
+    pub fn compressed_summary(
+        session_id: SessionId,
+        role: impl Into<String>,
+        content: impl Into<String>,
+        timestamp: impl Into<String>,
+    ) -> Self {
+        let mut message = Self::new(session_id, role, content, timestamp);
+        message.display_kind = Some(HIDDEN_DISPLAY_KIND.to_owned());
+        message.display_metadata = Some(r#"{"compressed_summary":true}"#.to_owned());
+        message
     }
 }
 
@@ -243,6 +264,78 @@ impl Store {
             )
             .context("更新替换后的会话状态失败")?;
         transaction.commit().context("提交消息替换事务失败")?;
+        Ok(inserted_ids)
+    }
+
+    /// 将当前活动上下文归档为压缩历史，并写入新的压缩后活动消息。
+    ///
+    /// 与 replace_active_messages 不同，旧消息会标记为 compacted=1，因此默认
+    /// 全文搜索仍可检索到历史知识；默认消息读取则只恢复新的活动摘要。
+    pub fn archive_and_compact(
+        &mut self,
+        session_id: &SessionId,
+        compacted_messages: &[NewMessage],
+        updated_at: &str,
+    ) -> Result<Vec<MessageId>> {
+        self.ensure_writable()?;
+        if compacted_messages.is_empty() {
+            anyhow::bail!("压缩结果不能为空");
+        }
+        if compacted_messages
+            .iter()
+            .any(|message| message.session_id != *session_id)
+        {
+            anyhow::bail!("压缩消息中存在不属于目标会话的记录");
+        }
+
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始上下文压缩事务失败")?;
+        let session_exists = transaction
+            .query_row(
+                "SELECT 1 FROM sessions WHERE id = ?1",
+                [session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .context("验证压缩会话失败")?
+            .is_some();
+        if !session_exists {
+            anyhow::bail!("压缩会话不存在：{}", session_id.as_str());
+        }
+        transaction
+            .execute(
+                "UPDATE messages
+                 SET active = 0, compacted = 1
+                 WHERE session_id = ?1 AND active = 1",
+                [session_id.as_str()],
+            )
+            .context("归档压缩前活动消息失败")?;
+
+        let mut inserted_ids = Vec::with_capacity(compacted_messages.len());
+        for message in compacted_messages {
+            inserted_ids.push(insert_message(&transaction, message)?);
+        }
+        let latest_timestamp = compacted_messages
+            .last()
+            .map(|message| message.timestamp.as_str());
+        transaction
+            .execute(
+                "UPDATE sessions
+                 SET message_count = ?1,
+                     last_activity_at = ?2,
+                     updated_at = ?3
+                 WHERE id = ?4",
+                params![
+                    compacted_messages.len() as i64,
+                    latest_timestamp,
+                    updated_at,
+                    session_id.as_str()
+                ],
+            )
+            .context("更新压缩后的会话状态失败")?;
+        transaction.commit().context("提交上下文压缩事务失败")?;
         Ok(inserted_ids)
     }
 

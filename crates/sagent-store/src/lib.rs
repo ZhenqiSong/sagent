@@ -770,6 +770,112 @@ mod tests {
     }
 
     #[test]
+    fn archives_compacted_history_but_keeps_it_searchable() {
+        let path = test_path("compact");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("compact-session");
+        let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: None,
+                model: None,
+                title: None,
+                started_at: "2026-08-30T10:00:00Z".to_owned(),
+            })
+            .expect("应能创建会话");
+        for (role, content, timestamp) in [
+            ("user", "archiveknowledge question", "2026-08-30T10:01:00Z"),
+            (
+                "assistant",
+                "archiveknowledge answer",
+                "2026-08-30T10:02:00Z",
+            ),
+        ] {
+            store
+                .append_message(&NewMessage::new(
+                    session_id.clone(),
+                    role,
+                    content,
+                    timestamp,
+                ))
+                .expect("应能写入压缩前消息");
+        }
+
+        let compacted_messages = [NewMessage::compressed_summary(
+            session_id.clone(),
+            "assistant",
+            "历史摘要：已讨论 archiveknowledge。",
+            "2026-08-30T10:03:00Z",
+        )];
+        assert_eq!(
+            store
+                .archive_and_compact(&session_id, &compacted_messages, "2026-08-30T10:03:00Z")
+                .expect("应能压缩活动上下文")
+                .iter()
+                .map(MessageId::get)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
+        assert_eq!(
+            store
+                .get_messages_for_model(&session_id, &MessageQuery::default())
+                .expect("默认读取应只返回压缩后的上下文")
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
+        assert_eq!(
+            store
+                .get_messages_for_model(&session_id, &MessageQuery::default())
+                .expect("压缩摘要应保留给模型")
+                .first()
+                .and_then(|message| message.display_kind.as_deref()),
+            Some("hidden")
+        );
+        assert_eq!(
+            store
+                .get_messages_for_display(&session_id, &MessageQuery::default())
+                .expect("压缩展示读取应保留历史")
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            store
+                .search_messages(&MessageSearchQuery::new("archiveknowledge"))
+                .expect("默认搜索仍应命中压缩前知识")
+                .len(),
+            3
+        );
+        assert_eq!(
+            store
+                .get_session(&session_id)
+                .expect("应能读取会话")
+                .expect("会话应存在")
+                .message_count,
+            1
+        );
+
+        assert!(
+            store
+                .archive_and_compact(&session_id, &[], "2026-08-30T10:04:00Z")
+                .is_err(),
+            "空压缩结果必须在修改旧消息前被拒绝"
+        );
+        assert_eq!(
+            store
+                .get_messages(&session_id, &MessageQuery::default())
+                .expect("失败后活动上下文不应改变")
+                .len(),
+            1
+        );
+        remove_if_exists(&path);
+    }
+
+    #[test]
     fn readwrite_store_upgrades_v1_schema_to_v2() {
         let path = test_path("migrate-v1");
         remove_if_exists(&path);

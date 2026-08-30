@@ -52,7 +52,7 @@ impl MessageQuery {
 }
 
 /// 将固定投影的消息行转换为公共类型。
-fn map_stored_message(row: &Row<'_>) -> rusqlite::Result<StoredMessage> {
+pub(crate) fn map_stored_message(row: &Row<'_>) -> rusqlite::Result<StoredMessage> {
     Ok(StoredMessage {
         id: MessageId::new(row.get(0)?),
         session_id: SessionId::new(row.get::<_, String>(1)?),

@@ -19,7 +19,7 @@ pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
-pub use write::{NewMessage, NewSession};
+pub use write::{NewMessage, NewSession, RewindResult};
 
 /// Sagent 持久化存储的只读访问入口。
 #[derive(Debug)]
@@ -109,8 +109,8 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::{NewMessage, NewSession, SCHEMA_VERSION, Store};
-    use sagent_types::SessionId;
+    use super::{MessageQuery, MessageSearchQuery, NewMessage, NewSession, SCHEMA_VERSION, Store};
+    use sagent_types::{MessageId, SessionId};
 
     fn test_path(name: &str) -> PathBuf {
         // 每个测试使用独立文件名，避免并行测试共享数据库；文件位于系统临时目录，
@@ -359,6 +359,144 @@ mod tests {
                 .is_err(),
             "结束原因不能为空"
         );
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn rewinds_a_user_turn_and_preserves_auditable_history() {
+        let path = test_path("rewind");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("rewind-session");
+        let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: None,
+                model: None,
+                title: None,
+                started_at: "2026-08-30T10:00:00Z".to_owned(),
+            })
+            .expect("应能创建会话");
+        for (role, content, timestamp) in [
+            ("user", "第一条提问", "2026-08-30T10:01:00Z"),
+            ("assistant", "第一条回答", "2026-08-30T10:02:00Z"),
+            ("user", "第二条 second 提问", "2026-08-30T10:03:00Z"),
+            ("assistant", "第二条 second 回答", "2026-08-30T10:04:00Z"),
+        ] {
+            store
+                .append_message(&NewMessage::new(
+                    session_id.clone(),
+                    role,
+                    content,
+                    timestamp,
+                ))
+                .expect("应能追加测试消息");
+        }
+
+        assert!(
+            store
+                .rewind_to_message(&session_id, MessageId::new(2), "2026-08-30T10:05:00Z")
+                .is_err(),
+            "assistant 消息不能作为回退目标"
+        );
+        let result = store
+            .rewind_to_message(&session_id, MessageId::new(3), "2026-08-30T10:05:00Z")
+            .expect("应能回退用户消息");
+        assert_eq!(result.rewound_count, 2);
+        assert_eq!(result.target_message.content, "第二条 second 提问");
+        assert_eq!(result.new_head_id.as_ref().map(MessageId::get), Some(2));
+
+        let active = store
+            .get_messages(&session_id, &MessageQuery::default())
+            .expect("应能读取活动消息");
+        assert_eq!(
+            active
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        let all_messages = store
+            .get_messages(
+                &session_id,
+                &MessageQuery {
+                    include_inactive: true,
+                    ..MessageQuery::default()
+                },
+            )
+            .expect("审计模式应能读取回退历史");
+        assert_eq!(
+            all_messages
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert!(
+            store
+                .search_messages(&MessageSearchQuery::new("second"))
+                .expect("默认搜索应成功")
+                .is_empty(),
+            "默认搜索不能显示普通回退历史"
+        );
+        let mut audit_search = MessageSearchQuery::new("second");
+        audit_search.include_inactive = true;
+        assert_eq!(
+            store
+                .search_messages(&audit_search)
+                .expect("审计搜索应成功")
+                .len(),
+            2
+        );
+        assert_eq!(
+            store
+                .get_session(&session_id)
+                .expect("应能读取会话")
+                .expect("会话应存在")
+                .message_count,
+            2
+        );
+        let rewind_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT rewind_count FROM sessions WHERE id = ?1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("应能读取回退次数");
+        assert_eq!(rewind_count, 1);
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn readwrite_store_upgrades_v1_schema_to_v2() {
+        let path = test_path("migrate-v1");
+        remove_if_exists(&path);
+        let connection = Connection::open(&path).expect("应能创建 v1 fixture");
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_version (version INTEGER NOT NULL);
+                 INSERT INTO schema_version(version) VALUES (1);
+                 CREATE TABLE sessions (id TEXT PRIMARY KEY);",
+            )
+            .expect("应能创建 v1 结构");
+        drop(connection);
+
+        let store = Store::open_readwrite(&path).expect("应能升级 v1 数据库");
+        assert_eq!(
+            store.inspect_schema().expect("应能读取结构").schema_version,
+            Some(2)
+        );
+        let has_rewind_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sessions')
+                 WHERE name = 'rewind_count'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("应能读取升级后的列");
+        assert_eq!(has_rewind_count, 1);
         remove_if_exists(&path);
     }
 }

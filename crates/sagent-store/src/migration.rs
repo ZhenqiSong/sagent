@@ -6,12 +6,12 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 /// 当前 Sagent 自有数据库结构版本。
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// 将数据库迁移到当前版本。
 ///
-/// v1 仅初始化 Sagent 自己的表与 FTS5 索引。它不尝试兼容或修改 Hermes 的
-/// state.db；读取 Hermes 数据仍应使用只读 Store。
+/// v1 初始化 Sagent 自己的表与 FTS5 索引，v2 增加会话回退计数。它不尝试
+/// 兼容或修改 Hermes 的 state.db；读取 Hermes 数据仍应使用只读 Store。
 pub(crate) fn migrate(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction().context("开始数据库迁移事务失败")?;
     transaction
@@ -32,7 +32,16 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<()> {
         Some(version) if version > SCHEMA_VERSION => {
             anyhow::bail!("数据库结构版本 {version} 高于当前程序支持的版本 {SCHEMA_VERSION}");
         }
-        Some(SCHEMA_VERSION) => {}
+        Some(2) => {}
+        Some(1) => {
+            transaction
+                .execute_batch(
+                    "ALTER TABLE sessions
+                     ADD COLUMN rewind_count INTEGER NOT NULL DEFAULT 0;
+                     UPDATE schema_version SET version = 2;",
+                )
+                .context("从 v1 升级至 v2 失败")?;
+        }
         Some(version) => {
             anyhow::bail!("暂不支持从数据库结构版本 {version} 自动迁移");
         }
@@ -49,6 +58,7 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<()> {
                         end_reason TEXT,
                         last_activity_at TEXT,
                         updated_at TEXT,
+                        rewind_count INTEGER NOT NULL DEFAULT 0,
                         message_count INTEGER NOT NULL DEFAULT 0,
                         archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
                         hidden INTEGER NOT NULL DEFAULT 0 CHECK (hidden IN (0, 1))
@@ -103,7 +113,7 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<()> {
                         VALUES (new.id, new.content);
                      END;
 
-                     INSERT INTO schema_version(version) VALUES (1);",
+                     INSERT INTO schema_version(version) VALUES (2);",
                 )
                 .context("创建 v1 数据库结构失败")?;
         }

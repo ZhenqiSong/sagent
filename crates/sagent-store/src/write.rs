@@ -3,10 +3,10 @@
 //! 作者：SongZQ
 
 use anyhow::{Context, Result};
-use rusqlite::params;
-use sagent_types::{MessageId, SessionId};
+use rusqlite::{OptionalExtension, params};
+use sagent_types::{MessageId, SessionId, StoredMessage};
 
-use crate::Store;
+use crate::{Store, message::map_stored_message};
 
 /// 创建会话所需的稳定元数据。
 #[derive(Clone, Debug)]
@@ -41,6 +41,17 @@ pub struct NewMessage {
     pub finish_reason: Option<String>,
     pub display_kind: Option<String>,
     pub display_metadata: Option<String>,
+}
+
+/// 一次消息回退的结果。
+#[derive(Clone, Debug)]
+pub struct RewindResult {
+    /// 本次从活动状态变为非活动状态的消息数量。
+    pub rewound_count: u64,
+    /// 被选中的用户消息；TUI 可将其文本重新填入输入框。
+    pub target_message: StoredMessage,
+    /// 回退后最后一条仍活动的消息；没有活动消息时为 None。
+    pub new_head_id: Option<MessageId>,
 }
 
 impl NewMessage {
@@ -218,6 +229,90 @@ impl Store {
         updated_at: &str,
     ) -> Result<bool> {
         self.set_session_visibility(session_id, "hidden", hidden, updated_at)
+    }
+
+    /// 回退到一条用户消息，将目标消息本身及其后的活动消息软删除。
+    ///
+    /// 被回退消息仅变为 active=0，仍保留在数据库与 FTS 索引中，以便审计模式
+    /// 查询或未来的恢复功能使用。目标不存在、属于其他会话、或不是用户消息时
+    /// 返回错误且不会修改任何记录。
+    pub fn rewind_to_message(
+        &mut self,
+        session_id: &SessionId,
+        target_message_id: MessageId,
+        updated_at: &str,
+    ) -> Result<RewindResult> {
+        self.ensure_writable()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始消息回退事务失败")?;
+        let target_message = transaction
+            .query_row(
+                "SELECT id, session_id, role, COALESCE(content, ''), timestamp,
+                        tool_call_id, tool_name, tool_calls, reasoning, finish_reason,
+                        display_kind, display_metadata, active, compacted
+                 FROM messages
+                 WHERE id = ?1 AND session_id = ?2",
+                params![target_message_id.get(), session_id.as_str()],
+                map_stored_message,
+            )
+            .optional()
+            .context("读取回退目标消息失败")?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "消息 {} 不存在或不属于会话 {}",
+                    target_message_id.get(),
+                    session_id.as_str()
+                )
+            })?;
+        if target_message.role != "user" {
+            anyhow::bail!(
+                "回退目标必须是 user 消息，实际角色为 {}",
+                target_message.role
+            );
+        }
+
+        let rewound_count = transaction
+            .execute(
+                "UPDATE messages
+                 SET active = 0
+                 WHERE session_id = ?1 AND id >= ?2 AND active = 1",
+                params![session_id.as_str(), target_message_id.get()],
+            )
+            .context("软删除回退消息失败")? as u64;
+        let active_count: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND active = 1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+            .context("重新统计活动消息失败")?;
+        let new_head_id = transaction
+            .query_row(
+                "SELECT MAX(id) FROM messages WHERE session_id = ?1 AND active = 1",
+                [session_id.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .context("读取回退后的消息头失败")?
+            .map(MessageId::new);
+        transaction
+            .execute(
+                "UPDATE sessions
+                 SET message_count = ?1,
+                     rewind_count = rewind_count + 1,
+                     updated_at = ?2
+                 WHERE id = ?3",
+                params![active_count, updated_at, session_id.as_str()],
+            )
+            .context("更新回退后的会话状态失败")?;
+        transaction.commit().context("提交消息回退事务失败")?;
+
+        Ok(RewindResult {
+            rewound_count,
+            target_message,
+            new_head_id,
+        })
     }
 
     /// 归档与隐藏只有列名不同；列名由本模块的固定常量给出，绝不接收外部输入。

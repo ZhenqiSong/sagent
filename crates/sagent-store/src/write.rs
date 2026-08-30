@@ -52,6 +52,22 @@ pub struct RewindResult {
     pub target_message: StoredMessage,
     /// 回退后最后一条仍活动的消息；没有活动消息时为 None。
     pub new_head_id: Option<MessageId>,
+    /// 仅在活动分支未变化时才允许恢复的检查点。
+    pub checkpoint: RewindCheckpoint,
+}
+
+/// 回退操作生成的恢复许可。
+///
+/// 调用 restore_rewound 时必须原样传回此值，以避免将旧分支混入回退后
+/// 新生成的活动分支。
+#[derive(Clone, Debug)]
+pub struct RewindCheckpoint {
+    /// 回退发生的会话。
+    pub session_id: SessionId,
+    /// 被回退的第一个消息 ID，也是恢复的起点。
+    pub target_message_id: MessageId,
+    /// 回退完成时的活动消息头；恢复前必须仍与数据库一致。
+    pub expected_active_head_id: Option<MessageId>,
 }
 
 impl NewMessage {
@@ -311,8 +327,81 @@ impl Store {
         Ok(RewindResult {
             rewound_count,
             target_message,
-            new_head_id,
+            new_head_id: new_head_id.clone(),
+            checkpoint: RewindCheckpoint {
+                session_id: session_id.clone(),
+                target_message_id,
+                expected_active_head_id: new_head_id,
+            },
         })
+    }
+
+    /// 恢复从指定消息开始被回退的非活动消息。
+    ///
+    /// 此接口与 rewind_to_message 构成可逆操作，主要供 TUI 的“撤销回退”使用。
+    /// 它遵循 Python 的恢复语义：恢复所有 inactive 消息，不区分其是否带有
+    /// compacted 标记；因此不应将它直接暴露给上下文压缩的普通流程。
+    pub fn restore_rewound(
+        &mut self,
+        checkpoint: &RewindCheckpoint,
+        updated_at: &str,
+    ) -> Result<u64> {
+        self.ensure_writable()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始消息恢复事务失败")?;
+        let session_exists = transaction
+            .query_row(
+                "SELECT 1 FROM sessions WHERE id = ?1",
+                [checkpoint.session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .context("验证恢复会话失败")?
+            .is_some();
+        if !session_exists {
+            anyhow::bail!("恢复会话不存在：{}", checkpoint.session_id.as_str());
+        }
+        let current_head_id = transaction
+            .query_row(
+                "SELECT MAX(id) FROM messages WHERE session_id = ?1 AND active = 1",
+                [checkpoint.session_id.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .context("读取恢复前的活动消息头失败")?
+            .map(MessageId::new);
+        if current_head_id != checkpoint.expected_active_head_id {
+            anyhow::bail!("回退后已经出现新的活动消息，不能恢复旧分支");
+        }
+        let restored_count = transaction
+            .execute(
+                "UPDATE messages
+                 SET active = 1
+                 WHERE session_id = ?1 AND id >= ?2 AND active = 0",
+                params![
+                    checkpoint.session_id.as_str(),
+                    checkpoint.target_message_id.get()
+                ],
+            )
+            .context("恢复回退消息失败")? as u64;
+        let active_count: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND active = 1",
+                [checkpoint.session_id.as_str()],
+                |row| row.get(0),
+            )
+            .context("重新统计恢复后的活动消息失败")?;
+        transaction
+            .execute(
+                "UPDATE sessions
+                 SET message_count = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![active_count, updated_at, checkpoint.session_id.as_str()],
+            )
+            .context("更新恢复后的会话状态失败")?;
+        transaction.commit().context("提交消息恢复事务失败")?;
+        Ok(restored_count)
     }
 
     /// 归档与隐藏只有列名不同；列名由本模块的固定常量给出，绝不接收外部输入。

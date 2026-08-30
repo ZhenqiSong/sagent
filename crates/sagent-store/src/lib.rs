@@ -19,7 +19,7 @@ pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
-pub use write::{NewMessage, NewSession, RewindResult};
+pub use write::{NewMessage, NewSession, RewindCheckpoint, RewindResult};
 
 /// Sagent 持久化存储的只读访问入口。
 #[derive(Debug)]
@@ -405,6 +405,7 @@ mod tests {
         assert_eq!(result.rewound_count, 2);
         assert_eq!(result.target_message.content, "第二条 second 提问");
         assert_eq!(result.new_head_id.as_ref().map(MessageId::get), Some(2));
+        let checkpoint = result.checkpoint.clone();
 
         let active = store
             .get_messages(&session_id, &MessageQuery::default())
@@ -465,6 +466,63 @@ mod tests {
             )
             .expect("应能读取回退次数");
         assert_eq!(rewind_count, 1);
+
+        assert_eq!(
+            store
+                .restore_rewound(&checkpoint, "2026-08-30T10:06:00Z")
+                .expect("应能恢复回退消息"),
+            2
+        );
+        assert_eq!(
+            store
+                .get_messages(&session_id, &MessageQuery::default())
+                .expect("应能读取恢复后的活动消息")
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            store
+                .get_session(&session_id)
+                .expect("应能读取会话")
+                .expect("会话应存在")
+                .message_count,
+            4
+        );
+        assert_eq!(
+            store
+                .search_messages(&MessageSearchQuery::new("second"))
+                .expect("恢复后默认搜索应成功")
+                .len(),
+            2
+        );
+
+        let stale_checkpoint = store
+            .rewind_to_message(&session_id, MessageId::new(3), "2026-08-30T10:07:00Z")
+            .expect("应能再次回退用户消息")
+            .checkpoint;
+        store
+            .append_message(&NewMessage::new(
+                session_id.clone(),
+                "user",
+                "新的分支消息",
+                "2026-08-30T10:08:00Z",
+            ))
+            .expect("应能追加新分支消息");
+        let error = store
+            .restore_rewound(&stale_checkpoint, "2026-08-30T10:09:00Z")
+            .expect_err("新分支存在时必须拒绝恢复旧分支");
+        assert!(error.to_string().contains("新的活动消息"));
+        assert_eq!(
+            store
+                .get_messages(&session_id, &MessageQuery::default())
+                .expect("拒绝恢复后仍应能读取活动消息")
+                .iter()
+                .map(|message| message.id.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 5]
+        );
         remove_if_exists(&path);
     }
 

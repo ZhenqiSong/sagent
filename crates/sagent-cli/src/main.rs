@@ -14,7 +14,7 @@ use sagent_config::{
     list_profile_names, normalize_profile_name, paths::platform_default_home, paths::profile_root,
     read_active_profile, resolve_active_paths, set_active_profile,
 };
-use sagent_store::{NewSession, Store};
+use sagent_store::{MessageQuery, NewSession, Store};
 use sagent_types::SessionId;
 use uuid::Uuid;
 
@@ -75,6 +75,17 @@ enum SessionCommand {
         /// 可选的模型标识。
         #[arg(long)]
         model: Option<String>,
+    },
+    /// 显示一条会话的元数据和用户可见消息历史。
+    Show {
+        /// 要查看的完整会话 ID。
+        session_id: String,
+        /// 最多显示的消息数量，超过时保留最新消息。
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+        /// 从最新消息向前跳过的数量。
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
     },
     /// 按最后活动时间倒序列出会话。
     List {
@@ -220,6 +231,52 @@ fn session_list_lines(
         .collect())
 }
 
+/// 返回 session show 的稳定文本行。
+///
+/// 展示读取必须使用 get_messages_for_display：它保留压缩前的原始历史，
+/// 同时排除仅供模型恢复上下文的 hidden 压缩摘要。
+fn session_show_lines(
+    home: Option<&Path>,
+    profile_override: Option<&str>,
+    session_id: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<String>> {
+    let paths = current_paths(home, profile_override)?;
+    let store = Store::open_readonly(&paths.state_db)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    let session_id = SessionId::new(session_id);
+    let session = store
+        .get_session(&session_id)?
+        .with_context(|| format!("会话不存在：{}", session_id.as_str()))?;
+    let messages = store.get_messages_for_display(
+        &session_id,
+        &MessageQuery {
+            limit: Some(limit),
+            offset,
+            latest: true,
+            ..MessageQuery::default()
+        },
+    )?;
+
+    let mut lines = vec![
+        format!("ID: {}", session.id.as_str()),
+        format!("标题: {}", session.title.as_deref().unwrap_or("-")),
+        format!("来源: {}", session.source.as_deref().unwrap_or("-")),
+        format!("模型: {}", session.model.as_deref().unwrap_or("-")),
+        format!("开始时间: {}", session.started_at.as_deref().unwrap_or("-")),
+        format!("结束时间: {}", session.ended_at.as_deref().unwrap_or("-")),
+        format!("消息数: {}", session.message_count),
+        "消息:".to_owned(),
+    ];
+    lines.extend(
+        messages
+            .into_iter()
+            .map(|message| format!("[{}] {}", message.role, message.content)),
+    );
+    Ok(lines)
+}
+
 /// 把 Unix 秒数转换为 UTC 公历日期。
 ///
 /// 采用公历 400 年周期算法，避免仅为 CLI 创建时间戳引入额外时间库。
@@ -337,6 +394,24 @@ fn run(cli: Cli) -> Result<()> {
             println!("已创建会话: {}", session_id.as_str());
         }
         Command::Session {
+            command:
+                SessionCommand::Show {
+                    session_id,
+                    limit,
+                    offset,
+                },
+        } => {
+            for line in session_show_lines(
+                cli.home.as_deref(),
+                cli.profile.as_deref(),
+                &session_id,
+                limit,
+                offset,
+            )? {
+                println!("{line}");
+            }
+        }
+        Command::Session {
             command: SessionCommand::List { limit, offset },
         } => {
             for line in
@@ -358,12 +433,12 @@ mod tests {
     use std::fs;
 
     use clap::Parser;
-    use sagent_store::{NewSession, Store};
+    use sagent_store::{NewMessage, NewSession, Store};
 
     use super::{
         Cli, create_profile, create_profile_with_initializer, create_session_with_id,
         profile_list_lines, profile_list_root, rfc3339_now, session_id_from_clock,
-        session_list_lines, use_profile,
+        session_list_lines, session_show_lines, use_profile,
     };
 
     #[test]
@@ -562,6 +637,80 @@ mod tests {
             )
             .is_err(),
             "重复 ID 不能覆盖原会话"
+        );
+        fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
+    fn session_show_displays_archived_history_but_hides_compaction_summary() {
+        let root =
+            std::env::temp_dir().join(format!("sagent-cli-session-show-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("应能创建测试根目录");
+        create_profile(Some(&root), "coder").expect("应能创建 coder profile");
+        use_profile(Some(&root), "coder").expect("应能选择 coder");
+        let session_id = create_session_with_id(
+            Some(&root),
+            None,
+            sagent_types::SessionId::new("show-session"),
+            Some("展示测试".to_owned()),
+            Some("test-model".to_owned()),
+            "2026-08-30T14:00:00.000Z".to_owned(),
+        )
+        .expect("应能创建会话");
+
+        let database = root.join("profiles").join("coder").join("state.db");
+        let mut store = Store::open_readwrite(&database).expect("应能打开数据库");
+        store
+            .append_message(&NewMessage::new(
+                session_id.clone(),
+                "user",
+                "早期问题",
+                "2026-08-30T14:01:00.000Z",
+            ))
+            .expect("应能追加用户消息");
+        store
+            .append_message(&NewMessage::new(
+                session_id.clone(),
+                "assistant",
+                "早期回答",
+                "2026-08-30T14:02:00.000Z",
+            ))
+            .expect("应能追加助手消息");
+        store
+            .archive_and_compact(
+                &session_id,
+                &[NewMessage::compressed_summary(
+                    session_id.clone(),
+                    "assistant",
+                    "内部压缩摘要",
+                    "2026-08-30T14:03:00.000Z",
+                )],
+                "2026-08-30T14:03:00.000Z",
+            )
+            .expect("应能压缩历史");
+        drop(store);
+
+        let lines = session_show_lines(Some(&root), None, session_id.as_str(), 50, 0)
+            .expect("应能显示会话");
+        assert_eq!(
+            lines,
+            vec![
+                "ID: show-session",
+                "标题: 展示测试",
+                "来源: cli",
+                "模型: test-model",
+                "开始时间: 2026-08-30T14:00:00.000Z",
+                "结束时间: -",
+                "消息数: 1",
+                "消息:",
+                "[user] 早期问题",
+                "[assistant] 早期回答",
+            ]
+        );
+        assert!(
+            session_show_lines(Some(&root), None, "missing-session", 50, 0).is_err(),
+            "不存在的会话必须报错"
         );
         fs::remove_dir_all(root).expect("应能清理测试目录");
     }

@@ -5,6 +5,8 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -13,7 +15,11 @@ use sagent_config::{
     list_profile_names, normalize_profile_name, paths::platform_default_home, paths::profile_root,
     read_active_profile, resolve_active_paths, set_active_profile,
 };
-use sagent_store::Store;
+use sagent_store::{NewSession, Store};
+use sagent_types::SessionId;
+
+/// 为同一进程内连续创建的会话提供额外唯一性。
+static NEXT_SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Sagent 命令行参数。
 #[derive(Debug, Parser)]
@@ -64,6 +70,15 @@ enum ProfileCommand {
 /// session 子命令。
 #[derive(Debug, Subcommand)]
 enum SessionCommand {
+    /// 在当前 profile 中创建空会话。
+    Create {
+        /// 可选的会话标题。
+        #[arg(long)]
+        title: Option<String>,
+        /// 可选的模型标识。
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// 按最后活动时间倒序列出会话。
     List {
         /// 最多返回的会话数量。
@@ -208,6 +223,90 @@ fn session_list_lines(
         .collect())
 }
 
+/// 把 Unix 秒数转换为 UTC 公历日期。
+///
+/// 采用公历 400 年周期算法，避免仅为 CLI 创建时间戳引入额外时间库。
+fn utc_date_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
+    let days = days_since_unix_epoch + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+    (year, month as u32, day as u32)
+}
+
+/// 生成当前 UTC 的 RFC 3339 毫秒时间戳。
+fn rfc3339_now(now: SystemTime) -> Result<String> {
+    let duration = now
+        .duration_since(UNIX_EPOCH)
+        .context("系统时间早于 Unix epoch，无法创建会话")?;
+    let seconds = i64::try_from(duration.as_secs()).context("系统时间超出可表示范围")?;
+    let days = seconds.div_euclid(86_400);
+    let seconds_in_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = utc_date_from_days(days);
+    let hour = seconds_in_day / 3_600;
+    let minute = seconds_in_day % 3_600 / 60;
+    let second = seconds_in_day % 60;
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
+        duration.subsec_millis()
+    ))
+}
+
+/// 由同一时钟来源生成本地状态库内唯一的会话 ID。
+fn session_id_from_clock(now: SystemTime, sequence: u64) -> Result<SessionId> {
+    let duration = now
+        .duration_since(UNIX_EPOCH)
+        .context("系统时间早于 Unix epoch，无法创建会话 ID")?;
+    Ok(SessionId::new(format!(
+        "s_{:016x}_{:08x}_{sequence:016x}",
+        duration.as_millis(),
+        std::process::id()
+    )))
+}
+
+/// 创建会话并返回写入数据库的 ID。
+fn create_session(
+    home: Option<&Path>,
+    profile_override: Option<&str>,
+    title: Option<String>,
+    model: Option<String>,
+) -> Result<SessionId> {
+    let sequence = NEXT_SESSION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let now = SystemTime::now();
+    let session_id = session_id_from_clock(now, sequence)?;
+    let started_at = rfc3339_now(now)?;
+    create_session_with_id(home, profile_override, session_id, title, model, started_at)
+}
+
+/// 使用调用方指定的 ID 与时间创建会话，供生产编排和确定性测试复用。
+fn create_session_with_id(
+    home: Option<&Path>,
+    profile_override: Option<&str>,
+    session_id: SessionId,
+    title: Option<String>,
+    model: Option<String>,
+    started_at: String,
+) -> Result<SessionId> {
+    let paths = current_paths(home, profile_override)?;
+    let mut store = Store::open_readwrite(&paths.state_db)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    store.create_session(&NewSession {
+        id: session_id.clone(),
+        source: Some("cli".to_owned()),
+        model,
+        title,
+        started_at,
+    })?;
+    Ok(session_id)
+}
+
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Profile {
@@ -228,6 +327,13 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let profile = use_profile(cli.home.as_deref(), &name)?;
             println!("当前 profile: {profile}");
+        }
+        Command::Session {
+            command: SessionCommand::Create { title, model },
+        } => {
+            let session_id =
+                create_session(cli.home.as_deref(), cli.profile.as_deref(), title, model)?;
+            println!("已创建会话: {}", session_id.as_str());
         }
         Command::Session {
             command: SessionCommand::List { limit, offset },
@@ -254,8 +360,9 @@ mod tests {
     use sagent_store::{NewSession, Store};
 
     use super::{
-        Cli, create_profile, create_profile_with_initializer, profile_list_lines,
-        profile_list_root, session_list_lines, use_profile,
+        Cli, create_profile, create_profile_with_initializer, create_session_with_id,
+        profile_list_lines, profile_list_root, rfc3339_now, session_id_from_clock,
+        session_list_lines, use_profile,
     };
 
     #[test]
@@ -411,5 +518,64 @@ mod tests {
         drop(coder_store);
         drop(default_store);
         fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
+    fn creates_session_in_current_profile_and_preserves_optional_metadata() {
+        let root =
+            std::env::temp_dir().join(format!("sagent-cli-session-create-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("应能创建测试根目录");
+        create_profile(Some(&root), "coder").expect("应能创建 coder profile");
+        use_profile(Some(&root), "coder").expect("应能选择 coder");
+
+        let id = create_session_with_id(
+            Some(&root),
+            None,
+            sagent_types::SessionId::new("fixed-session"),
+            Some("迁移讨论".to_owned()),
+            Some("test-model".to_owned()),
+            "2026-08-30T13:00:00.000Z".to_owned(),
+        )
+        .expect("应能向当前 profile 创建会话");
+        assert_eq!(id.as_str(), "fixed-session");
+
+        let store = Store::open_readonly(&root.join("profiles").join("coder").join("state.db"))
+            .expect("应能打开当前 profile 数据库");
+        let session = store
+            .get_session(&id)
+            .expect("读取不应失败")
+            .expect("新会话应存在");
+        assert_eq!(session.title.as_deref(), Some("迁移讨论"));
+        assert_eq!(session.model.as_deref(), Some("test-model"));
+        drop(store);
+
+        assert!(
+            create_session_with_id(
+                Some(&root),
+                None,
+                id,
+                None,
+                None,
+                "2026-08-30T13:00:01.000Z".to_owned(),
+            )
+            .is_err(),
+            "重复 ID 不能覆盖原会话"
+        );
+        fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
+    fn session_clock_helpers_produce_stable_rfc3339_and_distinct_ids() {
+        let epoch = std::time::UNIX_EPOCH;
+
+        assert_eq!(
+            rfc3339_now(epoch).expect("epoch 应可格式化"),
+            "1970-01-01T00:00:00.000Z"
+        );
+        let first = session_id_from_clock(epoch, 1).expect("应能生成 ID");
+        let second = session_id_from_clock(epoch, 2).expect("应能生成 ID");
+        assert_ne!(first, second);
+        assert!(first.as_str().starts_with("s_"));
     }
 }

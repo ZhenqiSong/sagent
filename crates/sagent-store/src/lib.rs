@@ -3,25 +3,30 @@
 //! 作者：SongZQ
 //! 创建日期：2026-08-29
 
-use std::path::Path;
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 
 pub mod message;
+pub mod migration;
 pub mod schema;
 pub mod search;
 pub mod session;
+pub mod write;
 
 pub use message::{MessageQuery, MessageWindow};
+pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
+pub use write::{NewMessage, NewSession};
 
 /// Sagent 持久化存储的只读访问入口。
 #[derive(Debug)]
 pub struct Store {
     // Connection 保持私有，避免上层绕过 Store 的只读约束直接执行任意 SQL。
     connection: Connection,
+    writable: bool,
 }
 
 impl Store {
@@ -50,7 +55,34 @@ impl Store {
         )
         .with_context(|| format!("无法以只读方式打开 state.db：{}", path.display()))?;
 
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            writable: false,
+        })
+    }
+
+    /// 打开或创建 Sagent 自有数据库，并在事务中迁移至当前结构版本。
+    ///
+    /// 该入口只用于 Sagent 管理的数据库文件；不要将 Hermes 的 state.db 交给它，
+    /// 因为后者只能通过 open_readonly 兼容读取。
+    pub fn open_readwrite(path: &Path) -> Result<Self> {
+        if !path.is_absolute() {
+            anyhow::bail!("state.db 路径必须是绝对路径");
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("创建 state.db 父目录失败：{}", parent.display()))?;
+        }
+        let mut connection = Connection::open(path)
+            .with_context(|| format!("无法以读写方式打开 state.db：{}", path.display()))?;
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .context("启用 SQLite 外键约束失败")?;
+        migration::migrate(&mut connection)?;
+        Ok(Self {
+            connection,
+            writable: true,
+        })
     }
 
     /// 验证连接仍然可执行基本查询。
@@ -61,6 +93,14 @@ impl Store {
             .context("state.db 基本查询失败")?;
         Ok(())
     }
+
+    /// 阻止只读 Store 被误用于写接口，即使调用方持有可变引用。
+    fn ensure_writable(&self) -> Result<()> {
+        if !self.writable {
+            anyhow::bail!("当前 Store 以只读模式打开，不能执行写操作");
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -69,7 +109,8 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::Store;
+    use super::{NewMessage, NewSession, SCHEMA_VERSION, Store};
+    use sagent_types::SessionId;
 
     fn test_path(name: &str) -> PathBuf {
         // 每个测试使用独立文件名，避免并行测试共享数据库；文件位于系统临时目录，
@@ -130,6 +171,102 @@ mod tests {
         assert!(write_result.is_err(), "只读连接不应允许写入");
 
         // 测试结束后删除 fixture，避免临时目录累积数据库文件。
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn readwrite_store_migrates_and_persists_messages_with_fts() {
+        let path = test_path("readwrite");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("write-session");
+        {
+            let mut store = Store::open_readwrite(&path).expect("应能创建并迁移数据库");
+            let info = store.inspect_schema().expect("应能读取迁移后的结构");
+            assert_eq!(info.schema_version, Some(SCHEMA_VERSION));
+            assert!(info.tables.iter().any(|table| table == "sessions"));
+            assert!(info.tables.iter().any(|table| table == "messages_fts"));
+            assert!(info.has_fts5);
+
+            store
+                .create_session(&NewSession {
+                    id: session_id.clone(),
+                    source: Some("tui".to_owned()),
+                    model: Some("test-model".to_owned()),
+                    title: Some("可写存储测试".to_owned()),
+                    started_at: "2026-08-30T10:00:00Z".to_owned(),
+                })
+                .expect("应能创建会话");
+            let message_id = store
+                .append_message(&NewMessage::new(
+                    session_id.clone(),
+                    "user",
+                    "使用 Rust 实现 FTS 搜索",
+                    "2026-08-30T10:01:00Z",
+                ))
+                .expect("应能追加消息");
+            assert_eq!(message_id.get(), 1);
+            assert!(
+                store
+                    .update_session_activity(&session_id, "2026-08-30T10:02:00Z")
+                    .expect("应能更新活动时间")
+            );
+        }
+
+        let store = Store::open_readonly(&path).expect("应能重新以只读方式打开");
+        let session = store
+            .get_session(&session_id)
+            .expect("应能读取已保存会话")
+            .expect("已保存会话应存在");
+        assert_eq!(session.message_count, 1);
+        assert_eq!(session.title.as_deref(), Some("可写存储测试"));
+        let hits = store
+            .search_messages(&super::MessageSearchQuery::new("Rust"))
+            .expect("FTS 触发器应同步写入索引");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0]
+                .message_id
+                .as_ref()
+                .map(sagent_types::MessageId::get),
+            Some(1)
+        );
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn failed_message_append_rolls_back_without_changing_session_count() {
+        let path = test_path("write-rollback");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("existing-session");
+        let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: None,
+                model: None,
+                title: None,
+                started_at: "2026-08-30T10:00:00Z".to_owned(),
+            })
+            .expect("应能创建会话");
+
+        let error = store
+            .append_message(&NewMessage::new(
+                SessionId::new("missing-session"),
+                "user",
+                "不会被写入",
+                "2026-08-30T10:01:00Z",
+            ))
+            .expect_err("外键约束应拒绝不存在的会话");
+        assert!(error.to_string().contains("写入消息"));
+        let count: i64 = store
+            .connection
+            .query_row(
+                "SELECT message_count FROM sessions WHERE id = ?1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("应能读取消息计数");
+        assert_eq!(count, 0);
         remove_if_exists(&path);
     }
 }

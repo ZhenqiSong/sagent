@@ -12,4 +12,5 @@ sagent-store = { path = "../sagent-store" }
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 serde_json.workspace = true
+serde.workspace = true
 uuid.workspace = true

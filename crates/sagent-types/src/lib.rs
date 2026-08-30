@@ -5,4 +5,4 @@ pub mod session;
 
 pub use ids::{MessageId, SessionId};
 pub use message::{SearchHit, StoredMessage};
-pub use session::SessionSummary;
+pub use session::{SessionDetail, SessionSummary};

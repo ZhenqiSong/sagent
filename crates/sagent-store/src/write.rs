@@ -152,4 +152,92 @@ impl Store {
             .context("更新会话活跃时间失败")?;
         Ok(changed == 1)
     }
+
+    /// 修改会话标题；传入 None 会清除用户设置的标题。
+    ///
+    /// 不存在的会话返回 false，方便 TUI 处理其他窗口已删除会话的竞态。
+    pub fn update_session_title(
+        &mut self,
+        session_id: &SessionId,
+        title: Option<&str>,
+        updated_at: &str,
+    ) -> Result<bool> {
+        self.ensure_writable()?;
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE sessions
+                 SET title = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![title, updated_at, session_id.as_str()],
+            )
+            .context("更新会话标题失败")?;
+        Ok(changed == 1)
+    }
+
+    /// 标记会话为结束状态，并持久化结束原因与结束时间。
+    ///
+    /// 空结束原因没有可解释的业务含义，因此在执行 SQL 前拒绝。
+    pub fn finish_session(
+        &mut self,
+        session_id: &SessionId,
+        end_reason: &str,
+        ended_at: &str,
+    ) -> Result<bool> {
+        self.ensure_writable()?;
+        if end_reason.trim().is_empty() {
+            anyhow::bail!("会话结束原因不能为空");
+        }
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE sessions
+                 SET ended_at = ?1, end_reason = ?2, updated_at = ?1
+                 WHERE id = ?3",
+                params![ended_at, end_reason, session_id.as_str()],
+            )
+            .context("结束会话失败")?;
+        Ok(changed == 1)
+    }
+
+    /// 设置会话是否归档。归档会话仍可被 get_session 精确读取，但不会出现在列表中。
+    pub fn set_session_archived(
+        &mut self,
+        session_id: &SessionId,
+        archived: bool,
+        updated_at: &str,
+    ) -> Result<bool> {
+        self.set_session_visibility(session_id, "archived", archived, updated_at)
+    }
+
+    /// 设置会话是否在普通会话列表中隐藏。
+    pub fn set_session_hidden(
+        &mut self,
+        session_id: &SessionId,
+        hidden: bool,
+        updated_at: &str,
+    ) -> Result<bool> {
+        self.set_session_visibility(session_id, "hidden", hidden, updated_at)
+    }
+
+    /// 归档与隐藏只有列名不同；列名由本模块的固定常量给出，绝不接收外部输入。
+    fn set_session_visibility(
+        &mut self,
+        session_id: &SessionId,
+        column: &str,
+        value: bool,
+        updated_at: &str,
+    ) -> Result<bool> {
+        self.ensure_writable()?;
+        debug_assert!(matches!(column, "archived" | "hidden"));
+        let sql = format!("UPDATE sessions SET {column} = ?1, updated_at = ?2 WHERE id = ?3");
+        let changed = self
+            .connection
+            .execute(
+                &sql,
+                params![i64::from(value), updated_at, session_id.as_str()],
+            )
+            .context("更新会话可见性失败")?;
+        Ok(changed == 1)
+    }
 }

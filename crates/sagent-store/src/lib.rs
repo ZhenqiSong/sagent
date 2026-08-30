@@ -269,4 +269,96 @@ mod tests {
         assert_eq!(count, 0);
         remove_if_exists(&path);
     }
+
+    #[test]
+    fn manages_session_lifecycle_and_list_visibility() {
+        let path = test_path("lifecycle");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("lifecycle-session");
+        let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: Some("cli".to_owned()),
+                model: None,
+                title: None,
+                started_at: "2026-08-30T10:00:00Z".to_owned(),
+            })
+            .expect("应能创建会话");
+
+        assert!(
+            store
+                .update_session_title(&session_id, Some("重命名后的会话"), "2026-08-30T10:01:00Z",)
+                .expect("应能更新标题")
+        );
+        assert!(
+            store
+                .finish_session(&session_id, "completed", "2026-08-30T10:02:00Z")
+                .expect("应能结束会话")
+        );
+        assert!(
+            store
+                .set_session_archived(&session_id, true, "2026-08-30T10:03:00Z")
+                .expect("应能归档会话")
+        );
+
+        assert!(
+            store
+                .list_sessions(20, 0)
+                .expect("应能读取会话列表")
+                .is_empty(),
+            "归档会话不应显示在普通列表"
+        );
+        let session = store
+            .get_session(&session_id)
+            .expect("应能精确读取归档会话")
+            .expect("归档会话应保留");
+        assert_eq!(session.title.as_deref(), Some("重命名后的会话"));
+        assert_eq!(session.ended_at.as_deref(), Some("2026-08-30T10:02:00Z"));
+        assert_eq!(session.end_reason.as_deref(), Some("completed"));
+
+        assert!(
+            store
+                .set_session_archived(&session_id, false, "2026-08-30T10:04:00Z")
+                .expect("应能取消归档")
+        );
+        assert!(
+            store
+                .set_session_hidden(&session_id, true, "2026-08-30T10:05:00Z")
+                .expect("应能隐藏会话")
+        );
+        assert!(
+            store
+                .list_sessions(20, 0)
+                .expect("应能读取会话列表")
+                .is_empty(),
+            "隐藏会话不应显示在普通列表"
+        );
+        assert!(
+            store
+                .set_session_hidden(&session_id, false, "2026-08-30T10:06:00Z")
+                .expect("应能取消隐藏")
+        );
+        assert_eq!(
+            store.list_sessions(20, 0).expect("应能读取会话列表").len(),
+            1
+        );
+
+        assert!(
+            !store
+                .update_session_title(
+                    &SessionId::new("missing-session"),
+                    Some("不会写入"),
+                    "2026-08-30T10:07:00Z",
+                )
+                .expect("未知会话不应导致 SQL 错误")
+        );
+        assert!(
+            store
+                .finish_session(&session_id, "", "2026-08-30T10:07:00Z")
+                .is_err(),
+            "结束原因不能为空"
+        );
+        remove_if_exists(&path);
+    }
 }

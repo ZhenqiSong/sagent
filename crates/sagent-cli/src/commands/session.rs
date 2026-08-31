@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use sagent_config::{SagentPaths, normalize_profile_name, resolve_active_paths};
-use sagent_store::{MessageQuery, MessageSearchQuery, NewSession, Store};
+use sagent_store::{MessageQuery, MessageSearchQuery, NewSession, SessionListQuery, Store};
 use sagent_types::{SearchHit, SessionDetail, SessionId, SessionSummary};
 use uuid::Uuid;
 
@@ -44,6 +44,9 @@ pub enum SessionCommand {
         limit: u32,
         #[arg(long, default_value_t = 0)]
         offset: u32,
+        /// 同时列出已归档会话；隐藏会话仍不会显示。
+        #[arg(long)]
+        include_archived: bool,
     },
 }
 
@@ -93,12 +96,17 @@ impl SessionCommand {
                 )?;
                 print_output(context.format, &hits, render_search(&hits))
             }
-            Self::List { limit, offset } => {
+            Self::List {
+                limit,
+                offset,
+                include_archived,
+            } => {
                 let sessions = list(
                     context.home.as_deref(),
                     context.profile.as_deref(),
                     limit,
                     offset,
+                    include_archived,
                 )?;
                 print_output(context.format, &sessions, render_list(&sessions))
             }
@@ -118,11 +126,17 @@ pub fn list(
     profile_override: Option<&str>,
     limit: u32,
     offset: u32,
+    include_archived: bool,
 ) -> Result<Vec<SessionSummary>> {
     let paths = current_paths(home, profile_override)?;
     let store = Store::open_readonly(&paths.state_db)
         .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
-    store.list_sessions(limit, offset)
+    store.list_sessions_with(&SessionListQuery {
+        include_archived,
+        limit,
+        offset,
+        ..SessionListQuery::default()
+    })
 }
 
 /// 将已经读取的会话列表渲染为稳定文本行。
@@ -352,7 +366,7 @@ mod tests {
             "2026-08-30T13:00:00.000Z".to_owned(),
         )
         .expect("应能创建会话");
-        let sessions = list(Some(&root), None, 20, 0).expect("应能列出会话");
+        let sessions = list(Some(&root), None, 20, 0, false).expect("应能列出会话");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, id);
         assert_eq!(sessions[0].title.as_deref(), Some("迁移讨论"));

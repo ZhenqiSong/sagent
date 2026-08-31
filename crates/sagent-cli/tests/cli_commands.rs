@@ -8,6 +8,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use sagent_store::Store;
+use sagent_types::SessionId;
 use serde_json::Value;
 
 static NEXT_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -126,4 +128,40 @@ fn missing_state_database_returns_not_found_exit_code() {
     );
     assert!(output.stdout.is_empty(), "失败命令不应污染 stdout");
     assert!(String::from_utf8_lossy(&output.stderr).contains("state.db 不存在"));
+}
+
+#[test]
+fn list_include_archived_exposes_archived_session_only_when_requested() {
+    let home = test_home("archived");
+    let _ = fs::remove_dir_all(&home);
+    let created = parse_json(&run(
+        &home,
+        &["--format", "json", "session", "create", "--title", "待归档"],
+    ));
+    let session_id = created["session_id"]
+        .as_str()
+        .expect("创建结果必须包含会话 ID");
+
+    let mut store = Store::open_readwrite(&home.join("state.db")).expect("应能打开 state.db");
+    assert!(
+        store
+            .set_session_archived(
+                &SessionId::new(session_id),
+                true,
+                "2026-08-31T12:00:00.000Z"
+            )
+            .expect("应能归档测试会话")
+    );
+    drop(store);
+
+    let default_list = parse_json(&run(&home, &["--format", "json", "session", "list"]));
+    assert!(default_list.as_array().expect("列表应为数组").is_empty());
+
+    let archive_list = parse_json(&run(
+        &home,
+        &["--format", "json", "session", "list", "--include-archived"],
+    ));
+    assert_eq!(archive_list.as_array().expect("列表应为数组").len(), 1);
+    assert_eq!(archive_list[0]["id"], session_id);
+    fs::remove_dir_all(home).expect("应能清理测试目录");
 }

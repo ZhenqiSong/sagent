@@ -19,6 +19,7 @@ pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
+pub use session::SessionListQuery;
 pub use write::{NewMessage, NewSession, RetryCheckpoint, RewindCheckpoint, RewindResult};
 
 /// Sagent 持久化存储的只读访问入口。

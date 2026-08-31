@@ -10,6 +10,18 @@ use sagent_types::{SessionId, SessionSummary};
 
 use crate::Store;
 
+/// 会话列表的可见性与分页条件。
+///
+/// 默认行为保持第一阶段契约：只列出未归档、未隐藏的会话。显式开启的可见性选项
+/// 仅扩大结果集，不改变 `get_session` 按 ID 精确读取的行为。
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionListQuery {
+    pub include_archived: bool,
+    pub include_hidden: bool,
+    pub limit: u32,
+    pub offset: u32,
+}
+
 /// 将会话查询的固定列顺序转换为公共摘要类型。
 ///
 /// list_sessions 与 get_session 共用该映射，避免两个入口的字段语义逐渐偏离。
@@ -34,10 +46,28 @@ impl Store {
     /// limit 与 offset 用于 TUI 会话选择器的分页。预览取第一条用户消息的前
     /// 60 个字符；最后活动时间优先使用最新消息的时间，没有消息时回退到会话开始时间。
     pub fn list_sessions(&self, limit: u32, offset: u32) -> Result<Vec<SessionSummary>> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT
+        self.list_sessions_with(&SessionListQuery {
+            limit,
+            offset,
+            ..SessionListQuery::default()
+        })
+    }
+
+    /// 按指定可见性和分页条件读取会话摘要。
+    pub fn list_sessions_with(&self, query: &SessionListQuery) -> Result<Vec<SessionSummary>> {
+        // 片段仅由本类型的 bool 选择，不包含外部字符串，因此不会把用户输入拼入 SQL。
+        let archived_clause = if query.include_archived {
+            "1 = 1"
+        } else {
+            "s.archived = 0"
+        };
+        let hidden_clause = if query.include_hidden {
+            "1 = 1"
+        } else {
+            "s.hidden = 0"
+        };
+        let sql = format!(
+            "SELECT
                     s.id,
                     s.source,
                     s.model,
@@ -63,15 +93,18 @@ impl Store {
                     ) AS preview,
                     s.message_count
                  FROM sessions AS s
-                 WHERE s.archived = 0 AND s.hidden = 0
+                 WHERE {archived_clause} AND {hidden_clause}
                  ORDER BY last_active DESC, s.started_at DESC, s.id DESC
-                 LIMIT ?1 OFFSET ?2",
-            )
+                 LIMIT ?1 OFFSET ?2"
+        );
+        let mut statement = self
+            .connection
+            .prepare(&sql)
             .context("准备会话列表查询失败")?;
 
         let rows = statement
             .query_map(
-                params![i64::from(limit), i64::from(offset)],
+                params![i64::from(query.limit), i64::from(query.offset)],
                 map_session_summary,
             )
             .context("执行会话列表查询失败")?;
@@ -128,7 +161,7 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use crate::Store;
+    use crate::{SessionListQuery, Store};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sagent-sessions-{name}-{}.db", std::process::id()))
@@ -224,6 +257,27 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id.as_str(), "old");
 
+        remove(&path);
+    }
+
+    #[test]
+    fn can_include_archived_without_exposing_hidden_sessions() {
+        let path = test_path("archived");
+        remove(&path);
+        create_fixture(&path);
+
+        let sessions = Store::open_readonly(&path)
+            .expect("应能只读打开 fixture")
+            .list_sessions_with(&SessionListQuery {
+                include_archived: true,
+                limit: 20,
+                ..SessionListQuery::default()
+            })
+            .expect("应能读取包含归档会话的列表");
+
+        let ids: Vec<_> = sessions.iter().map(|session| session.id.as_str()).collect();
+        assert_eq!(ids, vec!["recent", "archived", "old"]);
+        assert!(!ids.contains(&"hidden"));
         remove(&path);
     }
 

@@ -2,7 +2,7 @@
 //!
 //! 作者：SongZQ
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -11,6 +11,17 @@ use crate::output::OutputFormat;
 
 pub mod profile;
 pub mod session;
+
+/// 一次 CLI 调用共享的全局运行参数。
+///
+/// 命令实现通过此对象读取 home、profile 和输出格式，避免每新增一个子命令就扩展多个
+/// `execute` 函数的参数列表。
+#[derive(Clone, Debug)]
+pub struct CommandContext {
+    pub home: Option<PathBuf>,
+    pub profile: Option<String>,
+    pub format: OutputFormat,
+}
 
 /// 顶层命令分组。
 ///
@@ -29,15 +40,10 @@ pub enum Command {
 
 impl Command {
     /// 将根级运行上下文转交给所属业务域。
-    pub fn execute(
-        self,
-        home: Option<&Path>,
-        profile: Option<&str>,
-        format: OutputFormat,
-    ) -> Result<()> {
+    pub fn execute(self, context: &CommandContext) -> Result<()> {
         match self {
-            Self::Profile { command } => command.execute(home, format),
-            Self::Session { command } => command.execute(home, profile, format),
+            Self::Profile { command } => command.execute(context),
+            Self::Session { command } => command.execute(context),
         }
     }
 }

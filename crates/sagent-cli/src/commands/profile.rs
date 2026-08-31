@@ -15,7 +15,7 @@ use sagent_config::{
 };
 use sagent_store::Store;
 
-use crate::output::{OutputFormat, print_output};
+use crate::{commands::CommandContext, output::print_output};
 
 /// `profile` 分组下的命令参数与处理器。
 #[derive(Debug, Subcommand)]
@@ -27,21 +27,31 @@ pub enum ProfileCommand {
 
 impl ProfileCommand {
     /// 执行 profile 子命令并按用户选择的格式输出。
-    pub fn execute(self, home: Option<&Path>, format: OutputFormat) -> Result<()> {
+    pub fn execute(self, context: &CommandContext) -> Result<()> {
         match self {
             Self::List => {
-                let lines = list_lines(home)?;
-                print_output(format, &lines, lines.clone())
+                let lines = list_lines(context.home.as_deref())?;
+                print_output(context.format, &lines, lines.clone())
             }
             Self::Create { name } => {
-                let path = create(home, &name)?.display().to_string();
+                let path = create(context.home.as_deref(), &name)?
+                    .display()
+                    .to_string();
                 let value = serde_json::json!({ "path": path.clone() });
-                print_output(format, &value, vec![format!("已创建 profile: {path}")])
+                print_output(
+                    context.format,
+                    &value,
+                    vec![format!("已创建 profile: {path}")],
+                )
             }
             Self::Use { name } => {
-                let selected = select(home, &name)?;
+                let selected = select(context.home.as_deref(), &name)?;
                 let value = serde_json::json!({ "profile": selected.clone() });
-                print_output(format, &value, vec![format!("当前 profile: {selected}")])
+                print_output(
+                    context.format,
+                    &value,
+                    vec![format!("当前 profile: {selected}")],
+                )
             }
         }
     }

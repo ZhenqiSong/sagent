@@ -14,7 +14,7 @@ use sagent_store::{MessageQuery, MessageSearchQuery, NewSession, Store};
 use sagent_types::{SearchHit, SessionDetail, SessionId, SessionSummary};
 use uuid::Uuid;
 
-use crate::output::{OutputFormat, print_output};
+use crate::{commands::CommandContext, output::print_output};
 
 /// `session` 分组下的命令参数与处理器。
 #[derive(Debug, Subcommand)]
@@ -49,18 +49,18 @@ pub enum SessionCommand {
 
 impl SessionCommand {
     /// 执行 session 子命令并按用户选择的格式输出。
-    pub fn execute(
-        self,
-        home: Option<&Path>,
-        profile: Option<&str>,
-        format: OutputFormat,
-    ) -> Result<()> {
+    pub fn execute(self, context: &CommandContext) -> Result<()> {
         match self {
             Self::Create { title, model } => {
-                let session_id = create(home, profile, title, model)?;
+                let session_id = create(
+                    context.home.as_deref(),
+                    context.profile.as_deref(),
+                    title,
+                    model,
+                )?;
                 let value = serde_json::json!({ "session_id": session_id.as_str() });
                 print_output(
-                    format,
+                    context.format,
                     &value,
                     vec![format!("已创建会话: {}", session_id.as_str())],
                 )
@@ -70,20 +70,37 @@ impl SessionCommand {
                 limit,
                 offset,
             } => {
-                let detail = show(home, profile, &session_id, limit, offset)?;
-                print_output(format, &detail, render_show(&detail))
+                let detail = show(
+                    context.home.as_deref(),
+                    context.profile.as_deref(),
+                    &session_id,
+                    limit,
+                    offset,
+                )?;
+                print_output(context.format, &detail, render_show(&detail))
             }
             Self::Search {
                 query,
                 limit,
                 session_id,
             } => {
-                let hits = search(home, profile, &query, limit, session_id.as_deref())?;
-                print_output(format, &hits, render_search(&hits))
+                let hits = search(
+                    context.home.as_deref(),
+                    context.profile.as_deref(),
+                    &query,
+                    limit,
+                    session_id.as_deref(),
+                )?;
+                print_output(context.format, &hits, render_search(&hits))
             }
             Self::List { limit, offset } => {
-                let sessions = list(home, profile, limit, offset)?;
-                print_output(format, &sessions, render_list(&sessions))
+                let sessions = list(
+                    context.home.as_deref(),
+                    context.profile.as_deref(),
+                    limit,
+                    offset,
+                )?;
+                print_output(context.format, &sessions, render_list(&sessions))
             }
         }
     }

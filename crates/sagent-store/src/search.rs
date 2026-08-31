@@ -53,6 +53,19 @@ fn map_search_hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchHit> {
     })
 }
 
+/// 判断查询是否包含 CJK 统一表意文字。
+///
+/// SQLite 默认的 unicode61 tokenizer 不会把连续中文拆成可供子串 MATCH 的词元；
+/// 对此类查询改用参数绑定的 `LIKE`，避免出现“库里有中文但搜索不到”的体验。
+fn contains_cjk(query: &str) -> bool {
+    query.chars().any(|character| {
+        matches!(
+            character as u32,
+            0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
+        )
+    })
+}
+
 impl Store {
     /// 在 messages_fts 索引中搜索消息内容。
     ///
@@ -66,20 +79,37 @@ impl Store {
         } else {
             "(m.active = 1 OR m.compacted = 1)"
         };
-        let mut sql = format!(
-            "SELECT m.session_id, m.id,
-                    snippet(messages_fts, 0, '[', ']', '…', 16),
-                    bm25(messages_fts)
-             FROM messages_fts
-             INNER JOIN messages m ON m.id = messages_fts.rowid
-             WHERE messages_fts MATCH ? AND {visibility_clause}"
-        );
-        let mut parameters = vec![Value::Text(query.query.clone())];
+        let (mut sql, mut parameters) = if contains_cjk(&query.query) {
+            (
+                format!(
+                    "SELECT m.session_id, m.id, m.content, 0.0
+                     FROM messages m
+                     WHERE m.content LIKE '%' || ? || '%' AND {visibility_clause}"
+                ),
+                vec![Value::Text(query.query.clone())],
+            )
+        } else {
+            (
+                format!(
+                    "SELECT m.session_id, m.id,
+                            snippet(messages_fts, 0, '[', ']', '…', 16),
+                            bm25(messages_fts)
+                     FROM messages_fts
+                     INNER JOIN messages m ON m.id = messages_fts.rowid
+                     WHERE messages_fts MATCH ? AND {visibility_clause}"
+                ),
+                vec![Value::Text(query.query.clone())],
+            )
+        };
         if let Some(session_id) = &query.session_id {
             sql.push_str(" AND m.session_id = ?");
             parameters.push(Value::Text(session_id.as_str().to_owned()));
         }
-        sql.push_str(" ORDER BY bm25(messages_fts), m.id DESC LIMIT ?");
+        sql.push_str(if contains_cjk(&query.query) {
+            " ORDER BY m.id DESC LIMIT ?"
+        } else {
+            " ORDER BY bm25(messages_fts), m.id DESC LIMIT ?"
+        });
         parameters.push(Value::Integer(i64::from(query.limit)));
 
         let mut statement = self
@@ -118,20 +148,23 @@ mod tests {
                 "CREATE TABLE messages (
                     id INTEGER PRIMARY KEY,
                     session_id TEXT NOT NULL,
+                    content TEXT NOT NULL,
                     active INTEGER NOT NULL,
                     compacted INTEGER NOT NULL
                  );
                  CREATE VIRTUAL TABLE messages_fts USING fts5(content);
                  INSERT INTO messages VALUES
-                    (1, 'session-1', 1, 0),
-                    (2, 'session-1', 0, 0),
-                    (3, 'session-1', 0, 1),
-                    (4, 'session-2', 1, 0);
+                    (1, 'session-1', 'Rust 和 SQLite', 1, 0),
+                    (2, 'session-1', 'Rust 已撤回', 0, 0),
+                    (3, 'session-1', 'Rust 压缩历史', 0, 1),
+                    (4, 'session-2', 'Python 迁移到 Rust', 1, 0),
+                    (5, 'session-2', '中文消息与 emoji 🚀', 1, 0);
                  INSERT INTO messages_fts(rowid, content) VALUES
                     (1, 'Rust 和 SQLite'),
                     (2, 'Rust 已撤回'),
                     (3, 'Rust 压缩历史'),
-                    (4, 'Python 迁移到 Rust');",
+                    (4, 'Python 迁移到 Rust'),
+                    (5, '中文消息与 emoji 🚀');",
             )
             .expect("应能创建 FTS5 测试数据");
     }
@@ -214,6 +247,22 @@ mod tests {
                 .search_messages(&MessageSearchQuery::new("\""))
                 .is_err()
         );
+        remove(&path);
+    }
+
+    #[test]
+    fn search_handles_cjk_and_emoji_content_without_panicking() {
+        let path = test_path("unicode");
+        remove(&path);
+        create_fixture(&path);
+        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+
+        let hits = store
+            .search_messages(&MessageSearchQuery::new("中文消息"))
+            .expect("中文 FTS5 查询不应失败");
+
+        assert_eq!(hit_ids(&hits), vec![5]);
+        assert!(hits[0].snippet.contains('🚀'));
         remove(&path);
     }
 }

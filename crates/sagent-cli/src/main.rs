@@ -8,12 +8,15 @@
 mod commands;
 mod output;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, process::ExitCode};
 
 use anyhow::Result;
 use clap::Parser;
 
-use crate::{commands::Command, output::OutputFormat};
+use crate::{
+    commands::{Command, CommandContext},
+    output::OutputFormat,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "sagent", version, about = "Sagent 命令行工具")]
@@ -36,11 +39,58 @@ fn run(cli: Cli) -> Result<()> {
         command,
     } = cli;
 
-    command.execute(home.as_deref(), profile.as_deref(), format)
+    let context = CommandContext {
+        home,
+        profile,
+        format,
+    };
+    command.execute(&context)
 }
 
-fn main() -> Result<()> {
-    run(Cli::parse())
+/// 将当前已知的 CLI 边界错误映射为稳定退出码。
+///
+/// 具体业务错误仍由下层保留完整诊断；此处只决定脚本调用方的错误类别。后续引入
+/// `sagent-types` 的领域错误后，应改为基于类型而非文本分类。
+fn exit_code(error: &anyhow::Error) -> ExitCode {
+    let diagnostic = format!("{error:#}");
+    let code = if diagnostic.contains("--home 必须是绝对路径")
+        || diagnostic.contains("profile 名称")
+        || diagnostic.contains("default profile")
+        || diagnostic.contains("全文搜索词不能为空")
+        || diagnostic.contains("全文搜索 limit")
+    {
+        2
+    } else if diagnostic.contains("state.db 不存在") || diagnostic.contains("profile 不存在")
+    {
+        3
+    } else if diagnostic.contains("数据库")
+        || diagnostic.contains("SQLite")
+        || diagnostic.contains("FTS5")
+        || diagnostic.contains("schema")
+    {
+        4
+    } else {
+        1
+    };
+    ExitCode::from(code)
+}
+
+fn main() -> ExitCode {
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let exit_code = error.exit_code();
+            let _ = error.print();
+            return ExitCode::from(exit_code as u8);
+        }
+    };
+    match run(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("错误：{error:#}");
+            exit_code(&error)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -169,6 +169,13 @@ mod tests {
             .expect("应能创建 FTS5 测试数据");
     }
 
+    fn create_cjk_fixture(path: &std::path::Path) {
+        let connection = Connection::open(path).expect("应能创建 CJK fixture 数据库");
+        connection
+            .execute_batch(include_str!("../tests/fixtures/cjk_emoji_fts.sql"))
+            .expect("CJK fixture SQL 应能执行");
+    }
+
     fn hit_ids(hits: &[sagent_types::SearchHit]) -> Vec<i64> {
         let mut ids: Vec<_> = hits
             .iter()
@@ -254,14 +261,14 @@ mod tests {
     fn search_handles_cjk_and_emoji_content_without_panicking() {
         let path = test_path("unicode");
         remove(&path);
-        create_fixture(&path);
+        create_cjk_fixture(&path);
         let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
 
         let hits = store
             .search_messages(&MessageSearchQuery::new("中文消息"))
             .expect("中文 FTS5 查询不应失败");
 
-        assert_eq!(hit_ids(&hits), vec![5]);
+        assert_eq!(hit_ids(&hits), vec![1]);
         assert!(hits[0].snippet.contains('🚀'));
         remove(&path);
     }

@@ -89,13 +89,20 @@ impl Store {
 mod tests {
     use super::Store;
     use rusqlite::Connection;
-    use std::{fs, path::PathBuf};
+    use std::{fs, path::PathBuf, time::Duration};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sagent-schema-{name}-{}.db", std::process::id()))
     }
     fn remove(path: &std::path::Path) {
         let _ = fs::remove_file(path);
+    }
+
+    fn create_from_fixture(path: &std::path::Path, fixture: &str) {
+        let connection = Connection::open(path).expect("应能创建 fixture 数据库");
+        connection
+            .execute_batch(fixture)
+            .expect("fixture SQL 应能执行");
     }
 
     #[test]
@@ -168,6 +175,80 @@ mod tests {
             .unwrap();
         assert_eq!(info.schema_version, None);
         assert_eq!(info.tables, vec!["schema_version", "unrelated"]);
+        remove(&path);
+    }
+
+    #[test]
+    fn inspects_historic_v1_fixture_without_migrating_it() {
+        let path = test_path("historic-v1");
+        remove(&path);
+        create_from_fixture(&path, include_str!("../tests/fixtures/historic_v1.sql"));
+
+        let info = Store::open_readonly(&path)
+            .expect("应能只读打开历史 fixture")
+            .inspect_schema()
+            .expect("应能检查历史 schema");
+
+        assert_eq!(info.schema_version, Some(1));
+        assert_eq!(info.tables, vec!["schema_version", "sessions"]);
+        remove(&path);
+    }
+
+    #[test]
+    fn identifies_fixture_without_fts5() {
+        let path = test_path("no-fts");
+        remove(&path);
+        create_from_fixture(&path, include_str!("../tests/fixtures/no_fts.sql"));
+
+        let info = Store::open_readonly(&path)
+            .expect("应能只读打开无 FTS fixture")
+            .inspect_schema()
+            .expect("应能检查无 FTS schema");
+
+        assert!(!info.has_fts5);
+        remove(&path);
+    }
+
+    #[test]
+    fn rejects_corrupt_database_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/corrupt_state.db");
+        let store = Store::open_readonly(&path).expect("打开句柄本身可以延迟校验文件内容");
+
+        assert!(
+            store.inspect_schema().is_err(),
+            "损坏数据库不能通过结构检查"
+        );
+    }
+
+    #[test]
+    fn locked_database_fixture_returns_a_stable_read_error() {
+        let path = test_path("locked");
+        remove(&path);
+        let writer = Connection::open(&path).expect("应能创建锁定 fixture 数据库");
+        writer
+            .execute("CREATE TABLE marker (value INTEGER)", [])
+            .expect("应能初始化 fixture 表");
+        writer
+            .busy_timeout(Duration::from_millis(20))
+            .expect("应能设置 busy timeout");
+        writer
+            .execute_batch("BEGIN EXCLUSIVE")
+            .expect("应能取得 SQLite 独占锁");
+
+        let store = Store::open_readonly(&path).expect("锁定时仍可尝试只读打开");
+        let error = store
+            .inspect_schema()
+            .expect_err("独占锁期间的 schema 读取必须失败");
+        let diagnostic = format!("{error:#}").to_lowercase();
+        assert!(
+            diagnostic.contains("locked")
+                || diagnostic.contains("busy")
+                || diagnostic.contains("锁"),
+            "锁定错误应包含稳定诊断：{diagnostic}"
+        );
+
+        writer.execute_batch("ROLLBACK").expect("应能释放锁");
         remove(&path);
     }
 

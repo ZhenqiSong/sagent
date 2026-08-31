@@ -8,8 +8,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use sagent_store::Store;
-use sagent_types::SessionId;
 use serde_json::Value;
 
 static NEXT_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -142,17 +140,27 @@ fn list_include_archived_exposes_archived_session_only_when_requested() {
         .as_str()
         .expect("创建结果必须包含会话 ID");
 
-    let mut store = Store::open_readwrite(&home.join("state.db")).expect("应能打开 state.db");
-    assert!(
-        store
-            .set_session_archived(
-                &SessionId::new(session_id),
-                true,
-                "2026-08-31T12:00:00.000Z"
-            )
-            .expect("应能归档测试会话")
-    );
-    drop(store);
+    let renamed = parse_json(&run(
+        &home,
+        &[
+            "--format",
+            "json",
+            "session",
+            "rename",
+            session_id,
+            "新的标题",
+        ],
+    ));
+    assert_eq!(renamed["operation"], "rename");
+    assert_eq!(renamed["title"], "新的标题");
+    assert_eq!(renamed["changed"], true);
+
+    let archived = parse_json(&run(
+        &home,
+        &["--format", "json", "session", "archive", session_id],
+    ));
+    assert_eq!(archived["operation"], "archive");
+    assert_eq!(archived["changed"], true);
 
     let default_list = parse_json(&run(&home, &["--format", "json", "session", "list"]));
     assert!(default_list.as_array().expect("列表应为数组").is_empty());
@@ -163,5 +171,35 @@ fn list_include_archived_exposes_archived_session_only_when_requested() {
     ));
     assert_eq!(archive_list.as_array().expect("列表应为数组").len(), 1);
     assert_eq!(archive_list[0]["id"], session_id);
+
+    let unarchived = parse_json(&run(
+        &home,
+        &["--format", "json", "session", "unarchive", session_id],
+    ));
+    assert_eq!(unarchived["operation"], "unarchive");
+    assert_eq!(unarchived["changed"], true);
+
+    let finished = parse_json(&run(
+        &home,
+        &[
+            "--format",
+            "json",
+            "session",
+            "finish",
+            session_id,
+            "--reason",
+            "user_done",
+        ],
+    ));
+    assert_eq!(finished["operation"], "finish");
+    assert_eq!(finished["reason"], "user_done");
+
+    let detail = parse_json(&run(
+        &home,
+        &["--format", "json", "session", "show", session_id],
+    ));
+    assert_eq!(detail["session"]["title"], "新的标题");
+    assert_eq!(detail["session"]["end_reason"], "user_done");
+    assert!(detail["session"]["ended_at"].is_string());
     fs::remove_dir_all(home).expect("应能清理测试目录");
 }

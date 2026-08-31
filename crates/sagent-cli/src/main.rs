@@ -56,6 +56,9 @@ fn exit_code(error: &anyhow::Error) -> ExitCode {
     let code = if diagnostic.contains("--home 必须是绝对路径")
         || diagnostic.contains("profile 名称")
         || diagnostic.contains("default profile")
+        || diagnostic.contains("会话标题不能为空")
+        || diagnostic.contains("会话标题不能超过")
+        || diagnostic.contains("会话结束原因不能为空")
         || diagnostic.contains("全文搜索词不能为空")
         || diagnostic.contains("全文搜索 limit")
     {

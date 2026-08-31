@@ -48,76 +48,243 @@ pub enum SessionCommand {
         #[arg(long)]
         include_archived: bool,
     },
+    Rename {
+        session_id: String,
+        title: String,
+    },
+    Archive {
+        session_id: String,
+    },
+    Unarchive {
+        session_id: String,
+    },
+    Finish {
+        session_id: String,
+        #[arg(long)]
+        reason: String,
+    },
 }
 
 impl SessionCommand {
     /// 执行 session 子命令并按用户选择的格式输出。
     pub fn execute(self, context: &CommandContext) -> Result<()> {
         match self {
-            Self::Create { title, model } => {
-                let session_id = create(
-                    context.home.as_deref(),
-                    context.profile.as_deref(),
-                    title,
-                    model,
-                )?;
-                let value = serde_json::json!({ "session_id": session_id.as_str() });
-                print_output(
-                    context.format,
-                    &value,
-                    vec![format!("已创建会话: {}", session_id.as_str())],
-                )
-            }
+            Self::Create { title, model } => handle_create(context, title, model),
             Self::Show {
                 session_id,
                 limit,
                 offset,
-            } => {
-                let detail = show(
-                    context.home.as_deref(),
-                    context.profile.as_deref(),
-                    &session_id,
-                    limit,
-                    offset,
-                )?;
-                print_output(context.format, &detail, render_show(&detail))
-            }
+            } => handle_show(context, &session_id, limit, offset),
             Self::Search {
                 query,
                 limit,
                 session_id,
-            } => {
-                let hits = search(
-                    context.home.as_deref(),
-                    context.profile.as_deref(),
-                    &query,
-                    limit,
-                    session_id.as_deref(),
-                )?;
-                print_output(context.format, &hits, render_search(&hits))
-            }
+            } => handle_search(context, &query, limit, session_id.as_deref()),
             Self::List {
                 limit,
                 offset,
                 include_archived,
-            } => {
-                let sessions = list(
-                    context.home.as_deref(),
-                    context.profile.as_deref(),
-                    limit,
-                    offset,
-                    include_archived,
-                )?;
-                print_output(context.format, &sessions, render_list(&sessions))
-            }
+            } => handle_list(context, limit, offset, include_archived),
+            Self::Rename { session_id, title } => handle_rename(context, &session_id, &title),
+            Self::Archive { session_id } => handle_archive(context, &session_id),
+            Self::Unarchive { session_id } => handle_unarchive(context, &session_id),
+            Self::Finish { session_id, reason } => handle_finish(context, &session_id, &reason),
         }
     }
+}
+
+/// 创建会话并输出新 ID。
+fn handle_create(
+    context: &CommandContext,
+    title: Option<String>,
+    model: Option<String>,
+) -> Result<()> {
+    let session_id = create(
+        context.home.as_deref(),
+        context.profile.as_deref(),
+        title,
+        model,
+    )?;
+    let value = serde_json::json!({ "session_id": session_id.as_str() });
+    print_output(
+        context.format,
+        &value,
+        vec![format!("已创建会话: {}", session_id.as_str())],
+    )
+}
+
+/// 读取并展示单个会话。
+fn handle_show(context: &CommandContext, session_id: &str, limit: u32, offset: u32) -> Result<()> {
+    let detail = show(
+        context.home.as_deref(),
+        context.profile.as_deref(),
+        session_id,
+        limit,
+        offset,
+    )?;
+    print_output(context.format, &detail, render_show(&detail))
+}
+
+/// 搜索当前 profile 的消息。
+fn handle_search(
+    context: &CommandContext,
+    query: &str,
+    limit: u32,
+    session_id: Option<&str>,
+) -> Result<()> {
+    let hits = search(
+        context.home.as_deref(),
+        context.profile.as_deref(),
+        query,
+        limit,
+        session_id,
+    )?;
+    print_output(context.format, &hits, render_search(&hits))
+}
+
+/// 列出当前 profile 的会话。
+fn handle_list(
+    context: &CommandContext,
+    limit: u32,
+    offset: u32,
+    include_archived: bool,
+) -> Result<()> {
+    let sessions = list(
+        context.home.as_deref(),
+        context.profile.as_deref(),
+        limit,
+        offset,
+        include_archived,
+    )?;
+    print_output(context.format, &sessions, render_list(&sessions))
+}
+
+/// 修改会话标题。
+fn handle_rename(context: &CommandContext, session_id: &str, title: &str) -> Result<()> {
+    let title = validate_title(title)?;
+    let updated_at = now_rfc3339()?;
+    let changed = with_writable_store(context, |store| {
+        store.update_session_title(&SessionId::new(session_id), Some(title), &updated_at)
+    })?;
+    let value = serde_json::json!({
+        "operation": "rename",
+        "session_id": session_id,
+        "title": title,
+        "changed": changed,
+        "updated_at": updated_at,
+    });
+    print_output(
+        context.format,
+        &value,
+        vec![format!("已重命名会话: {session_id}")],
+    )
+}
+
+/// 归档会话，使其从默认列表中隐藏。
+fn handle_archive(context: &CommandContext, session_id: &str) -> Result<()> {
+    handle_archive_state(context, session_id, true)
+}
+
+/// 取消会话归档，使其重新出现在默认列表中。
+fn handle_unarchive(context: &CommandContext, session_id: &str) -> Result<()> {
+    handle_archive_state(context, session_id, false)
+}
+
+/// 归档与取消归档共享的 Store 写入和输出逻辑。
+fn handle_archive_state(context: &CommandContext, session_id: &str, archived: bool) -> Result<()> {
+    let updated_at = now_rfc3339()?;
+    let changed = with_writable_store(context, |store| {
+        store.set_session_archived(&SessionId::new(session_id), archived, &updated_at)
+    })?;
+    let operation = if archived { "archive" } else { "unarchive" };
+    print_lifecycle_result(context, operation, session_id, changed, &updated_at)
+}
+
+/// 结束会话并记录调用方提供的原因。
+fn handle_finish(context: &CommandContext, session_id: &str, reason: &str) -> Result<()> {
+    let reason = validate_reason(reason)?;
+    let updated_at = now_rfc3339()?;
+    let changed = with_writable_store(context, |store| {
+        store.finish_session(&SessionId::new(session_id), reason, &updated_at)
+    })?;
+    let value = serde_json::json!({
+        "operation": "finish",
+        "session_id": session_id,
+        "reason": reason,
+        "changed": changed,
+        "updated_at": updated_at,
+    });
+    print_output(
+        context.format,
+        &value,
+        vec![format!("已结束会话: {session_id}")],
+    )
 }
 
 /// 解析当前命令实际访问的 profile 路径。
 fn current_paths(home: Option<&Path>, profile_override: Option<&str>) -> Result<SagentPaths> {
     let profile = profile_override.map(normalize_profile_name).transpose()?;
     resolve_active_paths(home, profile.as_ref())
+}
+
+/// 打开当前 profile 的可写 Store；只供明确的生命周期命令使用。
+fn with_writable_store<T>(
+    context: &CommandContext,
+    operation: impl FnOnce(&mut Store) -> Result<T>,
+) -> Result<T> {
+    let paths = current_paths(context.home.as_deref(), context.profile.as_deref())?;
+    let mut store = Store::open_readwrite(&paths.state_db)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    operation(&mut store)
+}
+
+/// 生成生命周期写操作共用的 UTC 毫秒时间戳。
+fn now_rfc3339() -> Result<String> {
+    rfc3339_now(SystemTime::now())
+}
+
+fn validate_title(title: &str) -> Result<&str> {
+    let title = title.trim();
+    if title.is_empty() {
+        anyhow::bail!("会话标题不能为空");
+    }
+    if title.len() > 256 {
+        anyhow::bail!("会话标题不能超过 256 个字节");
+    }
+    Ok(title)
+}
+
+fn validate_reason(reason: &str) -> Result<&str> {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        anyhow::bail!("会话结束原因不能为空");
+    }
+    Ok(reason)
+}
+
+fn print_lifecycle_result(
+    context: &CommandContext,
+    operation: &str,
+    session_id: &str,
+    changed: bool,
+    updated_at: &str,
+) -> Result<()> {
+    let value = serde_json::json!({
+        "operation": operation,
+        "session_id": session_id,
+        "changed": changed,
+        "updated_at": updated_at,
+    });
+    let action = if operation == "archive" {
+        "已归档"
+    } else {
+        "已恢复"
+    };
+    print_output(
+        context.format,
+        &value,
+        vec![format!("{action}会话: {session_id}")],
+    )
 }
 
 /// 从当前 profile 读取会话列表，供文本和 JSON 输出共用。

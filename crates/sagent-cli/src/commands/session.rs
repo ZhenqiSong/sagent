@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 use sagent_config::{SagentPaths, normalize_profile_name, resolve_active_paths};
 use sagent_store::{MessageQuery, MessageSearchQuery, NewSession, SessionListQuery, Store};
-use sagent_types::{SearchHit, SessionDetail, SessionId, SessionSummary};
+use sagent_types::{MessageId, SearchHit, SessionDetail, SessionId, SessionSummary};
 use uuid::Uuid;
 
 use crate::{commands::CommandContext, output::print_output};
@@ -63,6 +63,10 @@ pub enum SessionCommand {
         #[arg(long)]
         reason: String,
     },
+    Rewind {
+        session_id: String,
+        message_id: String,
+    },
 }
 
 impl SessionCommand {
@@ -89,6 +93,10 @@ impl SessionCommand {
             Self::Archive { session_id } => handle_archive(context, &session_id),
             Self::Unarchive { session_id } => handle_unarchive(context, &session_id),
             Self::Finish { session_id, reason } => handle_finish(context, &session_id, &reason),
+            Self::Rewind {
+                session_id,
+                message_id,
+            } => handle_rewind(context, &session_id, &message_id),
         }
     }
 }
@@ -221,6 +229,31 @@ fn handle_finish(context: &CommandContext, session_id: &str, reason: &str) -> Re
     )
 }
 
+/// 回退到一条 user 消息，将该消息及之后的活动消息软删除以保留审计历史。
+fn handle_rewind(context: &CommandContext, session_id: &str, message_id: &str) -> Result<()> {
+    let message_id = parse_message_id(message_id)?;
+    let updated_at = now_rfc3339()?;
+    let result = with_writable_store(context, |store| {
+        store.rewind_to_message(&SessionId::new(session_id), message_id, &updated_at)
+    })?;
+    let value = serde_json::json!({
+        "operation": "rewind",
+        "session_id": session_id,
+        "target_message_id": result.target_message.id.get(),
+        "rewound_count": result.rewound_count,
+        "new_head_id": result.new_head_id.as_ref().map(MessageId::get),
+        "updated_at": updated_at,
+    });
+    print_output(
+        context.format,
+        &value,
+        vec![format!(
+            "已回退会话: {session_id}（{} 条消息）",
+            result.rewound_count
+        )],
+    )
+}
+
 /// 解析当前命令实际访问的 profile 路径。
 fn current_paths(home: Option<&Path>, profile_override: Option<&str>) -> Result<SagentPaths> {
     let profile = profile_override.map(normalize_profile_name).transpose()?;
@@ -260,6 +293,17 @@ fn validate_reason(reason: &str) -> Result<&str> {
         anyhow::bail!("会话结束原因不能为空");
     }
     Ok(reason)
+}
+
+/// 将 CLI 的文本参数转换为 SQLite 正整数消息主键。
+fn parse_message_id(value: &str) -> Result<MessageId> {
+    let message_id: i64 = value
+        .parse()
+        .with_context(|| format!("消息 ID 必须是正整数：{value}"))?;
+    if message_id <= 0 {
+        anyhow::bail!("消息 ID 必须是正整数：{value}");
+    }
+    Ok(MessageId::new(message_id))
 }
 
 fn print_lifecycle_result(

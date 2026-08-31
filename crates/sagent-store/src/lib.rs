@@ -20,7 +20,9 @@ pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
 pub use session::SessionListQuery;
-pub use write::{NewMessage, NewSession, RetryCheckpoint, RewindCheckpoint, RewindResult};
+pub use write::{
+    NewMessage, NewSession, RestoreResult, RetryCheckpoint, RewindCheckpoint, RewindResult,
+};
 
 /// Sagent 持久化存储的只读访问入口。
 #[derive(Debug)]
@@ -110,7 +112,10 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use super::{MessageQuery, MessageSearchQuery, NewMessage, NewSession, SCHEMA_VERSION, Store};
+    use super::{
+        MessageQuery, MessageSearchQuery, NewMessage, NewSession, RestoreResult, SCHEMA_VERSION,
+        Store,
+    };
     use sagent_types::{MessageId, SessionId};
 
     fn test_path(name: &str) -> PathBuf {
@@ -406,8 +411,6 @@ mod tests {
         assert_eq!(result.rewound_count, 2);
         assert_eq!(result.target_message.content, "第二条 second 提问");
         assert_eq!(result.new_head_id.as_ref().map(MessageId::get), Some(2));
-        let checkpoint = result.checkpoint.clone();
-
         let active = store
             .get_messages(&session_id, &MessageQuery::default())
             .expect("应能读取活动消息");
@@ -470,9 +473,12 @@ mod tests {
 
         assert_eq!(
             store
-                .restore_rewound(&checkpoint, "2026-08-30T10:06:00Z")
+                .restore_rewound_from(&session_id, MessageId::new(3), "2026-08-30T10:06:00Z")
                 .expect("应能恢复回退消息"),
-            2
+            RestoreResult {
+                restored_count: 2,
+                new_head_id: Some(MessageId::new(4)),
+            }
         );
         assert_eq!(
             store
@@ -499,10 +505,9 @@ mod tests {
             2
         );
 
-        let stale_checkpoint = store
+        store
             .rewind_to_message(&session_id, MessageId::new(3), "2026-08-30T10:07:00Z")
-            .expect("应能再次回退用户消息")
-            .checkpoint;
+            .expect("应能再次回退用户消息");
         store
             .append_message(&NewMessage::new(
                 session_id.clone(),
@@ -512,7 +517,7 @@ mod tests {
             ))
             .expect("应能追加新分支消息");
         let error = store
-            .restore_rewound(&stale_checkpoint, "2026-08-30T10:09:00Z")
+            .restore_rewound_from(&session_id, MessageId::new(3), "2026-08-30T10:09:00Z")
             .expect_err("新分支存在时必须拒绝恢复旧分支");
         assert!(error.to_string().contains("新的活动消息"));
         assert_eq!(

@@ -73,6 +73,15 @@ pub struct RewindCheckpoint {
     pub expected_active_head_id: Option<MessageId>,
 }
 
+/// 一次跨进程恢复操作的结果。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RestoreResult {
+    /// 从 inactive 重新变为 active 的消息数量。
+    pub restored_count: u64,
+    /// 恢复后最后一条活动消息；会话没有消息时为 None。
+    pub new_head_id: Option<MessageId>,
+}
+
 /// 在模型调用前确认的最新 assistant 消息重试许可。
 #[derive(Clone, Debug)]
 pub struct RetryCheckpoint {
@@ -718,6 +727,94 @@ impl Store {
             .context("更新恢复后的会话状态失败")?;
         transaction.commit().context("提交消息恢复事务失败")?;
         Ok(restored_count)
+    }
+
+    /// 通过会话与回退起点恢复消息，适用于每次调用都是新进程的 CLI。
+    ///
+    /// 与 Python 的 `restore_rewound(session_id, since_message_id)` 一样，恢复范围是
+    /// 从起点开始的 inactive 物理消息；但此版本额外拒绝新活动分支：若当前活动头已经
+    /// 到达或越过回退起点，说明回退后有新消息，不能无提示地合并旧分支。
+    pub fn restore_rewound_from(
+        &mut self,
+        session_id: &SessionId,
+        target_message_id: MessageId,
+        updated_at: &str,
+    ) -> Result<RestoreResult> {
+        self.ensure_writable()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始跨进程消息恢复事务失败")?;
+        let session_exists = transaction
+            .query_row(
+                "SELECT 1 FROM sessions WHERE id = ?1",
+                [session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .context("验证恢复会话失败")?
+            .is_some();
+        if !session_exists {
+            anyhow::bail!("恢复会话不存在：{}", session_id.as_str());
+        }
+        let target_active = transaction
+            .query_row(
+                "SELECT active FROM messages WHERE id = ?1 AND session_id = ?2",
+                params![target_message_id.get(), session_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .context("读取恢复起点失败")?
+            .ok_or_else(|| anyhow::anyhow!("恢复起点不存在或不属于会话"))?;
+        if target_active != 0 {
+            anyhow::bail!("恢复起点仍是活动消息，无法恢复");
+        }
+        let current_head_id = transaction
+            .query_row(
+                "SELECT MAX(id) FROM messages WHERE session_id = ?1 AND active = 1",
+                [session_id.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .context("读取恢复前的活动消息头失败")?;
+        if current_head_id.is_some_and(|head_id| head_id >= target_message_id.get()) {
+            anyhow::bail!("回退后已经出现新的活动消息，不能恢复旧分支");
+        }
+        let restored_count = transaction
+            .execute(
+                "UPDATE messages
+                 SET active = 1
+                 WHERE session_id = ?1 AND id >= ?2 AND active = 0",
+                params![session_id.as_str(), target_message_id.get()],
+            )
+            .context("恢复回退消息失败")? as u64;
+        let active_count: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND active = 1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+            .context("重新统计恢复后的活动消息失败")?;
+        let new_head_id = transaction
+            .query_row(
+                "SELECT MAX(id) FROM messages WHERE session_id = ?1 AND active = 1",
+                [session_id.as_str()],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .context("读取恢复后的活动消息头失败")?
+            .map(MessageId::new);
+        transaction
+            .execute(
+                "UPDATE sessions
+                 SET message_count = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![active_count, updated_at, session_id.as_str()],
+            )
+            .context("更新恢复后的会话状态失败")?;
+        transaction.commit().context("提交跨进程消息恢复事务失败")?;
+        Ok(RestoreResult {
+            restored_count,
+            new_head_id,
+        })
     }
 
     /// 归档与隐藏只有列名不同；列名由本模块的固定常量给出，绝不接收外部输入。

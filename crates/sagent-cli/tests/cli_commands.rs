@@ -284,5 +284,30 @@ fn rewind_hides_active_messages_but_keeps_auditable_history() {
         2
     );
     drop(store);
+
+    let restored = parse_json(&run(
+        &home,
+        &[
+            "--format",
+            "json",
+            "session",
+            "restore",
+            session_id,
+            &message_id_text,
+        ],
+    ));
+    assert_eq!(restored["operation"], "restore");
+    assert_eq!(restored["restored_count"], 2);
+    assert_eq!(restored["new_head_id"], 2);
+
+    let detail = parse_json(&run(
+        &home,
+        &["--format", "json", "session", "show", session_id],
+    ));
+    assert_eq!(
+        detail["messages"].as_array().expect("消息应为数组").len(),
+        2
+    );
+    assert_eq!(detail["session"]["message_count"], 2);
     fs::remove_dir_all(home).expect("应能清理测试目录");
 }

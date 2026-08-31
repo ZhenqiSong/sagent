@@ -67,6 +67,10 @@ pub enum SessionCommand {
         session_id: String,
         message_id: String,
     },
+    Restore {
+        session_id: String,
+        message_id: String,
+    },
 }
 
 impl SessionCommand {
@@ -97,6 +101,10 @@ impl SessionCommand {
                 session_id,
                 message_id,
             } => handle_rewind(context, &session_id, &message_id),
+            Self::Restore {
+                session_id,
+                message_id,
+            } => handle_restore(context, &session_id, &message_id),
         }
     }
 }
@@ -250,6 +258,31 @@ fn handle_rewind(context: &CommandContext, session_id: &str, message_id: &str) -
         vec![format!(
             "已回退会话: {session_id}（{} 条消息）",
             result.rewound_count
+        )],
+    )
+}
+
+/// 恢复由指定回退起点隐藏的消息；若已有新活动分支则拒绝合并。
+fn handle_restore(context: &CommandContext, session_id: &str, message_id: &str) -> Result<()> {
+    let message_id = parse_message_id(message_id)?;
+    let updated_at = now_rfc3339()?;
+    let result = with_writable_store(context, |store| {
+        store.restore_rewound_from(&SessionId::new(session_id), message_id.clone(), &updated_at)
+    })?;
+    let value = serde_json::json!({
+        "operation": "restore",
+        "session_id": session_id,
+        "target_message_id": message_id.get(),
+        "restored_count": result.restored_count,
+        "new_head_id": result.new_head_id.as_ref().map(MessageId::get),
+        "updated_at": updated_at,
+    });
+    print_output(
+        context.format,
+        &value,
+        vec![format!(
+            "已恢复会话分支: {session_id}（{} 条消息）",
+            result.restored_count
         )],
     )
 }

@@ -400,6 +400,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sagent-rpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "sagent-config",
+ "sagent-protocol",
+ "sagent-store",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sagent-store"
 version = "0.1.0"
 dependencies = [

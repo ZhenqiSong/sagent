@@ -35,6 +35,9 @@ pub enum ProtocolError {
     /// 当前 Profile 中找不到请求的会话。
     #[error("session not found: {0}")]
     SessionNotFound(String),
+    /// 会话数据库无法读取；细节仅保留在 stderr，不能暴露给协议客户端。
+    #[error("store unavailable: {0}")]
+    StoreUnavailable(String),
     /// 服务层返回未预期的内部错误。
     #[error("internal error: {0}")]
     Internal(String),
@@ -48,18 +51,17 @@ impl ProtocolError {
             Self::InvalidParams(_) => (INVALID_PARAMS, "invalid params".to_owned()),
             Self::MethodNotFound(_) => (METHOD_NOT_FOUND, "method not found".to_owned()),
             Self::SessionNotFound(_) => (SESSION_NOT_FOUND, "session not found".to_owned()),
+            Self::StoreUnavailable(_) => (STORE_UNAVAILABLE, "store unavailable".to_owned()),
             Self::Internal(_) => (INTERNAL_ERROR, "internal error".to_owned()),
         };
 
         let data = match self {
-            Self::InvalidParams(detail) | Self::Internal(detail) => {
-                Some(Value::String(detail.clone()))
-            }
+            Self::InvalidParams(detail) => Some(Value::String(detail.clone())),
             Self::MethodNotFound(method) => Some(serde_json::json!({ "method": method })),
             Self::SessionNotFound(session_id) => {
                 Some(serde_json::json!({ "session_id": session_id }))
             }
-            Self::InvalidRequest => None,
+            Self::InvalidRequest | Self::StoreUnavailable(_) | Self::Internal(_) => None,
         };
 
         JsonRpcError {
@@ -67,5 +69,20 @@ impl ProtocolError {
             message,
             data,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProtocolError, STORE_UNAVAILABLE};
+
+    #[test]
+    fn store_unavailable_uses_stable_code_without_internal_detail() {
+        let error = ProtocolError::StoreUnavailable("database path must stay private".to_owned())
+            .to_jsonrpc();
+
+        assert_eq!(error.code, STORE_UNAVAILABLE);
+        assert_eq!(error.message, "store unavailable");
+        assert_eq!(error.data, None);
     }
 }

@@ -107,7 +107,7 @@ impl SessionReadService for SessionService {
 }
 
 fn store_error(error: anyhow::Error) -> ProtocolError {
-    ProtocolError::Internal(error.to_string())
+    ProtocolError::StoreUnavailable(error.to_string())
 }
 
 fn checked_limit(limit: Option<u32>) -> Result<u32, ProtocolError> {
@@ -163,7 +163,7 @@ mod tests {
     use sagent_store::{NewMessage, NewSession};
     use sagent_types::SessionId;
 
-    use super::{DEFAULT_PAGE_LIMIT, SessionReadService, SessionService};
+    use super::{DEFAULT_PAGE_LIMIT, SessionReadService, SessionService, store_error};
     use crate::{ProtocolError, SessionListParams, SessionResumeParams};
 
     fn test_path(name: &str) -> PathBuf {
@@ -274,5 +274,13 @@ mod tests {
             assert!(matches!(error, ProtocolError::InvalidParams(_)));
         }
         remove(&path);
+    }
+
+    #[test]
+    fn store_failures_map_to_store_unavailable() {
+        let error = store_error(anyhow::anyhow!("fixture database is unavailable"));
+
+        assert!(matches!(error, ProtocolError::StoreUnavailable(_)));
+        assert_eq!(error.to_jsonrpc().code, crate::STORE_UNAVAILABLE);
     }
 }

@@ -17,3 +17,6 @@ serde_json.workspace = true
 sagent-config = { path = "../sagent-config" }
 sagent-protocol = { path = "../sagent-protocol" }
 sagent-store = { path = "../sagent-store" }
+
+[dev-dependencies]
+sagent-types = { path = "../sagent-types" }

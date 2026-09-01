@@ -157,4 +157,25 @@ mod tests {
     fn frame_limit_is_one_megabyte() {
         assert_eq!(MAX_FRAME_BYTES, 1024 * 1024);
     }
+
+    #[test]
+    fn oversized_frame_returns_error_and_next_request_is_processed() {
+        let input = format!(
+            "{}\n{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"gateway.ping\"}}\n",
+            "x".repeat(MAX_FRAME_BYTES)
+        );
+        let mut output = Vec::new();
+
+        run(&mut Cursor::new(input), &mut output, &FakeService).expect("stdio 应继续运行");
+        let frames: Vec<serde_json::Value> = String::from_utf8(output)
+            .expect("输出应为 UTF-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("每一行必须是 JSON"))
+            .collect();
+
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[1]["error"]["code"], -32602);
+        assert_eq!(frames[2]["id"], 9);
+        assert_eq!(frames[2]["result"]["ok"], true);
+    }
 }

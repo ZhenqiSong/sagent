@@ -32,6 +32,9 @@ pub enum ProtocolError {
     /// 请求的方法名未注册。
     #[error("method not found: {0}")]
     MethodNotFound(String),
+    /// 当前 Profile 中找不到请求的会话。
+    #[error("session not found: {0}")]
+    SessionNotFound(String),
     /// 服务层返回未预期的内部错误。
     #[error("internal error: {0}")]
     Internal(String),
@@ -44,6 +47,7 @@ impl ProtocolError {
             Self::InvalidRequest => (INVALID_REQUEST, "invalid request".to_owned()),
             Self::InvalidParams(_) => (INVALID_PARAMS, "invalid params".to_owned()),
             Self::MethodNotFound(_) => (METHOD_NOT_FOUND, "method not found".to_owned()),
+            Self::SessionNotFound(_) => (SESSION_NOT_FOUND, "session not found".to_owned()),
             Self::Internal(_) => (INTERNAL_ERROR, "internal error".to_owned()),
         };
 
@@ -52,6 +56,9 @@ impl ProtocolError {
                 Some(Value::String(detail.clone()))
             }
             Self::MethodNotFound(method) => Some(serde_json::json!({ "method": method })),
+            Self::SessionNotFound(session_id) => {
+                Some(serde_json::json!({ "session_id": session_id }))
+            }
             Self::InvalidRequest => None,
         };
 

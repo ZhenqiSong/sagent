@@ -391,6 +391,9 @@ dependencies = [
 name = "sagent-protocol"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "sagent-store",
+ "sagent-types",
  "serde",
  "serde_json",
  "thiserror",

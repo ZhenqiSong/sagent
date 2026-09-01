@@ -3,10 +3,12 @@
 //! 该模块不读取配置或数据库。服务依赖通过 [`GatewayService`] 注入，便于用 fake 服务
 //! 覆盖协议行为；后续 `session.*` 方法可以在同一入口扩展，而不会污染 stdio 循环。
 
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    GatewayPingParams, GatewayPingResult, JsonRpcRequest, JsonRpcResponse, ProtocolError, RequestId,
+    GatewayPingParams, GatewayPingResult, JsonRpcRequest, JsonRpcResponse, ProtocolError,
+    RequestId, SessionListParams, SessionReadService, SessionResumeParams,
 };
 
 /// 网关基础能力的最小服务接口。
@@ -15,11 +17,16 @@ pub trait GatewayService {
     fn ping(&self) -> GatewayPingResult;
 }
 
+/// 可被 JSON-RPC 入口直接分派的完整只读服务能力。
+pub trait DispatchService: GatewayService + SessionReadService {}
+
+impl<T> DispatchService for T where T: GatewayService + SessionReadService {}
+
 /// 校验并分派一个请求。
 ///
 /// 返回 `None` 表示通知：即使通知处理失败，也不能向 stdout 写响应。带 `id` 的请求
 /// 总会得到成功或错误响应；错误的 `id` 会被原样带回。
-pub fn dispatch<S: GatewayService>(
+pub fn dispatch<S: DispatchService>(
     request: JsonRpcRequest,
     service: &S,
 ) -> Option<JsonRpcResponse<Value>> {
@@ -32,7 +39,7 @@ pub fn dispatch<S: GatewayService>(
     })
 }
 
-fn dispatch_request<S: GatewayService>(
+fn dispatch_request<S: DispatchService>(
     request: JsonRpcRequest,
     service: &S,
 ) -> Result<Value, ProtocolError> {
@@ -40,22 +47,67 @@ fn dispatch_request<S: GatewayService>(
         return Err(ProtocolError::InvalidRequest);
     }
 
-    match request.method.as_str() {
-        "gateway.ping" => {
-            let params = request.params.unwrap_or_else(|| serde_json::json!({}));
-            if !params.is_object() {
-                return Err(ProtocolError::InvalidParams(
-                    "params must be an object".to_owned(),
-                ));
-            }
-            let params: GatewayPingParams = serde_json::from_value(params)
-                .map_err(|error| ProtocolError::InvalidParams(error.to_string()))?;
-            let _ = params;
+    let (namespace, action) = request
+        .method
+        .split_once('.')
+        .ok_or_else(|| ProtocolError::MethodNotFound(request.method.clone()))?;
+
+    match namespace {
+        "gateway" => dispatch_gateway(action, request.params, service),
+        "session" => dispatch_session(action, request.params, service),
+        _ => Err(ProtocolError::MethodNotFound(request.method)),
+    }
+}
+
+/// `gateway.*` 方法的二级分发入口。
+fn dispatch_gateway<S: DispatchService>(
+    action: &str,
+    params: Option<Value>,
+    service: &S,
+) -> Result<Value, ProtocolError> {
+    match action {
+        "ping" => {
+            let _: GatewayPingParams = parse_params(params)?;
             serde_json::to_value(service.ping())
                 .map_err(|error| ProtocolError::Internal(error.to_string()))
         }
-        method => Err(ProtocolError::MethodNotFound(method.to_owned())),
+        _ => Err(ProtocolError::MethodNotFound(format!("gateway.{action}"))),
     }
+}
+
+/// `session.*` 方法的二级分发入口。
+fn dispatch_session<S: DispatchService>(
+    action: &str,
+    params: Option<Value>,
+    service: &S,
+) -> Result<Value, ProtocolError> {
+    match action {
+        "list" => {
+            let params: SessionListParams = parse_params(params)?;
+            serde_json::to_value(service.list_sessions(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
+        "resume" => {
+            let params: SessionResumeParams = parse_params(params)?;
+            serde_json::to_value(service.resume_session(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
+        _ => Err(ProtocolError::MethodNotFound(format!("session.{action}"))),
+    }
+}
+
+/// 将可选的 JSON-RPC 参数统一解析为方法的强类型参数。
+///
+/// JSON-RPC 允许方法省略 `params`，这里将其视为空对象；但一旦提供参数，必须是对象，
+/// 避免数组、字符串等值绕过方法参数契约。
+fn parse_params<T: DeserializeOwned>(params: Option<Value>) -> Result<T, ProtocolError> {
+    let params = params.unwrap_or_else(|| serde_json::json!({}));
+    if !params.is_object() {
+        return Err(ProtocolError::InvalidParams(
+            "params must be an object".to_owned(),
+        ));
+    }
+    serde_json::from_value(params).map_err(|error| ProtocolError::InvalidParams(error.to_string()))
 }
 
 /// 构造一个数字 ID 的请求，供协议层测试和简单客户端使用。
@@ -74,7 +126,8 @@ mod tests {
 
     use super::{GatewayService, dispatch, request_with_number_id};
     use crate::{
-        GatewayPingResult, JsonRpcRequest, RequestId,
+        GatewayPingResult, JsonRpcRequest, RequestId, SessionListParams, SessionListResult,
+        SessionReadService, SessionResumeParams, SessionResumeResult,
         error::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND},
     };
 
@@ -86,6 +139,26 @@ mod tests {
                 ok: true,
                 protocol_version: 1,
             }
+        }
+    }
+
+    impl SessionReadService for FakeGateway {
+        fn list_sessions(
+            &self,
+            _params: &SessionListParams,
+        ) -> Result<SessionListResult, crate::ProtocolError> {
+            Ok(SessionListResult {
+                sessions: vec![],
+                limit: 50,
+                offset: 0,
+            })
+        }
+
+        fn resume_session(
+            &self,
+            _params: &SessionResumeParams,
+        ) -> Result<SessionResumeResult, crate::ProtocolError> {
+            Err(crate::ProtocolError::SessionNotFound("missing".to_owned()))
         }
     }
 

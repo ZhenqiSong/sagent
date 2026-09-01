@@ -30,6 +30,7 @@ impl ProtocolFeatures {
 
 /// `gateway.ping` 参数；空对象或省略参数都映射到该类型。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GatewayPingParams {}
 
 /// `gateway.ping` 的连通性确认结果。

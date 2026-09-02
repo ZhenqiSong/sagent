@@ -2,13 +2,13 @@
 
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
-use sagent_types::{MessageId, SessionId, TurnId};
+use sagent_types::{MessageId, SessionId, TurnId, TurnOutcome};
 
 use crate::{
     Store,
     event::{
-        EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TURN_STARTED, NewDaemonEvent,
-        insert_event,
+        EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TURN_COMPLETED, EVENT_TURN_FAILED,
+        EVENT_TURN_INTERRUPTED, EVENT_TURN_STARTED, NewDaemonEvent, insert_event,
     },
     write::{NewMessage, insert_message},
 };
@@ -226,5 +226,154 @@ impl Store {
         )?;
         transaction.commit().context("提交工具结果事务失败")?;
         Ok(message_id)
+    }
+
+    /// 原子提交最终 assistant 消息并完成 Turn。
+    pub fn complete_turn(
+        &mut self,
+        turn_id: &TurnId,
+        assistant_message: &NewMessage,
+        completed_at: &str,
+    ) -> Result<MessageId> {
+        self.ensure_writable()?;
+        if assistant_message.role != "assistant" {
+            bail!("最终消息的 role 必须是 assistant");
+        }
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始 Turn 完成事务失败")?;
+        let (session_id, status): (String, String) = transaction
+            .query_row(
+                "SELECT session_id, status FROM turns WHERE turn_id = ?1",
+                [turn_id.as_uuid().to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context("查询待完成 Turn 失败")?
+            .ok_or_else(|| anyhow::anyhow!("Turn 不存在"))?;
+        if status != "running" {
+            bail!("Turn 状态为 {status}，不能完成");
+        }
+        if assistant_message.session_id.as_str() != session_id {
+            bail!("最终消息与 Turn 不属于同一会话");
+        }
+        let message_id = insert_message(&transaction, assistant_message)?;
+        let changed = transaction.execute("UPDATE sessions SET message_count = message_count + 1, last_activity_at = ?1, updated_at = ?1 WHERE id = ?2", params![assistant_message.timestamp, session_id]).context("更新完成消息计数失败")?;
+        if changed != 1 {
+            bail!("最终消息所属会话不存在：{session_id}");
+        }
+        let outcome = serde_json::to_string(&TurnOutcome::Completed)
+            .context("序列化 completed outcome 失败")?;
+        let changed = transaction.execute("UPDATE turns SET status = 'completed', assistant_message_id = ?1, completed_at = ?2, outcome_json = ?3 WHERE turn_id = ?4 AND status = 'running'", params![message_id.get(), completed_at, outcome, turn_id.as_uuid().to_string()]).context("更新 completed Turn 失败")?;
+        if changed != 1 {
+            bail!("Turn 已不在 running 状态");
+        }
+        insert_event(
+            &transaction,
+            &NewDaemonEvent {
+                session_id: assistant_message.session_id.clone(),
+                turn_id: Some(*turn_id),
+                event_type: EVENT_MESSAGE_COMMITTED.into(),
+                payload: serde_json::json!({"message_id": message_id, "role": "assistant"}),
+                created_at: completed_at.into(),
+            },
+        )?;
+        insert_event(
+            &transaction,
+            &NewDaemonEvent {
+                session_id: assistant_message.session_id.clone(),
+                turn_id: Some(*turn_id),
+                event_type: EVENT_TURN_COMPLETED.into(),
+                payload: serde_json::json!({"assistant_message_id": message_id, "outcome": {"kind": "completed"}}),
+                created_at: completed_at.into(),
+            },
+        )?;
+        transaction.commit().context("提交 Turn 完成事务失败")?;
+        Ok(message_id)
+    }
+
+    /// 将 running Turn 原子标记为 interrupted，不伪造 assistant 消息。
+    pub fn interrupt_turn(
+        &mut self,
+        turn_id: &TurnId,
+        reason: &str,
+        completed_at: &str,
+    ) -> Result<()> {
+        self.finish_without_message(
+            turn_id,
+            &TurnOutcome::Interrupted {
+                reason: reason.to_owned(),
+            },
+            EVENT_TURN_INTERRUPTED,
+            completed_at,
+        )
+    }
+
+    /// 将 running Turn 原子标记为 failed，不伪造 assistant 消息。
+    pub fn fail_turn(
+        &mut self,
+        turn_id: &TurnId,
+        category: &str,
+        message: &str,
+        completed_at: &str,
+    ) -> Result<()> {
+        self.finish_without_message(
+            turn_id,
+            &TurnOutcome::Failed {
+                category: category.to_owned(),
+                message: message.to_owned(),
+            },
+            EVENT_TURN_FAILED,
+            completed_at,
+        )
+    }
+
+    fn finish_without_message(
+        &mut self,
+        turn_id: &TurnId,
+        outcome: &TurnOutcome,
+        event_type: &str,
+        completed_at: &str,
+    ) -> Result<()> {
+        self.ensure_writable()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始 Turn 终止事务失败")?;
+        let (session_id, status): (String, String) = transaction
+            .query_row(
+                "SELECT session_id, status FROM turns WHERE turn_id = ?1",
+                [turn_id.as_uuid().to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context("查询待终止 Turn 失败")?
+            .ok_or_else(|| anyhow::anyhow!("Turn 不存在"))?;
+        if status != "running" {
+            bail!("Turn 状态为 {status}，不能重复终止");
+        }
+        let status_value = match outcome {
+            TurnOutcome::Interrupted { .. } => "interrupted",
+            TurnOutcome::Failed { .. } => "failed",
+            TurnOutcome::Completed => bail!("completed outcome 不能用于无消息终止"),
+        };
+        let outcome_json = serde_json::to_string(outcome).context("序列化 Turn outcome 失败")?;
+        let changed = transaction.execute("UPDATE turns SET status = ?1, completed_at = ?2, outcome_json = ?3 WHERE turn_id = ?4 AND status = 'running'", params![status_value, completed_at, outcome_json, turn_id.as_uuid().to_string()]).context("更新 Turn 终止状态失败")?;
+        if changed != 1 {
+            bail!("Turn 已不在 running 状态");
+        }
+        insert_event(
+            &transaction,
+            &NewDaemonEvent {
+                session_id: SessionId::new(session_id),
+                turn_id: Some(*turn_id),
+                event_type: event_type.to_owned(),
+                payload: serde_json::from_str(&outcome_json)
+                    .context("解析 Turn event payload 失败")?,
+                created_at: completed_at.to_owned(),
+            },
+        )?;
+        transaction.commit().context("提交 Turn 终止事务失败")
     }
 }

@@ -579,3 +579,64 @@ cargo clippy --workspace --all-targets --offline -- -D warnings
 - 新增工具结果持久化与事件回归测试。
 
 验证结果：`sagent-store` 42 个测试通过，Clippy（`-D warnings`）通过。
+
+## 步骤 5 执行记录
+
+执行日期：2026-09-02  
+状态：已完成
+
+已完成：
+
+- 新增 `TurnOutcome`：`Completed`、`Interrupted`、`Failed`；
+- 新增 `Store::complete_turn`，原子写入 assistant final message、completed outcome 和完成事件；
+- 新增 `Store::interrupt_turn`，不伪造 assistant 消息；
+- 新增 `Store::fail_turn`，不伪造 assistant 消息；
+- 增加终态保护，非 running Turn 不允许再次结束；
+- 新增 `turn.completed`、`turn.interrupted`、`turn.failed` 事件常量；
+- 完成、失败和中断结果均写入结构化 `outcome_json`。
+
+验证结果：`sagent-store` 42 个测试、`sagent-types` 14 个测试通过，Clippy（`-D warnings`）通过。
+
+## 步骤 6 执行记录
+
+执行日期：2026-09-02  
+状态：已完成
+
+已完成：
+
+- 新增 `EventQuery` 和 `StoredDaemonEvent`；
+- 新增 `Store::events_since`，按 `session_id + sequence` 查询并分页；
+- 新增 `Store::latest_event_sequence`；
+- 严格解析 `payload_json` 和可选 `turn_id`；
+- 增加 `limit` 校验和最大值 `MAX_EVENT_LIMIT=200`；
+- 新增 sequence 过滤、分页和最新序号测试。
+
+验证结果：`sagent-store` 43 个测试通过，Clippy（`-D warnings`）通过。
+
+## 步骤 7 执行记录
+
+执行日期：2026-09-02  
+状态：已完成
+
+已新增集成覆盖：
+
+- 创建 Session、generation、begin Turn、tool result、complete Turn 的完整生命周期；
+- 关闭 Store 后重新打开，验证消息、FTS 和 daemon event replay 可恢复；
+- 验证 event sequence 严格递增；
+- 验证两个独立 Profile 数据库之间不会泄漏事件；
+- 保留并通过既有 FTS、回退、恢复、重试、只读和 migration 测试。
+
+验证结果：`sagent-store` 45 个测试通过，Clippy（`-D warnings`）通过。
+
+## 步骤 8 执行记录
+
+执行日期：2026-09-02  
+状态：已完成
+
+已执行 workspace 提交前质量门禁：
+
+- `cargo fmt --check`：通过；
+- `cargo test --workspace --offline`：通过，共 137 个测试通过，0 个失败；
+- `cargo clippy --workspace --all-targets --offline -- -D warnings`：通过，无警告。
+
+本步骤只完成验证和提交边界确认，未自动创建 Git commit；提交仍由维护者在审阅变更后执行。

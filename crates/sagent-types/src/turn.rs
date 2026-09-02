@@ -16,6 +16,15 @@ pub enum PersistedTurnStatus {
     Failed,
 }
 
+/// Turn 结束时写入数据库的结构化结果。
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum TurnOutcome {
+    Completed,
+    Interrupted { reason: String },
+    Failed { category: String, message: String },
+}
+
 /// daemon event 的单调递增序号。
 #[derive(Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Ord, PartialOrd, Serialize)]
 #[serde(transparent)]
@@ -55,7 +64,7 @@ pub enum TurnTypeError {
 
 #[cfg(test)]
 mod tests {
-    use super::{EventSequence, PersistedTurnStatus, TurnTypeError};
+    use super::{EventSequence, PersistedTurnStatus, TurnOutcome, TurnTypeError};
 
     #[test]
     fn persisted_status_uses_stable_snake_case_json() {
@@ -82,5 +91,16 @@ mod tests {
             Err(TurnTypeError::NegativeEventSequence(-1))
         );
         assert!(serde_json::from_str::<EventSequence>("-1").is_err());
+    }
+
+    #[test]
+    fn turn_outcome_has_structured_json() {
+        let outcome = TurnOutcome::Failed {
+            category: "provider".into(),
+            message: "超时".into(),
+        };
+        let value = serde_json::to_value(outcome).unwrap();
+        assert_eq!(value["kind"], "failed");
+        assert_eq!(value["category"], "provider");
     }
 }

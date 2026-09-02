@@ -9,4 +9,4 @@ pub use capabilities::{ClientCapabilities, ClientSurface};
 pub use ids::{ApprovalId, ClientId, MessageId, SessionId, ToolCallId, TurnId};
 pub use message::{SearchHit, StoredMessage};
 pub use session::{SessionDetail, SessionSummary};
-pub use turn::{EventSequence, PersistedTurnStatus, TurnTypeError};
+pub use turn::{EventSequence, PersistedTurnStatus, TurnOutcome, TurnTypeError};

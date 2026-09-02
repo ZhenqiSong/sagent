@@ -18,7 +18,9 @@ pub mod turn;
 pub mod write;
 
 pub use event::{
-    EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TURN_STARTED, NewDaemonEvent,
+    EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TURN_COMPLETED, EVENT_TURN_FAILED,
+    EVENT_TURN_INTERRUPTED, EVENT_TURN_STARTED, EventQuery, MAX_EVENT_LIMIT, NewDaemonEvent,
+    StoredDaemonEvent,
 };
 pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
@@ -119,10 +121,10 @@ mod tests {
     use rusqlite::Connection;
 
     use super::{
-        MessageQuery, MessageSearchQuery, NewGeneration, NewMessage, NewSession, RestoreResult,
-        SCHEMA_VERSION, StartTurn, Store,
+        EventQuery, MessageQuery, MessageSearchQuery, NewGeneration, NewMessage, NewSession,
+        RestoreResult, SCHEMA_VERSION, StartTurn, Store,
     };
-    use sagent_types::{MessageId, SessionId, TurnId};
+    use sagent_types::{EventSequence, MessageId, SessionId, TurnId};
 
     fn test_path(name: &str) -> PathBuf {
         // 每个测试使用独立文件名，避免并行测试共享数据库；文件位于系统临时目录，
@@ -1125,5 +1127,240 @@ mod tests {
                 .is_err()
         );
         remove_if_exists(&path);
+    }
+
+    #[test]
+    fn events_since_filters_by_sequence_and_reports_latest() {
+        let path = test_path("events-since");
+        remove_if_exists(&path);
+        let mut store = Store::open_readwrite(&path).unwrap();
+        let session_id = SessionId::new("session-events");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: None,
+                model: None,
+                title: None,
+                started_at: "2026-09-02T00:00:00Z".into(),
+            })
+            .unwrap();
+        store
+            .create_generation(&NewGeneration {
+                session_id: session_id.clone(),
+                generation: 0,
+                system_hash: "system".into(),
+                tool_schema_hash: "tools".into(),
+                model_id: "mock".into(),
+                profile_revision: "default".into(),
+                created_at: "2026-09-02T00:00:00Z".into(),
+            })
+            .unwrap();
+        let turn_id = TurnId::new();
+        store
+            .begin_turn(
+                &StartTurn {
+                    turn_id,
+                    session_id: session_id.clone(),
+                    generation: 0,
+                    started_at: "2026-09-02T00:00:01Z".into(),
+                },
+                &NewMessage::new(session_id.clone(), "user", "事件", "2026-09-02T00:00:01Z"),
+            )
+            .unwrap();
+        let events = store
+            .events_since(&EventQuery {
+                session_id: session_id.clone(),
+                after_sequence: EventSequence::default(),
+                limit: 1,
+            })
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "turn.started");
+        let latest = store.latest_event_sequence(&session_id).unwrap().unwrap();
+        assert_eq!(latest.get(), 2);
+        assert!(
+            store
+                .events_since(&EventQuery {
+                    session_id,
+                    after_sequence: latest,
+                    limit: 10
+                })
+                .unwrap()
+                .is_empty()
+        );
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn turn_persistence_survives_reopen_and_keeps_fts_and_replay_consistent() {
+        let path = test_path("turn-e2e");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("session-e2e");
+        let turn_id = TurnId::new();
+        {
+            let mut store = Store::open_readwrite(&path).unwrap();
+            store
+                .create_session(&NewSession {
+                    id: session_id.clone(),
+                    source: Some("tui".into()),
+                    model: Some("mock".into()),
+                    title: None,
+                    started_at: "2026-09-02T00:00:00Z".into(),
+                })
+                .unwrap();
+            store
+                .create_generation(&NewGeneration {
+                    session_id: session_id.clone(),
+                    generation: 0,
+                    system_hash: "system".into(),
+                    tool_schema_hash: "tools".into(),
+                    model_id: "mock".into(),
+                    profile_revision: "default".into(),
+                    created_at: "2026-09-02T00:00:00Z".into(),
+                })
+                .unwrap();
+            store
+                .begin_turn(
+                    &StartTurn {
+                        turn_id,
+                        session_id: session_id.clone(),
+                        generation: 0,
+                        started_at: "2026-09-02T00:00:01Z".into(),
+                    },
+                    &NewMessage::new(
+                        session_id.clone(),
+                        "user",
+                        "查询 Rust 文件",
+                        "2026-09-02T00:00:01Z",
+                    ),
+                )
+                .unwrap();
+            store
+                .commit_tool_result(
+                    &turn_id,
+                    &NewMessage {
+                        session_id: session_id.clone(),
+                        role: "tool".into(),
+                        content: "src/main.rs".into(),
+                        timestamp: "2026-09-02T00:00:02Z".into(),
+                        tool_call_id: Some("call-e2e".into()),
+                        tool_name: Some("terminal".into()),
+                        tool_calls: None,
+                        reasoning: None,
+                        finish_reason: None,
+                        display_kind: None,
+                        display_metadata: None,
+                    },
+                    "2026-09-02T00:00:02Z",
+                )
+                .unwrap();
+            store
+                .complete_turn(
+                    &turn_id,
+                    &NewMessage::new(
+                        session_id.clone(),
+                        "assistant",
+                        "找到 Rust 文件",
+                        "2026-09-02T00:00:03Z",
+                    ),
+                    "2026-09-02T00:00:03Z",
+                )
+                .unwrap();
+        }
+        let store = Store::open_readonly(&path).unwrap();
+        let messages = store
+            .get_messages_for_display(&session_id, &MessageQuery::default())
+            .unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(
+            store
+                .search_messages(&MessageSearchQuery {
+                    query: "Rust".into(),
+                    session_id: Some(session_id.clone()),
+                    include_inactive: false,
+                    limit: 20
+                })
+                .unwrap()
+                .len(),
+            2
+        );
+        let events = store
+            .events_since(&EventQuery {
+                session_id: session_id.clone(),
+                after_sequence: EventSequence::default(),
+                limit: 20,
+            })
+            .unwrap();
+        assert_eq!(events.len(), 6);
+        assert!(
+            events
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        assert_eq!(
+            store
+                .latest_event_sequence(&session_id)
+                .unwrap()
+                .unwrap()
+                .get(),
+            6
+        );
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn event_queries_are_isolated_between_profile_databases() {
+        let path_a = test_path("profile-a");
+        let path_b = test_path("profile-b");
+        remove_if_exists(&path_a);
+        remove_if_exists(&path_b);
+        for (path, id) in [(&path_a, "session-a"), (&path_b, "session-b")] {
+            let mut store = Store::open_readwrite(path).unwrap();
+            let session_id = SessionId::new(id);
+            store
+                .create_session(&NewSession {
+                    id: session_id.clone(),
+                    source: None,
+                    model: None,
+                    title: None,
+                    started_at: "2026-09-02T00:00:00Z".into(),
+                })
+                .unwrap();
+            store
+                .create_generation(&NewGeneration {
+                    session_id: session_id.clone(),
+                    generation: 0,
+                    system_hash: "system".into(),
+                    tool_schema_hash: "tools".into(),
+                    model_id: "mock".into(),
+                    profile_revision: "default".into(),
+                    created_at: "2026-09-02T00:00:00Z".into(),
+                })
+                .unwrap();
+            let turn_id = TurnId::new();
+            store
+                .begin_turn(
+                    &StartTurn {
+                        turn_id,
+                        session_id: session_id.clone(),
+                        generation: 0,
+                        started_at: "2026-09-02T00:00:01Z".into(),
+                    },
+                    &NewMessage::new(session_id, "user", id, "2026-09-02T00:00:01Z"),
+                )
+                .unwrap();
+        }
+        let store_b = Store::open_readonly(&path_b).unwrap();
+        assert!(
+            store_b
+                .events_since(&EventQuery {
+                    session_id: SessionId::new("session-a"),
+                    after_sequence: EventSequence::default(),
+                    limit: 10
+                })
+                .is_err()
+        );
+        remove_if_exists(&path_a);
+        remove_if_exists(&path_b);
     }
 }

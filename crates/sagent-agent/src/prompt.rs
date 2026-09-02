@@ -126,6 +126,16 @@ impl PromptSnapshot {
     pub fn is_system_prompt_compatible(&self, system: &SystemPromptParts) -> bool {
         self.system_prompt_hash == hash_text(&system.render())
     }
+
+    /// 返回字段顺序稳定的 JSON 表示，供缓存和事件校验使用。
+    pub fn canonical_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// 对完整快照（包括消息和工具调用）计算 SHA-256。
+    pub fn hash(&self) -> Result<String, serde_json::Error> {
+        Ok(hash_text(&self.canonical_json()?))
+    }
 }
 
 fn hash_text(text: &str) -> String {
@@ -191,6 +201,33 @@ mod tests {
         let mut changed = system();
         changed.environment = "平台：CLI。".into();
         assert!(!snapshot.is_system_prompt_compatible(&changed));
+    }
+
+    #[test]
+    fn snapshot_hash_changes_when_tool_calls_change() {
+        let mut first_messages = messages();
+        let tool = sagent_types::ToolCallId::new();
+        first_messages[2].tool_calls = vec![tool];
+        let first = PromptSnapshot::new(
+            SessionId::new("s"),
+            TurnId::new(),
+            &system(),
+            first_messages,
+        )
+        .unwrap();
+
+        let mut second_messages = messages();
+        second_messages[2].tool_calls = vec![sagent_types::ToolCallId::new()];
+        let second = PromptSnapshot::new(
+            SessionId::new("s"),
+            TurnId::new(),
+            &system(),
+            second_messages,
+        )
+        .unwrap();
+
+        assert_ne!(first.hash().unwrap(), second.hash().unwrap());
+        assert!(first.canonical_json().unwrap().contains("tool_calls"));
     }
 
     #[test]

@@ -16,4 +16,4 @@ pub use event::TurnEvent;
 pub use prompt::{PromptError, PromptMessage, PromptRole, PromptSnapshot, SystemPromptParts};
 pub use state::{TurnFailure, TurnState};
 pub use transcript::{Transcript, TranscriptError};
-pub use transition::{TransitionError, apply_command};
+pub use transition::{TransitionError, apply_command, apply_event};

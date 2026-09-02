@@ -5,6 +5,6 @@ pub mod message;
 pub mod session;
 
 pub use capabilities::{ClientCapabilities, ClientSurface};
-pub use ids::{ApprovalId, ClientId, MessageId, SessionId, TurnId};
+pub use ids::{ApprovalId, ClientId, MessageId, SessionId, ToolCallId, TurnId};
 pub use message::{SearchHit, StoredMessage};
 pub use session::{SessionDetail, SessionSummary};

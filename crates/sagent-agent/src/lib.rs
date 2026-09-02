@@ -4,4 +4,10 @@
 //! SQLite、HTTP、Tokio 或终端 UI。后续 Runtime、Provider 和 TUI 都应通过这些类型
 //! 协作，而不是各自复制会话状态判断。
 
-// 4.1 后续步骤将在此导出 command、event、prompt、state、transition 和 transcript 模块。
+pub mod command;
+pub mod event;
+pub mod state;
+
+pub use command::{ApprovalDecision, CommandError, RequestId, SessionCommand, UserInput};
+pub use event::TurnEvent;
+pub use state::{TurnFailure, TurnState};

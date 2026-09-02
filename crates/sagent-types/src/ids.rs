@@ -132,9 +132,37 @@ impl Default for ClientId {
     }
 }
 
+/// 一次工具调用的标识，用于把模型发出的调用与工具结果关联起来。
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ToolCallId(Uuid);
+
+impl ToolCallId {
+    /// 生成新的工具调用标识。
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+
+    /// 从外部字符串解析工具调用标识。
+    pub fn parse(value: &str) -> Result<Self, uuid::Error> {
+        Ok(Self(Uuid::parse_str(value)?))
+    }
+
+    /// 返回内部 UUID 引用。
+    pub fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+}
+
+impl Default for ToolCallId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ApprovalId, ClientId, MessageId, SessionId, TurnId};
+    use super::{ApprovalId, ClientId, MessageId, SessionId, ToolCallId, TurnId};
 
     #[test]
     fn session_id_serializes_as_a_plain_json_string() {
@@ -165,6 +193,7 @@ mod tests {
         let turn = TurnId::new();
         let approval = ApprovalId::new();
         let client = ClientId::new();
+        let tool_call = ToolCallId::new();
 
         assert!(
             serde_json::to_value(turn)
@@ -179,6 +208,11 @@ mod tests {
         assert!(
             serde_json::to_value(client)
                 .expect("客户端 ID 应能序列化")
+                .is_string()
+        );
+        assert!(
+            serde_json::to_value(tool_call)
+                .expect("工具调用 ID 应能序列化")
                 .is_string()
         );
     }

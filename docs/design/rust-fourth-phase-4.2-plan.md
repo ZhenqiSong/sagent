@@ -531,3 +531,19 @@ cargo clippy --workspace --all-targets --offline -- -D warnings
 - [ ] workspace 全量测试和 Clippy 通过。
 
 完成 4.2 后，下一步才是 4.3：让 `sagent-runtime::SessionActor` 成为每个 session 的唯一写入者，并调用这些 repository API。
+
+## 步骤 2 执行记录
+
+执行日期：2026-09-02  
+状态：已完成
+
+已完成：
+
+- `SCHEMA_VERSION` 从 2 升至 3；
+- 新增 `session_generations`、`turns`、`daemon_events` 表及索引；
+- 保留现有 `sessions`、`messages`、FTS5 表和触发器；
+- v1 数据库可直接升级至 v3；
+- v2 数据库可升级至 v3；
+- 新增 v2→v3 migration 回归测试。
+
+验证结果：`sagent-store` 40 个测试通过，Clippy（`-D warnings`）通过。

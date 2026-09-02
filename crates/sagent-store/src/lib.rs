@@ -882,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn readwrite_store_upgrades_v1_schema_to_v2() {
+    fn readwrite_store_upgrades_v1_schema_to_v3() {
         let path = test_path("migrate-v1");
         remove_if_exists(&path);
         let connection = Connection::open(&path).expect("应能创建 v1 fixture");
@@ -898,7 +898,7 @@ mod tests {
         let store = Store::open_readwrite(&path).expect("应能升级 v1 数据库");
         assert_eq!(
             store.inspect_schema().expect("应能读取结构").schema_version,
-            Some(2)
+            Some(3)
         );
         let has_rewind_count: i64 = store
             .connection
@@ -910,6 +910,50 @@ mod tests {
             )
             .expect("应能读取升级后的列");
         assert_eq!(has_rewind_count, 1);
+        for table in ["session_generations", "turns", "daemon_events"] {
+            let exists: i64 = store
+                .connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [table],
+                    |row| row.get(0),
+                )
+                .expect("应能读取 v3 新表");
+            assert_eq!(exists, 1, "缺少 v3 表：{table}");
+        }
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn readwrite_store_upgrades_v2_schema_to_v3() {
+        let path = test_path("migrate-v2");
+        remove_if_exists(&path);
+        let connection = Connection::open(&path).expect("应能创建 v2 fixture");
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE schema_version (version INTEGER NOT NULL);
+                 INSERT INTO schema_version(version) VALUES (2);
+                 CREATE TABLE sessions (id TEXT PRIMARY KEY, rewind_count INTEGER NOT NULL DEFAULT 0);
+                 CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), role TEXT NOT NULL, content TEXT NOT NULL, timestamp TEXT NOT NULL);",
+            )
+            .expect("应能创建 v2 结构");
+        drop(connection);
+
+        let store = Store::open_readwrite(&path).expect("应能升级 v2 数据库");
+        assert_eq!(
+            store.inspect_schema().expect("应能读取结构").schema_version,
+            Some(3)
+        );
+        let table_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('session_generations', 'turns', 'daemon_events')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("应能读取 v3 表");
+        assert_eq!(table_count, 3);
         remove_if_exists(&path);
     }
 }

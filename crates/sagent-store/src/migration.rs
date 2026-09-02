@@ -6,7 +6,57 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension};
 
 /// 当前 Sagent 自有数据库结构版本。
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
+
+/// 在当前事务中将 v2 结构扩展为 v3。
+fn migrate_v2_to_v3(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
+    transaction
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS session_generations (
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                generation INTEGER NOT NULL CHECK (generation >= 0),
+                system_hash TEXT NOT NULL,
+                tool_schema_hash TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                profile_revision TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, generation)
+             );
+
+             CREATE TABLE IF NOT EXISTS turns (
+                turn_id TEXT PRIMARY KEY NOT NULL,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                generation INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'interrupted', 'failed')),
+                user_message_id INTEGER REFERENCES messages(id),
+                assistant_message_id INTEGER REFERENCES messages(id),
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                outcome_json TEXT,
+                FOREIGN KEY (session_id, generation)
+                    REFERENCES session_generations(session_id, generation)
+             );
+
+             CREATE TABLE IF NOT EXISTS daemon_events (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                turn_id TEXT REFERENCES turns(turn_id) ON DELETE SET NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_turns_session_started
+             ON turns(session_id, started_at);
+
+             CREATE INDEX IF NOT EXISTS idx_daemon_events_session_sequence
+             ON daemon_events(session_id, sequence);
+
+             UPDATE schema_version SET version = 3;",
+        )
+        .context("从 v2 升级至 v3 失败")?;
+    Ok(())
+}
 
 /// 将数据库迁移到当前版本。
 ///
@@ -32,7 +82,10 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<()> {
         Some(version) if version > SCHEMA_VERSION => {
             anyhow::bail!("数据库结构版本 {version} 高于当前程序支持的版本 {SCHEMA_VERSION}");
         }
-        Some(2) => {}
+        Some(3) => {}
+        Some(2) => {
+            migrate_v2_to_v3(&transaction)?;
+        }
         Some(1) => {
             transaction
                 .execute_batch(
@@ -41,6 +94,7 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<()> {
                      UPDATE schema_version SET version = 2;",
                 )
                 .context("从 v1 升级至 v2 失败")?;
+            migrate_v2_to_v3(&transaction)?;
         }
         Some(version) => {
             anyhow::bail!("暂不支持从数据库结构版本 {version} 自动迁移");
@@ -116,6 +170,7 @@ pub(crate) fn migrate(connection: &mut Connection) -> Result<()> {
                      INSERT INTO schema_version(version) VALUES (2);",
                 )
                 .context("创建 v1 数据库结构失败")?;
+            migrate_v2_to_v3(&transaction)?;
         }
     }
     transaction.commit().context("提交数据库迁移事务失败")

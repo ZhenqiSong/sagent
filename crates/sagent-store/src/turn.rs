@@ -6,7 +6,10 @@ use sagent_types::{MessageId, SessionId, TurnId};
 
 use crate::{
     Store,
-    event::{EVENT_MESSAGE_COMMITTED, EVENT_TURN_STARTED, NewDaemonEvent, insert_event},
+    event::{
+        EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TURN_STARTED, NewDaemonEvent,
+        insert_event,
+    },
     write::{NewMessage, insert_message},
 };
 
@@ -142,6 +145,86 @@ impl Store {
             },
         )?;
         transaction.commit().context("提交 Turn 创建事务失败")?;
+        Ok(message_id)
+    }
+
+    /// 原子提交工具最终结果。Turn 仍保持 running，后续仍可继续请求模型。
+    pub fn commit_tool_result(
+        &mut self,
+        turn_id: &TurnId,
+        message: &NewMessage,
+        completed_at: &str,
+    ) -> Result<MessageId> {
+        self.ensure_writable()?;
+        if message.role != "tool" {
+            bail!("工具结果消息的 role 必须是 tool");
+        }
+        let tool_call_id = message
+            .tool_call_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("工具结果必须包含 tool_call_id"))?;
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始工具结果事务失败")?;
+        let turn_row: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT session_id, status FROM turns WHERE turn_id = ?1",
+                [turn_id.as_uuid().to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .context("查询工具结果所属 Turn 失败")?;
+        let (session_id, status) = turn_row.ok_or_else(|| anyhow::anyhow!("Turn 不存在"))?;
+        if status != "running" {
+            bail!("Turn 状态为 {status}，不能追加工具结果");
+        }
+        if message.session_id.as_str() != session_id {
+            bail!("工具结果消息与 Turn 不属于同一会话");
+        }
+        let duplicate: Option<i64> = transaction
+            .query_row(
+                "SELECT 1 FROM messages WHERE session_id = ?1 AND role = 'tool' AND tool_call_id = ?2 LIMIT 1",
+                params![session_id, tool_call_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("检查重复工具结果失败")?;
+        if duplicate.is_some() {
+            bail!("工具结果已经提交过：{tool_call_id}");
+        }
+        let message_id = insert_message(&transaction, message)?;
+        let changed = transaction
+            .execute(
+                "UPDATE sessions SET message_count = message_count + 1, last_activity_at = ?1, updated_at = ?1 WHERE id = ?2",
+                params![message.timestamp, session_id],
+            )
+            .context("更新工具结果消息计数失败")?;
+        if changed != 1 {
+            bail!("工具结果所属会话不存在：{session_id}");
+        }
+        insert_event(
+            &transaction,
+            &NewDaemonEvent {
+                session_id: message.session_id.clone(),
+                turn_id: Some(*turn_id),
+                event_type: EVENT_TOOL_COMPLETED.to_owned(),
+                payload: serde_json::json!({"tool_call_id": tool_call_id, "message_id": message_id, "success": true}),
+                created_at: completed_at.to_owned(),
+            },
+        )?;
+        insert_event(
+            &transaction,
+            &NewDaemonEvent {
+                session_id: message.session_id.clone(),
+                turn_id: Some(*turn_id),
+                event_type: EVENT_MESSAGE_COMMITTED.to_owned(),
+                payload: serde_json::json!({"message_id": message_id, "role": "tool", "tool_call_id": tool_call_id}),
+                created_at: completed_at.to_owned(),
+            },
+        )?;
+        transaction.commit().context("提交工具结果事务失败")?;
         Ok(message_id)
     }
 }

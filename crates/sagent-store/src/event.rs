@@ -6,6 +6,7 @@ use sagent_types::{EventSequence, SessionId, TurnId};
 
 pub const EVENT_TURN_STARTED: &str = "turn.started";
 pub const EVENT_MESSAGE_COMMITTED: &str = "message.committed";
+pub const EVENT_TOOL_COMPLETED: &str = "tool.completed";
 
 #[derive(Clone, Debug)]
 pub struct NewDaemonEvent {

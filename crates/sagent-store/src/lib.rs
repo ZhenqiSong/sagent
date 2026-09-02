@@ -17,7 +17,9 @@ pub mod session;
 pub mod turn;
 pub mod write;
 
-pub use event::{EVENT_MESSAGE_COMMITTED, EVENT_TURN_STARTED, NewDaemonEvent};
+pub use event::{
+    EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TURN_STARTED, NewDaemonEvent,
+};
 pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
@@ -1030,6 +1032,98 @@ mod tests {
             )
             .expect("应能读取 Turn 事件");
         assert_eq!(event_count, 2);
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn commit_tool_result_persists_message_and_events_atomically() {
+        let path = test_path("tool-result");
+        remove_if_exists(&path);
+        let mut store = Store::open_readwrite(&path).expect("应能创建 Store");
+        let session_id = SessionId::new("session-tool");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: Some("tui".into()),
+                model: Some("mock".into()),
+                title: None,
+                started_at: "2026-09-02T00:00:00Z".into(),
+            })
+            .expect("应能创建会话");
+        store
+            .create_generation(&NewGeneration {
+                session_id: session_id.clone(),
+                generation: 0,
+                system_hash: "sha256:system".into(),
+                tool_schema_hash: "sha256:tools".into(),
+                model_id: "mock".into(),
+                profile_revision: "default".into(),
+                created_at: "2026-09-02T00:00:00Z".into(),
+            })
+            .expect("应能创建 generation");
+        let turn_id = TurnId::new();
+        store
+            .begin_turn(
+                &StartTurn {
+                    turn_id,
+                    session_id: session_id.clone(),
+                    generation: 0,
+                    started_at: "2026-09-02T00:00:01Z".into(),
+                },
+                &NewMessage::new(
+                    session_id.clone(),
+                    "user",
+                    "执行工具",
+                    "2026-09-02T00:00:01Z",
+                ),
+            )
+            .expect("应能开始 Turn");
+        let tool_id = "call-001";
+        let result_id = store
+            .commit_tool_result(
+                &turn_id,
+                &NewMessage {
+                    session_id: session_id.clone(),
+                    role: "tool".into(),
+                    content: "结果".into(),
+                    timestamp: "2026-09-02T00:00:02Z".into(),
+                    tool_call_id: Some(tool_id.into()),
+                    tool_name: Some("terminal".into()),
+                    tool_calls: None,
+                    reasoning: None,
+                    finish_reason: Some("tool_completed".into()),
+                    display_kind: None,
+                    display_metadata: None,
+                },
+                "2026-09-02T00:00:02Z",
+            )
+            .expect("应能提交工具结果");
+        assert_eq!(result_id.get(), 2);
+        let count: i64 = store
+            .connection
+            .query_row(
+                "SELECT message_count FROM sessions WHERE id = ?1",
+                [session_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+        let events: i64 = store.connection.query_row("SELECT COUNT(*) FROM daemon_events WHERE turn_id = ?1 AND event_type IN ('tool.completed', 'message.committed')", [turn_id.as_uuid().to_string()], |row| row.get(0)).unwrap();
+        assert_eq!(events, 3);
+        assert!(
+            store
+                .commit_tool_result(
+                    &turn_id,
+                    &NewMessage::new(
+                        session_id.clone(),
+                        "assistant",
+                        "重复",
+                        "2026-09-02T00:00:03Z"
+                    ),
+                    "2026-09-02T00:00:03Z"
+                )
+                .is_err()
+        );
         remove_if_exists(&path);
     }
 }

@@ -563,3 +563,19 @@ cargo clippy --workspace --all-targets --offline -- -D warnings
 - 新增 `begin_turn` 集成测试，验证消息计数、Turn 关联和事件数量。
 
 验证结果：`sagent-store` 41 个测试通过，Clippy（`-D warnings`）通过。
+
+## 步骤 4 执行记录
+
+执行日期：2026-09-02  
+状态：已完成
+
+已完成：
+
+- 新增 `Store::commit_tool_result`；
+- 仅允许 `running` Turn 写入 `role=tool` 的结果；
+- 校验 `tool_call_id`、Turn 与 Session 归属；
+- 工具消息、Session 计数、`tool.completed` 和 `message.committed` 在同一事务提交；
+- 重复工具调用结果被拒绝；
+- 新增工具结果持久化与事件回归测试。
+
+验证结果：`sagent-store` 42 个测试通过，Clippy（`-D warnings`）通过。

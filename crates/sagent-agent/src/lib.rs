@@ -7,7 +7,9 @@
 pub mod command;
 pub mod event;
 pub mod state;
+pub mod transition;
 
 pub use command::{ApprovalDecision, CommandError, RequestId, SessionCommand, UserInput};
 pub use event::TurnEvent;
 pub use state::{TurnFailure, TurnState};
+pub use transition::{TransitionError, apply_command};

@@ -1,6 +1,6 @@
 //! Prompt 快照与消息不变量。
 
-use sagent_types::{SessionId, TurnId};
+use sagent_types::{SessionId, ToolCallId, TurnId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -22,6 +22,8 @@ pub struct PromptMessage {
     pub content: String,
     /// tool 消息必须带有对应的调用 ID。
     pub tool_call_id: Option<String>,
+    /// assistant 消息发起的工具调用；支持一次发起多个调用。
+    pub tool_calls: Vec<ToolCallId>,
 }
 
 impl PromptMessage {
@@ -30,6 +32,7 @@ impl PromptMessage {
             role,
             content: content.into(),
             tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -38,25 +41,46 @@ impl PromptMessage {
             role: PromptRole::Tool,
             content: content.into(),
             tool_call_id: Some(tool_call_id.into()),
+            tool_calls: Vec::new(),
         }
     }
 }
 
-/// 系统提示词的稳定组成部分。
+/// Python 实现中的 stable/context/volatile 三层提示词。
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SystemPromptParts {
     pub identity: String,
     pub instructions: String,
     pub environment: String,
+    /// 跨回合稳定的身份、工具和模型指导。
+    #[serde(default)]
+    pub stable: String,
+    /// 调用方消息、项目上下文和工作区快照。
+    #[serde(default)]
+    pub context: String,
+    /// 技能、memory、用户资料等易变化内容。
+    #[serde(default)]
+    pub volatile: String,
 }
 
 impl SystemPromptParts {
     /// 按固定顺序拼接系统提示词，避免 Hash 因字段顺序变化而漂移。
     pub fn render(&self) -> String {
-        format!(
-            "{}\n{}\n{}",
-            self.identity, self.instructions, self.environment
-        )
+        let stable = if self.stable.is_empty() {
+            format!("{}\n{}", self.identity, self.instructions)
+        } else {
+            self.stable.clone()
+        };
+        let context = if self.context.is_empty() {
+            self.environment.clone()
+        } else {
+            self.context.clone()
+        };
+        [stable, context, self.volatile.clone()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
     }
 }
 
@@ -120,7 +144,8 @@ fn validate_messages(messages: &[PromptMessage]) -> Result<(), PromptError> {
         if message.role == PromptRole::Tool && message.tool_call_id.is_none() {
             return Err(PromptError::ToolMessageMissingCallId { index });
         }
-        if index > 0 && messages[index - 1].role == message.role {
+        if index > 0 && messages[index - 1].role == message.role && message.role != PromptRole::Tool
+        {
             return Err(PromptError::ConsecutiveSameRole { index });
         }
     }
@@ -137,6 +162,7 @@ mod tests {
             identity: "你是 Sagent。".into(),
             instructions: "简洁回答。".into(),
             environment: "平台：TUI。".into(),
+            ..Default::default()
         }
     }
 

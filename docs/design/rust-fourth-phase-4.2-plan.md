@@ -547,3 +547,19 @@ cargo clippy --workspace --all-targets --offline -- -D warnings
 - 新增 v2→v3 migration 回归测试。
 
 验证结果：`sagent-store` 40 个测试通过，Clippy（`-D warnings`）通过。
+
+## 步骤 3 执行记录
+
+执行日期：2026-09-02  
+状态：已完成
+
+已完成：
+
+- 新增 `NewGeneration` 与 `Store::create_generation`；
+- 新增 `StartTurn` 与 `Store::begin_turn`；
+- `begin_turn` 在一个事务内写入 user message、running turn、`turn.started` 和 `message.committed`；
+- 校验 session、generation、Turn 唯一性及 user 消息归属；
+- 新增 `NewDaemonEvent` 和事务内 event 写入辅助函数；
+- 新增 `begin_turn` 集成测试，验证消息计数、Turn 关联和事件数量。
+
+验证结果：`sagent-store` 41 个测试通过，Clippy（`-D warnings`）通过。

@@ -9,3 +9,4 @@ rust-version.workspace = true
 sagent-types={path="../sagent-types"}
 anyhow.workspace=true
 rusqlite={version="0.32", features=["bundled"]}
+serde_json.workspace=true

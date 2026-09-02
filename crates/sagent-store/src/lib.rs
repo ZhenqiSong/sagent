@@ -8,18 +8,22 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 
+pub mod event;
 pub mod message;
 pub mod migration;
 pub mod schema;
 pub mod search;
 pub mod session;
+pub mod turn;
 pub mod write;
 
+pub use event::{EVENT_MESSAGE_COMMITTED, EVENT_TURN_STARTED, NewDaemonEvent};
 pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
 pub use session::SessionListQuery;
+pub use turn::{NewGeneration, StartTurn};
 pub use write::{
     NewMessage, NewSession, RestoreResult, RetryCheckpoint, RewindCheckpoint, RewindResult,
 };
@@ -113,10 +117,10 @@ mod tests {
     use rusqlite::Connection;
 
     use super::{
-        MessageQuery, MessageSearchQuery, NewMessage, NewSession, RestoreResult, SCHEMA_VERSION,
-        Store,
+        MessageQuery, MessageSearchQuery, NewGeneration, NewMessage, NewSession, RestoreResult,
+        SCHEMA_VERSION, StartTurn, Store,
     };
-    use sagent_types::{MessageId, SessionId};
+    use sagent_types::{MessageId, SessionId, TurnId};
 
     fn test_path(name: &str) -> PathBuf {
         // 每个测试使用独立文件名，避免并行测试共享数据库；文件位于系统临时目录，
@@ -954,6 +958,78 @@ mod tests {
             )
             .expect("应能读取 v3 表");
         assert_eq!(table_count, 3);
+        remove_if_exists(&path);
+    }
+
+    #[test]
+    fn begin_turn_atomically_persists_user_message_turn_and_events() {
+        let path = test_path("begin-turn");
+        remove_if_exists(&path);
+        let mut store = Store::open_readwrite(&path).expect("应能创建 Store");
+        let session_id = SessionId::new("session-begin");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: Some("tui".into()),
+                model: Some("mock".into()),
+                title: None,
+                started_at: "2026-09-02T00:00:00Z".into(),
+            })
+            .expect("应能创建会话");
+        store
+            .create_generation(&NewGeneration {
+                session_id: session_id.clone(),
+                generation: 0,
+                system_hash: "sha256:system".into(),
+                tool_schema_hash: "sha256:tools".into(),
+                model_id: "mock".into(),
+                profile_revision: "default".into(),
+                created_at: "2026-09-02T00:00:00Z".into(),
+            })
+            .expect("应能创建 generation");
+
+        let turn_id = TurnId::new();
+        let message_id = store
+            .begin_turn(
+                &StartTurn {
+                    turn_id,
+                    session_id: session_id.clone(),
+                    generation: 0,
+                    started_at: "2026-09-02T00:00:01Z".into(),
+                },
+                &NewMessage::new(
+                    session_id.clone(),
+                    "user",
+                    "开始执行",
+                    "2026-09-02T00:00:01Z",
+                ),
+            )
+            .expect("应能开始 Turn");
+
+        assert_eq!(message_id.get(), 1);
+        let (status, stored_message_id, count): (String, i64, i64) = store
+            .connection
+            .query_row(
+                "SELECT t.status, t.user_message_id, s.message_count
+                 FROM turns t JOIN sessions s ON s.id = t.session_id
+                 WHERE t.turn_id = ?1",
+                [turn_id.as_uuid().to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("应能读取 Turn");
+        assert_eq!(status, "running");
+        assert_eq!(stored_message_id, message_id.get());
+        assert_eq!(count, 1);
+
+        let event_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM daemon_events WHERE turn_id = ?1",
+                [turn_id.as_uuid().to_string()],
+                |row| row.get(0),
+            )
+            .expect("应能读取 Turn 事件");
+        assert_eq!(event_count, 2);
         remove_if_exists(&path);
     }
 }

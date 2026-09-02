@@ -136,7 +136,10 @@ impl NewMessage {
 }
 
 /// 在调用方已创建的事务中写入一条消息，供追加与整段替换复用。
-fn insert_message(transaction: &Transaction<'_>, message: &NewMessage) -> Result<MessageId> {
+pub(crate) fn insert_message(
+    transaction: &Transaction<'_>,
+    message: &NewMessage,
+) -> Result<MessageId> {
     transaction
         .execute(
             "INSERT INTO messages (

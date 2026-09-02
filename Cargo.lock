@@ -480,6 +480,7 @@ dependencies = [
  "anyhow",
  "rusqlite",
  "sagent-types",
+ "serde_json",
 ]
 
 [[package]]

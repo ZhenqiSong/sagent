@@ -24,6 +24,17 @@ pub struct NewGeneration {
     pub created_at: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredGeneration {
+    pub session_id: SessionId,
+    pub generation: i64,
+    pub system_hash: String,
+    pub tool_schema_hash: String,
+    pub model_id: String,
+    pub profile_revision: String,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct StartTurn {
     pub turn_id: TurnId,
@@ -33,6 +44,34 @@ pub struct StartTurn {
 }
 
 impl Store {
+    pub fn get_generation(
+        &self,
+        session_id: &SessionId,
+        generation: i64,
+    ) -> Result<Option<StoredGeneration>> {
+        self.connection
+            .query_row(
+                "SELECT session_id, generation, system_hash, tool_schema_hash,
+                        model_id, profile_revision, created_at
+                 FROM session_generations
+                 WHERE session_id = ?1 AND generation = ?2",
+                params![session_id.as_str(), generation],
+                |row| {
+                    Ok(StoredGeneration {
+                        session_id: SessionId::new(row.get::<_, String>(0)?),
+                        generation: row.get(1)?,
+                        system_hash: row.get(2)?,
+                        tool_schema_hash: row.get(3)?,
+                        model_id: row.get(4)?,
+                        profile_revision: row.get(5)?,
+                        created_at: row.get(6)?,
+                    })
+                },
+            )
+            .optional()
+            .context("读取 session generation 失败")
+    }
+
     pub fn create_generation(&mut self, generation: &NewGeneration) -> Result<()> {
         self.ensure_writable()?;
         if generation.generation < 0 {

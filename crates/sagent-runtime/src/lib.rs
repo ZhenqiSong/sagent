@@ -8,6 +8,10 @@
 //! 本 crate 当前只建立错误边界和公开 API 骨架；模型 HTTP 请求、工具执行
 //! 和 TUI 渲染将在后续阶段实现。
 
+#[allow(dead_code)]
+mod active_turn;
+#[allow(dead_code)]
+mod actor;
 mod error;
 mod event;
 #[allow(dead_code)]

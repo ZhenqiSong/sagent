@@ -409,3 +409,29 @@ Close 复用相同收尾逻辑，随后关闭 receiver；Supervisor 在收到 ac
 - cargo clippy -p sagent-runtime --all-targets --offline -- -D warnings：通过。
 
 本步骤仍未实现 SessionActor 主循环、Supervisor、真实 Provider、工具执行或 RPC/TUI 接入。
+
+## 步骤 3 执行记录
+
+执行日期：2026-09-03  
+状态：已完成
+
+已完成：
+
+- 新增 active_turn.rs，保存当前 Turn、request、generation、TurnState、CancellationToken 和 worker 句柄；
+- 新增 actor.rs，实现 SessionActor mailbox 消费循环；
+- SubmitPrompt 先检查 active，已有 Turn 时返回 Busy，且不执行任何 Store 写入；
+- 构造并校验 4.1 PromptSnapshot，使用稳定的系统提示词 hash；
+- 新增 Store::get_generation，支持读取并校验已有 generation；
+- 首次提交自动创建 generation=0，已有 generation 则校验 system_hash 和空工具 schema hash；
+- 使用 Store::begin_turn 原子写入 user message、running Turn 和 started/committed event；
+- 只有 begin_turn 成功后才设置 ActiveTurn、启动受监管 worker 并发布 PromptAccepted/UserMessagePersisted；
+- 接入 fake worker 的 WorkerEvent 输入；当前 final 持久化、interrupt 和 failure 收口留给后续步骤；
+- 添加 SessionActor submit 成功、generation 创建、事件顺序和 busy 拒绝测试。
+
+验证结果：
+
+- cargo fmt：通过；
+- cargo test -p sagent-runtime --offline：10 个测试通过，0 个失败；
+- cargo clippy -p sagent-runtime --all-targets --offline -- -D warnings：通过。
+
+本步骤没有实现 SessionSupervisor 的多会话管理；下一步将建立有界 mailbox、Actor 去重和生命周期清理。

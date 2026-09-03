@@ -1,7 +1,7 @@
 # Sagent Rust 第四阶段 4.3 计划：SessionActor、并发边界与取消
 
 作者：SongZQ  
-状态：实施计划  
+状态：已完成（步骤 0～8）  
 前置条件：4.1 已完成纯领域状态机、PromptSnapshot 和 transcript 不变量；4.2 已完成 schema v3、generation/turn/message/event 的原子 Store API，并通过 workspace 质量门禁。
 
 ## 1. 目标
@@ -325,17 +325,17 @@ Close 复用相同收尾逻辑，随后关闭 receiver；Supervisor 在收到 ac
 
 ## 9. 验收清单
 
-- [ ] 存在独立 sagent-runtime crate，且依赖方向正确；
-- [ ] 同一 Session 永远只有一个 actor，mailbox 有容量上限；
-- [ ] runtime 是唯一 Store 写入者；Handle、worker、RPC/TUI 都不能直接写 Store；
-- [ ] busy submit 被拒绝，不产生 user message、Turn 或 event；
-- [ ] accepted submit 已原子持久化 user/running Turn/started event；
-- [ ] 不同 Session 可并行，取消 token、Turn、event 不泄漏；
-- [ ] interrupt/close 取消 worker、持久化 interrupted，且没有伪造 assistant final；
-- [ ] final/failure/interrupt 竞争时恰有一个 terminal outcome；
-- [ ] actor crash/close 后没有 stale handle；
-- [ ] delta 不持久化，完成事实始终先提交后通知；
-- [ ] runtime 集成测试与 workspace fmt/test/clippy 均通过。
+- [x] 存在独立 sagent-runtime crate，且依赖方向正确；
+- [x] 同一 Session 永远只有一个 actor，mailbox 有容量上限；
+- [x] runtime 是唯一 Store 写入者；Handle、worker、RPC/TUI 都不能直接写 Store；
+- [x] busy submit 被拒绝，不产生 user message、Turn 或 event；
+- [x] accepted submit 已原子持久化 user/running Turn/started event；
+- [x] 不同 Session 可并行，取消 token、Turn、event 不泄漏；
+- [x] interrupt/close 取消 worker、持久化 interrupted，且没有伪造 assistant final；
+- [x] final/failure/interrupt 竞争时恰有一个 terminal outcome；
+- [x] actor crash/close 后没有 stale handle；
+- [x] delta 不持久化，完成事实始终先提交后通知；
+- [x] runtime 集成测试与 workspace fmt/test/clippy 均通过。
 
 ## 10. 下一步
 
@@ -435,3 +435,82 @@ Close 复用相同收尾逻辑，随后关闭 receiver；Supervisor 在收到 ac
 - cargo clippy -p sagent-runtime --all-targets --offline -- -D warnings：通过。
 
 本步骤没有实现 SessionSupervisor 的多会话管理；下一步将建立有界 mailbox、Actor 去重和生命周期清理。
+
+## 步骤 5 执行记录
+
+执行日期：2026-09-04
+状态：已完成（步骤 5 范围）
+
+已完成：
+
+- `ActiveTurn` 增加 worker 取消句柄和 `terminal` 标记；
+- Actor 将实际 worker 包装为受监管的监控任务，捕获正常退出和 `JoinError`，统一回传 `WorkerExited`；
+- `FinalText` 调用 `Store::complete_turn`，原子写入 assistant 消息、completed Turn 和持久化事件；
+- `Failed` 和 worker panic/异常退出调用 `Store::fail_turn`，不生成 assistant 消息；
+- `Cancelled` 与 `Interrupt` 调用 `Store::interrupt_turn`，不生成 assistant 空消息；
+- `Close` 在 active Turn 存在时先执行中断收口，空闲关闭保持幂等；
+- 通过 mailbox 顺序和 `terminal` 标记保证 Final/Failed/Cancelled/Interrupt 竞争时只有一个终态生效；
+- 迟到的 worker 事件在 Turn 不再 active 后被忽略；
+- 增加最终消息持久化、中断、worker 失败、worker panic 和 Final/Interrupt 竞态测试。
+
+验证结果：
+
+- `cargo fmt --all -- --check`：通过；
+- `cargo test -p sagent-runtime --offline`：23 个测试通过，0 个失败；
+- `cargo clippy -p sagent-runtime --all-targets --offline -- -D warnings`：通过；
+- `cargo test --workspace --offline`：全部通过。
+
+说明：步骤 5 仍未接入真实 Provider；worker factory 继续保持模型无关，4.4 只需将 SSE/HTTP 结果转换成 `WorkerEvent`。
+
+## 步骤 6 执行记录
+
+执行日期：2026-09-04
+状态：已完成（步骤 6 范围）
+
+已完成：
+
+- 新增 `RuntimeEventSubscription`，隐藏底层 broadcast receiver 的 lag/closed 细节；
+- `recv`/`try_recv` 在订阅者落后时返回 `SubscriberLagged { skipped }` 诊断事件；
+- Actor 停止时订阅统一返回 `SubscriptionError::ActorStopped`；
+- 保留瞬态 `ModelTextDelta` 只走广播，不写入 `daemon_events`；
+- 增加 FinalMessagePersisted 广播前的数据库可读性断言；
+- 增加 `events_since` 查询和 delta 不落库断言；
+- 增加 lag 订阅和关闭订阅测试。
+
+验证结果：
+
+- `cargo fmt --all -- --check`：通过；
+- `cargo test -p sagent-runtime --offline`：26 个测试通过，0 个失败；
+- `cargo clippy -p sagent-runtime --all-targets --offline -- -D warnings`：通过。
+
+说明：步骤 6 的持久化恢复 API 复用 sagent-store 已有 `events_since`；4.6 接入 RPC/TUI 时应在收到 `SubscriberLagged` 后按最后持久化 sequence 补读，而不是尝试恢复每个 delta。
+
+## 步骤 7 执行记录
+
+执行日期：2026-09-04
+状态：已完成
+
+新增 `crates/sagent-runtime/tests/session_actor.rs`，覆盖公开 Supervisor/Handle 边界：
+
+- 同一 Session 的 submit 串行化，第二条请求返回 Busy；
+- submit 后 interrupt，Store 中只保留 user 消息且 Turn 已中断；
+- 不同 Session 并行提交，消息和 actor 状态互不串线；
+- Close 后旧句柄返回 ActorStopped，重新 get_or_start 可创建新 actor；
+- Store 打开失败转换为 RuntimeError::Persistence，不泄露 SQLite 类型；
+- 两个 profile 数据库使用相同 SessionId 时数据仍然隔离。
+
+步骤 7 的最终消息、worker panic、Final/Interrupt 竞态由 runtime 内部 actor 测试覆盖，因为 WorkerFactory 是 4.4 Provider 注入前的内部测试边界。
+
+## 步骤 8 执行记录
+
+执行日期：2026-09-04
+状态：已完成
+
+最终门禁：
+
+- `cargo fmt --all -- --check`：通过；
+- `cargo test --workspace --offline`：全部通过，其中 runtime 单元测试 26 个、集成测试 5 个；
+- `cargo clippy --workspace --all-targets --offline -- -D warnings`：通过；
+- `git diff --check`：通过。
+
+4.3 完成边界确认：runtime 只负责 SessionActor、Store 持久化、取消、事件和生命周期；Provider、Tools、RPC 和 TUI 不在本阶段提前接入。

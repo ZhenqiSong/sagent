@@ -340,3 +340,47 @@ Close 复用相同收尾逻辑，随后关闭 receiver；Supervisor 在收到 ac
 ## 10. 下一步
 
 4.3 完成后，系统拥有正确的会话串行化、持久化与取消边界，但 fake worker 还不能实际对话。4.4 将接入 mock 和 OpenAI-compatible provider；SSE 的 delta、finish、EOF、错误和取消都只能通过本计划定义的 WorkerEvent 回到 actor。
+
+## 步骤 0 执行记录
+
+执行日期：2026-09-03  
+状态：已完成
+
+### 基线验证
+
+- cargo fmt --check：通过；
+- cargo test --workspace --offline：通过，共 137 个测试通过，0 个失败；
+- cargo clippy --workspace --all-targets --offline -- -D warnings：通过，无警告。
+
+### API 与依赖核对
+
+- 当前 sagent-store 的 SCHEMA_VERSION 为 3；
+- 已确认 sagent-runtime 目录不存在，根 workspace 尚未注册该 crate；
+- 已核对 sagent-agent 的 SessionCommand、TurnState、TurnEvent、PromptSnapshot；
+- 已核对 sagent-store 的 create_generation、begin_turn、complete_turn、interrupt_turn、fail_turn、events_since；
+- 本步骤未修改 Store schema、既有 crate 源码或 Hermes 数据库 fixture。
+
+步骤 0 的结论：当前代码库具备进入 4.3 步骤 1 的稳定基线；后续实现应新增 sagent-runtime，由 actor 调用上述 Store API，而不是修改 Store 的持久化职责。
+
+## 步骤 1 执行记录
+
+执行日期：2026-09-03  
+状态：已完成
+
+已完成：
+
+- 新增 crates/sagent-runtime/Cargo.toml，并注册到根 workspace；
+- 新增 runtime 的 lib.rs 和 error.rs；
+- 定义 RuntimeError：Busy、MailboxFull、MailboxClosed、NoActiveTurn、ActorStopped、Persistence、InvalidLifecycle、RequiresTransition、WorkerFailed；
+- 暂时只导出 SessionSupervisor、SessionHandle 和 RuntimeError 骨架，不暴露 Store、SQLite 连接或 actor 内部状态；
+- 配置 sagent-agent、sagent-store、sagent-types、serde、thiserror、tokio 和 tokio-util 的最小依赖；
+- 添加错误上下文、持久化原因和生命周期错误互异性测试。
+
+验证结果：
+
+- cargo fmt --check：通过；
+- cargo check -p sagent-runtime --offline：通过；
+- cargo test -p sagent-runtime --offline：3 个测试通过，0 个失败；
+- cargo clippy -p sagent-runtime --all-targets --offline -- -D warnings：通过。
+
+本步骤没有启动 actor、创建数据库写入逻辑，也没有接入 Provider、Tools、RPC 或 TUI。

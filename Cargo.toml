@@ -8,6 +8,7 @@ members = [
     "crates/sagent-protocol",
     "crates/sagent-rpc",
     "crates/sagent-agent",
+    "crates/sagent-runtime",
 ]
 
 [workspace.package]

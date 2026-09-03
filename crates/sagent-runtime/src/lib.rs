@@ -9,8 +9,15 @@
 //! 和 TUI 渲染将在后续阶段实现。
 
 mod error;
+mod event;
+#[allow(dead_code)]
+mod input;
+
+#[cfg(test)]
+mod test_support;
 
 pub use error::RuntimeError;
+pub use event::{RuntimeEvent, RuntimeEventKind};
 
 /// 管理多个 SessionActor 的入口。
 ///

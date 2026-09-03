@@ -384,3 +384,28 @@ Close 复用相同收尾逻辑，随后关闭 receiver；Supervisor 在收到 ac
 - cargo clippy -p sagent-runtime --all-targets --offline -- -D warnings：通过。
 
 本步骤没有启动 actor、创建数据库写入逻辑，也没有接入 Provider、Tools、RPC 或 TUI。
+
+## 步骤 2 执行记录
+
+执行日期：2026-09-03  
+状态：已完成
+
+已完成：
+
+- 新增 runtime 内部输入模块 input.rs；
+- 定义 ActorInput、CommandReply、WorkerEvent 和 WorkerFailure；
+- 新增对外 RuntimeEvent 与 RuntimeEventKind；
+- RuntimeEvent 统一携带 session_id、可选 turn_id 和 request_id；
+- 采用扁平 JSON 事件结构，事件类型使用 snake_case；
+- 新增 test-only fake worker，支持 Delta、Final、Fail 和 WaitForCancel 脚本；
+- fake worker 通过 CancellationToken 感知取消，并通过 ActorInput 回传 Cancelled；
+- worker 不直接访问 Store，不包含 HTTP、SSE 或 provider 专属类型；
+- 增加事件 JSON round-trip、事件类型名称、worker 顺序、失败和取消测试。
+
+验证结果：
+
+- cargo fmt：通过；
+- cargo test -p sagent-runtime --offline：8 个测试通过，0 个失败；
+- cargo clippy -p sagent-runtime --all-targets --offline -- -D warnings：通过。
+
+本步骤仍未实现 SessionActor 主循环、Supervisor、真实 Provider、工具执行或 RPC/TUI 接入。

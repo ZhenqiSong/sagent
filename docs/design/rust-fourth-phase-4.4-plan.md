@@ -497,3 +497,32 @@ Provider-neutral 契约已经明确，可以进入步骤 1。步骤 1 应只创�
 - Runtime/SessionActor 注入。
 
 步骤 1 的结论：Provider 契约和错误边界已经落地，下一步进入步骤 2，实现本地 Mock Provider 与 Mock SSE fixture，先在无真实网络条件下验证事件顺序、半包 JSON、EOF、429、5xx 和取消。
+
+## 14. 步骤 2 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 14.1 已完成内容
+
+- 新增 `src/mock.rs`，实现可脚本化的 `MockProvider`；
+- 支持 `Delta`、`ToolCallDelta`、`Usage`、`Delay`、`WaitForCancel`、`Finish` 和 `Fail` 动作；
+- MockProvider 按脚本顺序发送 `ProviderEvent`，没有 finish 时返回 `IncompleteStream`；
+- Delay 和 WaitForCancel 都响应 `CancellationToken`，取消后不发送 Finished；
+- 新增最小原生 Tokio TCP `MockSseServer`，只服务一个本地连接；
+- 支持 `text/event-stream` 正常响应、任意字节 chunk、发送前延迟和 JSON 错误状态；
+- 新增正常文本、usage、EOF、429 和 503 fixture；
+- 新增 `tests/mock_provider.rs`，覆盖正常事件顺序、usage、取消、EOF、网络 chunk 边界和 HTTP 错误响应；
+- 保持 Provider 不依赖 Store/Runtime，不执行 SQL，不发布 RuntimeEvent。
+
+### 14.2 验证结果
+
+- `cargo fmt --all -- --check`：通过；
+- `cargo test -p sagent-provider`：通过，单元测试 6 个、集成测试 6 个，全部通过；
+- `cargo clippy -p sagent-provider --all-targets -- -D warnings`：通过；
+- `cargo test --workspace --quiet`：通过，所有 workspace 测试通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过。
+
+### 14.3 步骤 2 结论
+
+Provider 的确定性测试边界已经建立。下一步进入步骤 3，实现独立的 SSE framing 和 JSON parser，将正常响应、半包 JSON、`[DONE]`、EOF 和错误状态转换为 `ProviderEvent`/`ProviderError`；步骤 3 仍不接入真实 endpoint。

@@ -8,6 +8,9 @@ mod error;
 mod provider;
 mod types;
 
+/// 可复用的测试 Provider 和本地 SSE Server；不访问真实模型服务。
+pub mod mock;
+
 pub use error::ProviderError;
 pub use provider::{ModelProvider, ProviderEventSink};
 pub use types::{

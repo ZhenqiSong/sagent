@@ -1,0 +1,5 @@
+data: {"id":"mock-3","choices":[{"delta":{"content":"完成"}}]}
+
+data: {"id":"mock-3","choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}
+
+data: [DONE]

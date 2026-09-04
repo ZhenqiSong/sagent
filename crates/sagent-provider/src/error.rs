@@ -7,7 +7,7 @@ use thiserror::Error;
 /// 错误不携带 API key、Authorization header、完整 prompt 或完整响应体，避免敏感信息
 /// 进入日志、事件和 RPC 错误响应。Runtime 会把这些错误转换成 `WorkerEvent::Failed`，
 /// 取消类错误则转换成 `WorkerEvent::Cancelled`。
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ProviderError {
     /// 当前 Profile 的 Provider 配置无效或不完整。
     #[error("provider 配置错误：{0}")]

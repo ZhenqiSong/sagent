@@ -458,3 +458,42 @@ Provider Cancelled  → WorkerEvent::Cancelled
 ### 12.4 步骤 0 结论
 
 Provider-neutral 契约已经明确，可以进入步骤 1。步骤 1 应只创建 `sagent-provider` crate，定义 trait、DTO 和错误类型；暂不实现真实 HTTP、SSE 或 Actor 接入。依赖缓存恢复后，先补跑本记录中的 workspace 测试和 clippy，再提交步骤 1。
+
+## 13. 步骤 1 执行记录
+
+执行日期：2026-09-04  
+状态：已完成
+
+### 13.1 已完成内容
+
+- 新增 `crates/sagent-provider/Cargo.toml` 并加入 workspace；
+- 新增 `src/types.rs`，定义 `ProviderRequest`、`ProviderMessage`、`ProviderRole`、`ProviderEvent`、`ProviderFinish`、`StopReason` 和 `TokenUsage`；
+- 新增 `src/provider.rs`，定义异步 `ModelProvider` 与 `ProviderEventSink` trait；
+- 新增 `src/error.rs`，定义 Configuration、Authentication、RateLimited、RemoteServer、Transport、Protocol、IncompleteStream、Cancelled 和 EventSinkClosed 错误分类；
+- `ProviderRequest` 使用 `SessionId`/`TurnId` 和字符串 `request_id`，不依赖 Agent 命令模块；
+- API key、Authorization header 和完整 provider 响应不属于任何公开 DTO；
+- Provider crate 不依赖 `sagent-store` 或 `sagent-runtime`，不包含 HTTP、SSE 和数据库代码；
+- 增加 JSON round-trip、usage/stop reason 保留、事件 tag 稳定性、异步 trait object 调用和错误敏感字段测试。
+
+### 13.2 验证结果
+
+- `cargo metadata --no-deps --format-version 1`：通过，workspace 已识别 `sagent-provider`；
+- `cargo fmt --all -- --check`：通过；
+- `cargo test -p sagent-provider --offline`：首次未进入编译阶段，原因是离线 Cargo 索引缺少 `anyhow`；
+- `cargo test -p sagent-provider`：通过，6 个测试通过，0 个失败；
+- `cargo clippy -p sagent-provider --all-targets -- -D warnings`：通过；
+- `cargo test --workspace --quiet`：通过，所有 workspace 单元测试和集成测试通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- 在线编译补齐依赖后，Provider crate 的编译、单元测试和 clippy 均已验证。
+
+### 13.3 步骤 1 边界
+
+本步骤没有实现：
+
+- Mock SSE Server；
+- SSE framing/JSON parser；
+- OpenAI-compatible HTTP adapter；
+- Profile credential resolver；
+- Runtime/SessionActor 注入。
+
+步骤 1 的结论：Provider 契约和错误边界已经落地，下一步进入步骤 2，实现本地 Mock Provider 与 Mock SSE fixture，先在无真实网络条件下验证事件顺序、半包 JSON、EOF、429、5xx 和取消。

@@ -514,3 +514,7 @@ Close 复用相同收尾逻辑，随后关闭 receiver；Supervisor 在收到 ac
 - `git diff --check`：通过。
 
 4.3 完成边界确认：runtime 只负责 SessionActor、Store 持久化、取消、事件和生命周期；Provider、Tools、RPC 和 TUI 不在本阶段提前接入。
+
+补充：步骤 4 的实现记录
+
+步骤 4 已由 `supervisor.rs` 落地并由 runtime 与集成测试覆盖：固定容量 32 的 mailbox、同 Session actor 去重、不同 Session 并行、旧 Handle 的 ActorStopped，以及 remove/close 生命周期清理均已验证。步骤 4 的代码变更与步骤 5 一并提交，未引入额外 Store 写入入口。

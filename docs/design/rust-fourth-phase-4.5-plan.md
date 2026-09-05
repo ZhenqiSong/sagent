@@ -815,3 +815,39 @@ crates/sagent-protocol/
 ### 14.3 步骤 1 结论
 
 工具契约和稳定注册表已经完成。后续 `read_file`、terminal、approval 和 tool loop 可以依赖同一套定义、权限和 schema hash，不需要各自重复定义工具元数据。下一步进入步骤 2：实现 `read_file` 的 workspace root、路径安全、UTF-8/二进制识别、截断和取消。
+
+## 15. 步骤 2 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 15.1 已完成内容
+
+- 新增 `WorkspaceRoot`，初始化时 canonicalize root，并拒绝无效 root；
+- 相对路径解析到显式 workspace root，绝对路径必须仍位于 root 内；
+- 在文件系统 canonicalize 前进行 lexical containment 检查，拒绝 `..` 越界；
+- 在 canonicalize 后再次检查 containment，拒绝逃逸到 root 外的符号链接；
+- 拒绝不存在路径、目录和其他非普通文件；
+- 新增 `ReadFileRequest`，保持 1-based `offset` 和 `limit` 分页语义；
+- 新增 `ReadFileLimits`，限制文件总字节数、输出字符数、最大行数和单行长度；
+- 新增 `ReadFileService`，使用 Tokio 文件读取和 `CancellationToken` 分块取消；
+- 支持 UTF-8、CJK 和 Emoji，不通过 shell 读取文件；
+- 根据扩展名、magic bytes、NUL byte 和 UTF-8 解码结果拒绝二进制文件；
+- 文件超限返回 `file_too_large`，二进制返回 `binary_file`，取消返回 `cancelled`；
+- 输出超限时尽量在行边界截断，并保留 `truncated=true` 和稳定截断标记；
+- 未访问 Store、RuntimeEvent、Provider、RPC 或 TUI。
+
+### 15.2 测试与验证
+
+- `WorkspaceRoot` root 内文件、空路径、`..` 越界、目录和不存在路径测试通过；
+- UTF-8、中文、Emoji、1-based 分页测试通过；
+- 二进制文件、文件大小上限、输出截断和预取消测试通过；
+- Unix 下额外覆盖了 symlink 逃逸拒绝；Windows 使用同一 canonical containment 逻辑；
+- `cargo test -p sagent-tools`：通过，21 个测试全部通过（Windows 跳过 Unix symlink 测试）；
+- `cargo test --workspace --quiet`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：通过。
+
+### 15.3 步骤 2 结论
+
+`read_file` 的安全读取边界已经完成，后续 terminal 可以复用 `WorkspaceRoot`、`ReadFileLimits` 和 `ToolResult` 的有界输出约定。下一步进入步骤 3：实现 terminal process supervision，包括 cwd 校验、timeout、stdout/stderr 限制、进程树取消和清理。

@@ -1,6 +1,7 @@
 //! Runtime 对外发布的事件。
 
 use sagent_agent::RequestId;
+use sagent_provider::TokenUsage;
 use sagent_types::{MessageId, SessionId, TurnId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -94,6 +95,10 @@ pub enum RuntimeEventKind {
     /// 模型流式输出片段；不写入 daemon_events。
     ModelTextDelta {
         text: String,
+    },
+    /// Provider token 统计；不写入 assistant 消息正文。
+    ModelUsage {
+        usage: TokenUsage,
     },
     /// assistant 最终消息已经持久化。
     FinalMessagePersisted {

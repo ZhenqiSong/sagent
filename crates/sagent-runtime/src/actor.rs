@@ -6,6 +6,7 @@ use sagent_agent::{
     PromptMessage, PromptRole, PromptSnapshot, RequestId, SessionCommand, SystemPromptParts,
     TurnState, UserInput,
 };
+use sagent_provider::ModelProvider;
 use sagent_store::{NewGeneration, NewMessage, StartTurn, Store};
 use sagent_types::{SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc};
@@ -17,6 +18,7 @@ use crate::{
     active_turn::ActiveTurn,
     event::{RuntimeEvent, RuntimeEventKind},
     input::{ActorInput, CommandReply, WorkerEvent},
+    provider_worker::spawn_provider_worker,
 };
 
 const DEFAULT_MODEL_ID: &str = "unconfigured";
@@ -38,6 +40,9 @@ pub(crate) struct SessionActor {
     pub(crate) active: Option<ActiveTurn>,
     pub(crate) generation: i64,
     pub(crate) worker_factory: Option<WorkerFactory>,
+    pub(crate) provider: Option<Arc<dyn ModelProvider>>,
+    pub(crate) model: String,
+    pub(crate) profile_revision: String,
     pub(crate) clock: fn() -> String,
 }
 
@@ -59,6 +64,9 @@ impl SessionActor {
             active: None,
             generation: 0,
             worker_factory: None,
+            provider: None,
+            model: DEFAULT_MODEL_ID.to_owned(),
+            profile_revision: DEFAULT_PROFILE_REVISION.to_owned(),
             clock: utc_now,
         }
     }
@@ -71,6 +79,19 @@ impl SessionActor {
     ) -> Self {
         self.worker_factory = Some(worker_factory);
         self.clock = clock;
+        self
+    }
+
+    /// 注入真实 Provider；Provider worker 仍由 Actor 监管，不能直接写 Store。
+    pub(crate) fn with_provider(
+        mut self,
+        provider: Arc<dyn ModelProvider>,
+        model: impl Into<String>,
+        profile_revision: impl Into<String>,
+    ) -> Self {
+        self.provider = Some(provider);
+        self.model = model.into();
+        self.profile_revision = profile_revision.into();
         self
     }
 
@@ -176,10 +197,20 @@ impl SessionActor {
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
 
         let cancellation = CancellationToken::new();
-        let worker = self
-            .worker_factory
-            .as_ref()
-            .map(|factory| factory(self.command_tx.clone(), turn_id, cancellation.child_token()));
+        let worker = if let Some(provider) = self.provider.clone() {
+            Some(spawn_provider_worker(
+                provider,
+                snapshot,
+                self.model.clone(),
+                request_id,
+                self.command_tx.clone(),
+                cancellation.child_token(),
+            ))
+        } else {
+            self.worker_factory.as_ref().map(|factory| {
+                factory(self.command_tx.clone(), turn_id, cancellation.child_token())
+            })
+        };
         let worker_abort = worker.as_ref().map(JoinHandle::abort_handle);
         let worker = worker.map(|worker| {
             let sender = self.command_tx.clone();
@@ -240,8 +271,8 @@ impl SessionActor {
                     generation: self.generation,
                     system_hash: system_hash.to_owned(),
                     tool_schema_hash: EMPTY_TOOL_SCHEMA_HASH.to_owned(),
-                    model_id: DEFAULT_MODEL_ID.to_owned(),
-                    profile_revision: DEFAULT_PROFILE_REVISION.to_owned(),
+                    model_id: self.model.clone(),
+                    profile_revision: self.profile_revision.clone(),
                     created_at: (self.clock)(),
                 })
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
@@ -258,6 +289,16 @@ impl SessionActor {
                         turn_id: Some(turn_id),
                         request_id: self.active.as_ref().map(|turn| turn.request_id),
                         kind: RuntimeEventKind::ModelTextDelta { text },
+                    });
+                }
+            }
+            WorkerEvent::Usage { turn_id, usage } => {
+                if self.is_active_turn(turn_id) && !self.is_cancelled(turn_id) {
+                    self.publish(RuntimeEvent {
+                        session_id: self.session_id.clone(),
+                        turn_id: Some(turn_id),
+                        request_id: self.active.as_ref().map(|turn| turn.request_id),
+                        kind: RuntimeEventKind::ModelUsage { usage },
                     });
                 }
             }

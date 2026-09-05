@@ -1050,7 +1050,11 @@ dependencies = [
 name = "sagent-runtime"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "sagent-agent",
+ "sagent-config",
+ "sagent-provider",
  "sagent-store",
  "sagent-types",
  "serde",

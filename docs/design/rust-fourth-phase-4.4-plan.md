@@ -618,3 +618,155 @@ OpenAI-compatible HTTP/SSE adapter 已完成，Provider crate 现在可以在不
 ### 17.3 步骤 5 结论
 
 Profile 配置和凭据已经可以安全解析为 OpenAI-compatible Provider，且 default/profile 配置隔离。下一步进入步骤 6：把 `ResolvedProvider` 接入 `SessionActor`，将 PromptSnapshot 转换为 ProviderRequest，并把 ProviderEvent 转换为 WorkerEvent。
+
+## 18. 步骤 6 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 18.1 已完成内容
+
+- `sagent-runtime` 新增 `sagent-provider` 和 `async-trait` 依赖；
+- 新增 `src/provider_worker.rs`，实现 Provider 到 Runtime mailbox 的桥接 worker；
+- 将 `PromptSnapshot` 转换为 `ProviderRequest`，保留 session_id、turn_id、request_id、model 和消息角色；
+- `RequestId` 增加稳定的 `Display` 字符串表示，用于 Provider request_id；
+- 新增 `RuntimeProviderSink`，累积 TextDelta，并将增量发送为 `WorkerEvent::TextDelta`；
+- Provider 正常返回后由 worker 发送 `WorkerEvent::FinalText`，由 SessionActor 调用 `complete_turn`；
+- Provider 取消映射为 `WorkerEvent::Cancelled`，其它错误映射为 `WorkerEvent::Failed`；
+- 4.5 之前暂不执行工具调用，ToolCallDelta 返回明确的“当前 runtime 尚未支持工具调用”协议错误；
+- `SessionActor` 新增 Provider、model 和 profile_revision 注入能力；
+- `ensure_generation` 使用实际 model/profile_revision，不再固定写死默认值；
+- `SessionSupervisor::with_provider` 提供真实 Provider 注入入口，同时保留既有 fake WorkerFactory 测试路径；
+- 新增 Provider Actor 集成测试，验证增量广播、最终 assistant 消息持久化和 TurnCompleted 顺序；
+- Provider worker 不访问 Store，SessionActor 仍是 Turn/Message 的唯一写入者。
+
+### 18.2 验证结果
+
+- `cargo fmt --all`：通过；
+- `cargo test -p sagent-runtime`：通过，运行时单元测试 27 个、Provider Actor 集成测试 1 个、既有集成测试 5 个；
+- `cargo test --workspace --quiet`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：通过。
+
+### 18.3 步骤 6 结论
+
+普通文本 Provider 回合已经贯通：SubmitPrompt → PromptSnapshot → ProviderRequest → ProviderEvent → WorkerEvent → SessionActor → assistant 持久化。下一步进入步骤 7：补充 Provider/Actor 失败、取消、EOF、工具调用边界和 generation 元数据的完整集成测试，并核对真实 Profile resolver 到 Supervisor 的装配路径。
+
+## 19. 步骤 7 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 19.1 已完成内容
+
+- 新增 `crates/sagent-runtime/tests/provider_actor.rs` 的 Provider/Actor 集成测试；
+- 覆盖 Mock SSE 的连续 delta、多个 delta 顺序、`[DONE]` 正常完成和 assistant 消息恢复；
+- 覆盖 usage 事件从 Provider → worker → Actor 的传递，确认 token 统计不会写入 assistant 正文；
+- 覆盖 Provider authentication failure、取消、EOF 无 finish 等失败路径，确认失败或中断不会产生空 assistant 消息；
+- 覆盖 generation 的 `model_id` 与 `profile_revision`，确认 Actor 使用注入的 Provider 配置而不是固定默认值；
+- 复用 `sagent-provider` 的 SSE parser、HTTP 状态和网络取消测试，覆盖半包 JSON、多行 SSE、`[DONE]`、401/403/429/5xx、网络断开和慢响应取消；
+- 复用 runtime 既有 fake worker 测试，覆盖 final/interrupt 竞态、worker panic/JoinError、两个 Session 并行隔离和不同 Profile 数据库隔离；
+- 新增 `RuntimeEventKind::ModelUsage` 和 `WorkerEvent::Usage`，usage 作为瞬态运行时事件发布，不进入 `messages` 或 assistant 正文；
+- 保持 provider worker 不访问 Store，所有 Turn/Message 持久化仍由 SessionActor 收口；
+- Python 对照 fixture 继续使用 `sagent-provider/tests/fixtures/provider` 中的 transcript/SSE 样例，未引入真实 API 凭据。
+
+### 19.2 验证结果
+
+- `cargo fmt --all`：通过；
+- `cargo test -p sagent-runtime`：通过，运行时单元测试 27 个、Provider Actor 集成测试 6 个、既有 Session Actor 集成测试 5 个；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `cargo test --workspace --quiet`：通过，所有 workspace 测试通过；
+- `git diff --check`：通过（仅有 Git 的 LF/CRLF 转换提示，无空白错误）。
+
+### 19.3 步骤 7 结论
+
+Provider 到 SessionActor 的离线端到端边界已经完成：正常流、usage、失败、取消、EOF、并发隔离和终态竞态都有测试保护。usage 当前是实时事件，尚未作为 generation 的持久化字段保存；若后续需要历史用量统计，应在单独的 generation 元数据扩展中设计迁移和兼容策略。
+
+下一步进入步骤 8：可选的真实 endpoint smoke test。该测试只能在显式提供测试 Profile 和凭据时启用，默认不参与离线 CI，也不能在日志或错误中输出 API key 和完整上游响应。
+
+## 20. 步骤 8 执行记录
+
+执行日期：2026-09-05
+状态：已完成（默认跳过真实网络调用）
+
+### 20.1 已完成内容
+
+- 新增 `crates/sagent-runtime/tests/live_provider_smoke.rs`；
+- 增加真实回合 smoke test：Profile resolver → OpenAI-compatible Provider → SessionSupervisor → SessionActor → SSE → assistant 持久化；
+- 增加真实取消 smoke test，验证 active Turn 被中断后不会产生 assistant 消息；
+- 针对 DeepSeek 流式响应中的 `usage: null` 增加兼容处理：普通 chunk 忽略 null，最终 usage 对象仍正常解析；
+- 为并行 ignored smoke test 增加进程内锁，避免多个测试同时写入同一个 Profile 的 `state.db`；
+- 两个测试都使用 `#[ignore]`，并额外要求 `SAGENT_RUN_LIVE_TESTS=1`；
+- 测试必须显式提供 `SAGENT_SMOKE_HOME`，避免误读开发者默认目录或修改真实用户数据库；
+- Profile 名称通过 `SAGENT_SMOKE_PROFILE` 指定，默认使用 `default`；
+- API key 继续由 Profile 的 `config.yaml` 和 `.env` 中的 `api_key_env` 解析，测试代码不读取、不打印密钥；
+- 验证文本 delta、TurnCompleted、assistant 消息、generation 的 model/profile_revision 和取消终态；
+- 错误只保留安全的分类信息，不输出 Authorization、API key 或完整上游响应。
+
+### 20.2 使用方式
+
+准备一个隔离测试 Home，例如：
+
+```text
+<smoke-home>/config.yaml
+<smoke-home>/.env
+<smoke-home>/state.db        # 首次运行时由 Store 创建
+```
+
+然后显式运行：
+
+```text
+SAGENT_RUN_LIVE_TESTS=1 \
+SAGENT_SMOKE_HOME=/absolute/path/to/smoke-home \
+SAGENT_SMOKE_PROFILE=default \
+cargo test -p sagent-runtime --test live_provider_smoke -- --ignored --nocapture
+```
+
+Windows PowerShell 等价写法：
+
+```powershell
+$env:SAGENT_RUN_LIVE_TESTS = "1"
+$env:SAGENT_SMOKE_HOME = "D:\sagent-smoke"
+$env:SAGENT_SMOKE_PROFILE = "default"
+cargo test -p sagent-runtime --test live_provider_smoke -- --ignored --nocapture
+```
+
+### 20.3 验证结果
+
+- `cargo fmt --all`：通过；
+- `cargo test -p sagent-runtime --no-fail-fast`：通过；两个 live 测试默认显示为 ignored，未访问网络；
+- 使用 DeepSeek 测试 Profile 执行 `cargo test -p sagent-runtime --test live_provider_smoke -- --ignored --nocapture`：2 个测试通过；
+- `cargo clippy -p sagent-runtime --all-targets -- -D warnings`：通过。
+
+### 20.4 步骤 8 结论
+
+真实 endpoint smoke test 的代码和安全门禁已经完成，并已使用隔离的 DeepSeek Profile 验证正常流式回合、assistant 持久化和取消路径。4.4 最后进入步骤 9：执行最终质量门禁并确认提交边界。
+
+## 21. 步骤 9 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 21.1 质量门禁结果
+
+- `cargo fmt --all -- --check`：通过；
+- `cargo test -p sagent-provider --offline`：通过；Provider 单元测试 17 个，Mock Provider/SSE 测试 6 个，OpenAI adapter 测试 4 个，SSE parser 测试 5 个；
+- `cargo test -p sagent-runtime --offline`：通过；Runtime 单元测试 27 个，Provider Actor 测试 6 个，Session Actor 测试 5 个，live smoke test 默认忽略 2 个；
+- `cargo clippy --workspace --all-targets --offline -- -D warnings`：通过；
+- `cargo test --workspace --offline --quiet`：通过；
+- `git diff --check`：通过，仅有 Git 的 LF/CRLF 转换提示，没有空白错误。
+
+### 21.2 提交边界检查
+
+- Provider parser/adapter 不依赖 Store 或 Runtime；
+- Provider worker 不直接写数据库或发布 RuntimeEvent；
+- SessionActor 是 Turn/Message 的唯一持久化收口；
+- API key 只从 Profile `.env` 读取，不进入 DTO、日志和错误响应；
+- 真实 smoke test 默认不运行，必须显式提供测试 Profile 和开关；
+- `usage` 作为瞬态事件发布，不污染 assistant 正文；
+- `D:\sagent-smoke\state.db` 位于项目外，不会进入 Git；
+- 文档已记录 DeepSeek 实测结果和 `usage: null` 兼容处理。
+
+### 21.3 4.4 阶段结论
+
+第四阶段 4.4 已完成。当前交付边界包括：Profile 配置解析、OpenAI-compatible HTTP/SSE Provider、Provider worker、SessionActor 持久化收口、失败与取消处理、usage 事件、离线集成测试和真实 DeepSeek smoke test。工具执行、approval、工具结果持久化和公开 RPC 仍留给 4.5。

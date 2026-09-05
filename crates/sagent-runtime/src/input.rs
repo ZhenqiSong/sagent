@@ -2,6 +2,7 @@
 
 use crate::RuntimeError;
 use sagent_agent::SessionCommand;
+use sagent_provider::TokenUsage;
 use sagent_types::TurnId;
 use tokio::sync::oneshot;
 
@@ -44,6 +45,8 @@ pub(crate) enum ActorInput {
 pub(crate) enum WorkerEvent {
     /// 一个流式文本片段；只用于临时 UI 展示。
     TextDelta { turn_id: TurnId, text: String },
+    /// Provider 的 token 统计；只作为瞬态事件，不拼接到消息正文。
+    Usage { turn_id: TurnId, usage: TokenUsage },
     /// 模型生成了最终文本。
     FinalText { turn_id: TurnId, text: String },
     /// worker 发生可控失败。

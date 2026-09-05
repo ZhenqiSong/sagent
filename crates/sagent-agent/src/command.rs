@@ -5,6 +5,7 @@
 
 use sagent_types::{ApprovalId, ClientCapabilities};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -41,6 +42,12 @@ impl RequestId {
     /// 生成请求标识。
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+}
+
+impl fmt::Display for RequestId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
     }
 }
 

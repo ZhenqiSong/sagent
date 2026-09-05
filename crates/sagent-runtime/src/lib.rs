@@ -15,6 +15,7 @@ mod error;
 mod event;
 #[allow(dead_code)]
 mod input;
+mod provider_worker;
 mod supervisor;
 
 #[cfg(test)]

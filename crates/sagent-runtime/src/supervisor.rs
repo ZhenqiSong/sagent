@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use sagent_agent::{RequestId, SessionCommand, UserInput};
+use sagent_provider::ModelProvider;
 use sagent_store::Store;
 use sagent_types::{SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -48,6 +49,9 @@ pub struct SessionSupervisor {
     sessions: Mutex<HashMap<SessionId, ManagedSession>>,
     store_factory: StoreFactory,
     worker_factory: Option<WorkerFactory>,
+    provider: Option<Arc<dyn ModelProvider>>,
+    model: String,
+    profile_revision: String,
 }
 
 impl SessionSupervisor {
@@ -63,6 +67,9 @@ impl SessionSupervisor {
             sessions: Mutex::new(HashMap::new()),
             store_factory: Arc::new(store_factory),
             worker_factory: None,
+            provider: None,
+            model: "unconfigured".into(),
+            profile_revision: "runtime-v1".into(),
         }
     }
 
@@ -118,6 +125,19 @@ impl SessionSupervisor {
         self
     }
 
+    /// 注入真实模型 Provider 和当前 Profile 的模型元数据。
+    pub fn with_provider(
+        mut self,
+        provider: Arc<dyn ModelProvider>,
+        model: impl Into<String>,
+        profile_revision: impl Into<String>,
+    ) -> Self {
+        self.provider = Some(provider);
+        self.model = model.into();
+        self.profile_revision = profile_revision.into();
+        self
+    }
+
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, ManagedSession>> {
         self.sessions
             .lock()
@@ -142,6 +162,14 @@ impl SessionSupervisor {
         );
         let actor = match &self.worker_factory {
             Some(factory) => actor.with_worker_factory(factory.clone(), utc_now),
+            None => actor,
+        };
+        let actor = match &self.provider {
+            Some(provider) => actor.with_provider(
+                provider.clone(),
+                self.model.clone(),
+                self.profile_revision.clone(),
+            ),
             None => actor,
         };
         let join = tokio::spawn(actor.run());

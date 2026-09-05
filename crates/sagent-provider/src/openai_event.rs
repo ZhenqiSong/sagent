@@ -111,7 +111,10 @@ pub fn parse_openai_frame(frame: &SseFrame) -> Result<Vec<ProviderEvent>, Provid
         }
     }
 
-    if let Some(usage) = value.get("usage") {
+    // OpenAI-compatible 服务通常会在普通流式 chunk 中返回 `usage: null`，
+    // 只有最终 usage chunk 才提供完整统计。DeepSeek 也遵循这一约定；
+    // null 不是协议错误，应等待后续包含实际字段的 usage 对象。
+    if let Some(usage) = value.get("usage").filter(|usage| !usage.is_null()) {
         events.push(ProviderEvent::Usage {
             usage: parse_usage(usage)?,
         });
@@ -228,5 +231,21 @@ mod tests {
         })
         .expect_err("非法 JSON 必须失败");
         assert!(matches!(error, crate::ProviderError::Protocol(_)));
+    }
+
+    #[test]
+    fn ignores_null_usage_in_streaming_chunk() {
+        let events = parse_openai_frame(&SseFrame {
+            event: None,
+            id: None,
+            data: r#"{"choices":[{"delta":{"content":"继续"}}],"usage":null}"#.into(),
+        })
+        .expect("usage=null 不是协议错误");
+        assert_eq!(
+            events,
+            vec![ProviderEvent::TextDelta {
+                text: "继续".into()
+            }]
+        );
     }
 }

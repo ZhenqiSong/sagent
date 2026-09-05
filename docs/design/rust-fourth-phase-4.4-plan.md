@@ -556,3 +556,33 @@ Provider 的确定性测试边界已经建立。下一步进入步骤 3，实现
 ### 15.3 步骤 3 结论
 
 SSE framing 和 OpenAI JSON 事件转换已经独立可测，尚未引入 HTTP client，也未接入真实 endpoint 或 SessionActor。下一步进入步骤 4，实现 OpenAI-compatible HTTP/SSE adapter，负责请求组装、HTTP 状态分类、stream 读取、取消和 parser 驱动。
+
+## 16. 步骤 4 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 16.1 已完成内容
+
+- 在 `sagent-provider` 引入 `reqwest`（JSON、stream、rustls-tls）和 `futures-util`；
+- 新增 `src/openai.rs`，实现 `OpenAiCompatibleProvider`；
+- 实现 `ProviderRequest` 到 OpenAI Chat Completions JSON 的映射：model、messages、temperature、stream 和 `stream_options.include_usage`；
+- 将 ProviderRole 映射为 OpenAI 的 system/user/assistant/tool，并保留 tool_call_id；
+- 请求使用 Bearer API key 和 `Accept: text/event-stream`，API key 不进入 DTO、响应错误或请求体；
+- 对 401/403 映射为 Authentication，429 映射为 RateLimited，5xx 映射为 RemoteServer，其它 4xx 映射为 Configuration；
+- 读取并保留安全的 `Retry-After` 秒数；不把完整上游响应体写入错误；
+- 校验成功响应必须是 `text/event-stream`，再以任意网络 chunk 驱动 `OpenAiStreamParser`；
+- 每个 ProviderEvent 都通过 `ProviderEventSink` 转发，并从 Finished/Usage 事件组装 ProviderFinish；
+- 连接建立、响应读取和 SSE 解析均响应 CancellationToken；
+- 新增 `tests/openai_adapter.rs`，覆盖正常 SSE、请求头/请求体、429、非 SSE 响应和慢响应取消；
+- OpenAI adapter 仍不依赖 Store/Runtime，不执行 SQL，不直接改变 Turn 状态。
+
+### 16.2 验证结果
+
+- `cargo fmt --all`：通过；
+- `cargo test -p sagent-provider --quiet`：通过，单元测试 16 个、Mock Provider/SSE 集成测试 6 个、OpenAI adapter 集成测试 4 个、SSE parser 集成测试 5 个；
+- `cargo clippy -p sagent-provider --all-targets -- -D warnings`：通过。
+
+### 16.3 步骤 4 结论
+
+OpenAI-compatible HTTP/SSE adapter 已完成，Provider crate 现在可以在不依赖真实模型服务的情况下验证请求构造、流式事件、HTTP 错误和取消。下一步进入步骤 5：实现 Profile credential resolver，把 profile/provider/model/base URL/API key 配置安全地解析为 `OpenAiCompatibleProvider`，并补充真实配置到 Provider 的集成测试。

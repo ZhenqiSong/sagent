@@ -18,6 +18,8 @@ mod event;
 mod input;
 mod provider_worker;
 mod supervisor;
+mod tool_call;
+mod tool_dispatch;
 
 #[cfg(test)]
 mod test_support;
@@ -28,3 +30,5 @@ pub use approval::{
 pub use error::RuntimeError;
 pub use event::{RuntimeEvent, RuntimeEventKind, RuntimeEventSubscription, SubscriptionError};
 pub use supervisor::{SessionHandle, SessionSupervisor, SubmitReceipt};
+pub use tool_call::{ToolCall, ToolCallAccumulator, ToolCallError};
+pub use tool_dispatch::{ToolDispatchError, ToolDispatchPlan, ToolDispatcher};

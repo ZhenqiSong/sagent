@@ -1,7 +1,7 @@
 # Sagent Rust 第四阶段 4.5 执行计划：最小工具、Terminal 与 Approval
 
 作者：SongZQ  
-状态：执行中（步骤 0-4 已完成，步骤 5 待实现）
+状态：执行中（步骤 0-5.1 已完成，步骤 5.2 待实现）
 前置条件：4.1、4.2、4.3、4.4 已完成。
 
 > 本计划以当前 Rust 代码为基线，同时对照 Python Hermes 的实际行为。4.5 的目标不是一次性复制所有 Python 工具，而是先建立一个安全、可测试、可恢复的最小工具闭环。
@@ -927,3 +927,38 @@ terminal 的执行和进程生命周期边界已经完成，但危险命令还�
 - `Always` 规则目前保存在当前 Runtime 的明确策略集合中，Profile `config.yaml` 的跨进程恢复需要后续配置持久化接线；
 - Provider tool-call 聚合、工具结果消息写入和审批通过后重新执行 terminal 属于步骤 5；
 - `approval.respond` 的 JSON-RPC 分发属于 4.6，Ratatui 审批卡片属于 4.7。
+
+## 18. 步骤 5.1 执行记录：Provider ToolCall 聚合与 Registry 分发规划
+
+执行日期：2026-09-05
+状态：已完成
+
+### 18.1 已完成内容
+
+- 新增 `ToolCallAccumulator`，按 Provider 的 `call_id` 聚合多个参数 delta，并保留首次出现顺序；
+- Provider 完成原因为 `tool_calls` 时，校验每个调用的 id、name 和 JSON object 参数；
+- 对空 id、缺少 name、name 冲突、非法 JSON、参数超过 256 KiB 和空工具批次使用稳定错误；
+- 新增 `WorkerEvent::ToolCalls`，Provider worker 不执行工具、不访问 Store，只把完整调用交给 Actor；
+- 新增 `ToolDispatcher`，在 Actor 工具 worker 启动前检查重复 `call_id`、未知工具、`Deny` 权限和参数类型；
+- 新增 `ToolDispatchPlan`，把 registry 的 permission、timeout 和 output limit 传递给后续工具 worker；
+- Actor 通过可选 registry 注入完成工具调用规划；未配置 registry 或规划失败时 fail-closed，并发布 `ToolCallRequested` 后结束 Turn；
+- 新增 Provider 聚合、非法参数和 dispatcher 边界测试，覆盖工具调用顺序及错误收口。
+
+### 18.2 验证结果
+
+- `cargo test -p sagent-runtime`：通过，39 个单元测试及全部运行时集成测试通过；
+- `cargo fmt --all`：通过；
+- dispatcher 测试覆盖 registered、duplicate、unknown、deny 和非 object 参数；
+- 未执行具体工具，不会提前启动 terminal 或读取文件；
+
+### 18.3 当前边界与下一步
+
+步骤 5.1 只完成“Provider → Actor → Registry 校验/规划”，尚未完成：
+
+1. `ToolDispatchPlan` 到 `read_file`/`terminal` handler 的受监管 worker；
+2. `WorkerEvent::ToolResult` 及工具取消传播；
+3. assistant tool-call 与 tool message 的 Store 原子写入；
+4. tool result 加入下一轮 PromptSnapshot 并再次调用 Provider；
+5. 最大 tool round、重复结果和完整 Provider → Tool → Provider → Final 回环。
+
+下一步为步骤 5.2：实现 `tool_worker.rs`，先接入 `read_file`，再接入带 approval gate 的 `terminal`。

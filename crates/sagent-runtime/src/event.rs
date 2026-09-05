@@ -135,6 +135,11 @@ pub enum RuntimeEventKind {
         tool_call_id: sagent_types::ToolCallId,
         tool_name: String,
     },
+    /// Provider 已生成一个尚未执行的工具调用；call_id 保留上游字符串。
+    ToolCallRequested {
+        call_id: String,
+        tool_name: String,
+    },
     /// 工具 worker 已返回有界结果；详细正文通过 tool message 持久化。
     ToolCompleted {
         tool_call_id: sagent_types::ToolCallId,

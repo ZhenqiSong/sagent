@@ -2,6 +2,7 @@
 
 use crate::RuntimeError;
 use crate::approval::{ApprovalOutcome, ApprovalRequest};
+use crate::tool_call::ToolCall;
 use sagent_agent::SessionCommand;
 use sagent_provider::TokenUsage;
 use sagent_types::TurnId;
@@ -69,4 +70,10 @@ pub(crate) enum WorkerEvent {
     Failed { turn_id: TurnId, reason: String },
     /// worker 响应取消令牌后停止。
     Cancelled { turn_id: TurnId },
+    /// Provider 已完成一个包含工具调用的响应；工具由 Actor 统一分发。
+    ToolCalls {
+        turn_id: TurnId,
+        text: String,
+        calls: Vec<ToolCall>,
+    },
 }

@@ -24,6 +24,7 @@ use crate::{
     event::{RuntimeEvent, RuntimeEventKind},
     input::{ActorInput, CommandReply, WorkerEvent},
     provider_worker::spawn_provider_worker,
+    tool_dispatch::ToolDispatcher,
 };
 
 const DEFAULT_MODEL_ID: &str = "unconfigured";
@@ -52,6 +53,7 @@ pub(crate) struct SessionActor {
     pub(crate) clock: fn() -> String,
     pub(crate) approvals: ApprovalManager,
     pub(crate) interactive_approval: bool,
+    pub(crate) tool_dispatcher: Option<ToolDispatcher>,
 }
 
 impl SessionActor {
@@ -78,6 +80,7 @@ impl SessionActor {
             clock: utc_now,
             approvals: ApprovalManager::new(DEFAULT_APPROVAL_TIMEOUT),
             interactive_approval: true,
+            tool_dispatcher: None,
         }
     }
 
@@ -108,6 +111,12 @@ impl SessionActor {
         self.provider = Some(provider);
         self.model = model.into();
         self.profile_revision = profile_revision.into();
+        self
+    }
+
+    /// 注入当前 generation 可见的工具 registry；未注入时保持 fail-closed。
+    pub(crate) fn with_tool_dispatcher(mut self, dispatcher: ToolDispatcher) -> Self {
+        self.tool_dispatcher = Some(dispatcher);
         self
     }
 
@@ -550,6 +559,47 @@ impl SessionActor {
                 let _ = self
                     .interrupt_active_for_turn(turn_id, "worker cancelled")
                     .await;
+            }
+            WorkerEvent::ToolCalls {
+                turn_id,
+                text: _text,
+                calls,
+            } => {
+                if !self.is_active_turn(turn_id) || self.is_cancelled(turn_id) {
+                    return;
+                }
+                let plans = match self
+                    .tool_dispatcher
+                    .as_ref()
+                    .ok_or_else(|| "ToolRegistry 未配置".to_owned())
+                    .and_then(|dispatcher| {
+                        dispatcher
+                            .plan(calls.clone())
+                            .map_err(|error| error.to_string())
+                    }) {
+                    Ok(plans) => plans,
+                    Err(reason) => {
+                        let _ = self.fail_active(turn_id, "tool_dispatch", reason).await;
+                        return;
+                    }
+                };
+                for plan in &plans {
+                    self.publish(RuntimeEvent {
+                        session_id: self.session_id.clone(),
+                        turn_id: Some(turn_id),
+                        request_id: self.active.as_ref().map(|active| active.request_id),
+                        kind: RuntimeEventKind::ToolCallRequested {
+                            call_id: plan.call.call_id.clone(),
+                            tool_name: plan.call.name.clone(),
+                        },
+                    });
+                }
+                let reason = if calls.is_empty() {
+                    "Provider 返回了空工具调用列表".to_owned()
+                } else {
+                    format!("已规划 {} 个工具调用，但工具 worker 尚未接入", plans.len())
+                };
+                let _ = self.fail_active(turn_id, "tool_dispatch", reason).await;
             }
         }
     }

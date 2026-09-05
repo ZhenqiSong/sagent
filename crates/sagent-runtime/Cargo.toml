@@ -10,6 +10,7 @@ sagent-agent = { path = "../sagent-agent" }
 sagent-provider = { path = "../sagent-provider" }
 sagent-store = { path = "../sagent-store" }
 sagent-types = { path = "../sagent-types" }
+sagent-tools = { path = "../sagent-tools" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

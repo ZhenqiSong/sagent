@@ -1066,6 +1066,7 @@ dependencies = [
  "sagent-config",
  "sagent-provider",
  "sagent-store",
+ "sagent-tools",
  "sagent-types",
  "serde",
  "serde_json",

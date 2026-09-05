@@ -23,6 +23,7 @@ use crate::RuntimeError;
 use crate::actor::{SessionActor, WorkerFactory, utc_now};
 use crate::event::{RuntimeEvent, RuntimeEventSubscription};
 use crate::input::{ActorInput, CommandReply};
+use crate::tool_dispatch::ToolDispatcher;
 
 /// 每个 Session 的 mailbox 容量；满时命令立即返回 `MailboxFull`。
 const MAILBOX_CAPACITY: usize = 32;
@@ -55,6 +56,7 @@ pub struct SessionSupervisor {
     model: String,
     profile_revision: String,
     approval_timeout: Duration,
+    tool_dispatcher: Option<ToolDispatcher>,
 }
 
 impl SessionSupervisor {
@@ -74,6 +76,7 @@ impl SessionSupervisor {
             model: "unconfigured".into(),
             profile_revision: "runtime-v1".into(),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
+            tool_dispatcher: None,
         }
     }
 
@@ -148,6 +151,12 @@ impl SessionSupervisor {
         self
     }
 
+    /// 配置当前 Supervisor 使用的工具 registry；工具 worker 仍由 Runtime 统一调度。
+    pub fn with_tool_dispatcher(mut self, dispatcher: ToolDispatcher) -> Self {
+        self.tool_dispatcher = Some(dispatcher);
+        self
+    }
+
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, ManagedSession>> {
         self.sessions
             .lock()
@@ -181,6 +190,10 @@ impl SessionSupervisor {
                 self.model.clone(),
                 self.profile_revision.clone(),
             ),
+            None => actor,
+        };
+        let actor = match &self.tool_dispatcher {
+            Some(dispatcher) => actor.with_tool_dispatcher(dispatcher.clone()),
             None => actor,
         };
         let join = tokio::spawn(actor.run());

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use sagent_agent::{PromptRole, PromptSnapshot, RequestId};
 use sagent_provider::{
     ModelProvider, ProviderError, ProviderEvent, ProviderEventSink, ProviderMessage,
-    ProviderRequest,
+    ProviderRequest, StopReason,
 };
 use sagent_types::TurnId;
 use tokio::sync::mpsc;
@@ -14,6 +14,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::input::{ActorInput, WorkerEvent};
+use crate::tool_call::{ToolCall, ToolCallAccumulator, ToolCallError};
 
 /// 启动一个 Provider worker；worker 不接触 Store，只向 Actor mailbox 发送事件。
 pub(crate) fn spawn_provider_worker(
@@ -30,16 +31,34 @@ pub(crate) fn spawn_provider_worker(
         let mut sink = RuntimeProviderSink::new(command_tx.clone(), turn_id);
 
         match provider.stream(request, &mut sink, cancellation).await {
-            Ok(_) => {
-                let _ = send_worker_event(
-                    &command_tx,
-                    WorkerEvent::FinalText {
-                        turn_id,
-                        text: sink.into_text(),
-                    },
-                )
-                .await;
-            }
+            Ok(finish) => match sink.into_completion(finish.reason) {
+                Ok((text, Some(calls))) => {
+                    let _ = send_worker_event(
+                        &command_tx,
+                        WorkerEvent::ToolCalls {
+                            turn_id,
+                            text,
+                            calls,
+                        },
+                    )
+                    .await;
+                }
+                Ok((text, None)) => {
+                    let _ =
+                        send_worker_event(&command_tx, WorkerEvent::FinalText { turn_id, text })
+                            .await;
+                }
+                Err(error) => {
+                    let _ = send_worker_event(
+                        &command_tx,
+                        WorkerEvent::Failed {
+                            turn_id,
+                            reason: error,
+                        },
+                    )
+                    .await;
+                }
+            },
             Err(ProviderError::Cancelled) => {
                 let _ = send_worker_event(&command_tx, WorkerEvent::Cancelled { turn_id }).await;
             }
@@ -100,6 +119,7 @@ struct RuntimeProviderSink {
     command_tx: mpsc::Sender<ActorInput>,
     turn_id: TurnId,
     text: String,
+    tool_calls: ToolCallAccumulator,
 }
 
 impl RuntimeProviderSink {
@@ -108,11 +128,27 @@ impl RuntimeProviderSink {
             command_tx,
             turn_id,
             text: String::new(),
+            tool_calls: ToolCallAccumulator::new(),
         }
     }
 
-    fn into_text(self) -> String {
-        self.text
+    fn into_completion(
+        self,
+        reason: StopReason,
+    ) -> Result<(String, Option<Vec<ToolCall>>), String> {
+        let Self {
+            text, tool_calls, ..
+        } = self;
+        if tool_calls.is_empty() {
+            if reason == StopReason::ToolCalls {
+                return Err("Provider 声明了 tool_calls，但没有完整工具调用".into());
+            }
+            return Ok((text, None));
+        }
+        let calls = tool_calls
+            .finish()
+            .map_err(|error: ToolCallError| error.to_string())?;
+        Ok((text, Some(calls)))
     }
 }
 
@@ -142,18 +178,25 @@ impl ProviderEventSink for RuntimeProviderSink {
                 .await
             }
             ProviderEvent::Finished { .. } => Ok(()),
-            ProviderEvent::ToolCallDelta { .. } => Err(ProviderError::Protocol(
-                "当前 runtime 尚未支持工具调用".into(),
-            )),
+            ProviderEvent::ToolCallDelta {
+                call_id,
+                name,
+                arguments_delta,
+            } => self
+                .tool_calls
+                .push(call_id, name, arguments_delta)
+                .map_err(|error| ProviderError::Protocol(error.to_string())),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::provider_request;
+    use super::{RuntimeProviderSink, provider_request};
     use sagent_agent::{PromptMessage, PromptRole, PromptSnapshot, RequestId, SystemPromptParts};
+    use sagent_provider::{ProviderEvent, ProviderEventSink, StopReason};
     use sagent_types::{SessionId, TurnId};
+    use tokio::sync::mpsc;
 
     #[test]
     fn maps_prompt_snapshot_to_provider_request() {
@@ -180,5 +223,46 @@ mod tests {
         assert_eq!(request.model, "test-model");
         assert_eq!(request.messages.len(), 2);
         assert!(request.stream);
+    }
+
+    #[tokio::test]
+    async fn aggregates_tool_call_deltas_until_provider_finish() {
+        let (sender, _receiver) = mpsc::channel(8);
+        let mut sink = RuntimeProviderSink::new(sender, TurnId::new());
+        sink.emit(ProviderEvent::ToolCallDelta {
+            call_id: "call-1".into(),
+            name: Some("terminal".into()),
+            arguments_delta: "{\"command\":".into(),
+        })
+        .await
+        .unwrap();
+        sink.emit(ProviderEvent::ToolCallDelta {
+            call_id: "call-1".into(),
+            name: None,
+            arguments_delta: "\"pwd\"}".into(),
+        })
+        .await
+        .unwrap();
+        let (text, calls) = sink
+            .into_completion(StopReason::ToolCalls)
+            .expect("工具调用应能完成");
+        let calls = calls.expect("应返回工具调用");
+        assert!(text.is_empty());
+        assert_eq!(calls[0].name, "terminal");
+        assert_eq!(calls[0].arguments["command"], "pwd");
+    }
+
+    #[tokio::test]
+    async fn invalid_tool_json_becomes_a_protocol_error() {
+        let (sender, _receiver) = mpsc::channel(8);
+        let mut sink = RuntimeProviderSink::new(sender, TurnId::new());
+        sink.emit(ProviderEvent::ToolCallDelta {
+            call_id: "call-1".into(),
+            name: Some("terminal".into()),
+            arguments_delta: "not-json".into(),
+        })
+        .await
+        .unwrap();
+        assert!(sink.into_completion(StopReason::ToolCalls).is_err());
     }
 }

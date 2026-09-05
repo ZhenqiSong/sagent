@@ -9,9 +9,13 @@ use crate::Store;
 pub const EVENT_TURN_STARTED: &str = "turn.started";
 pub const EVENT_MESSAGE_COMMITTED: &str = "message.committed";
 pub const EVENT_TOOL_COMPLETED: &str = "tool.completed";
+pub const EVENT_TOOL_STARTED: &str = "tool.started";
 pub const EVENT_TURN_COMPLETED: &str = "turn.completed";
 pub const EVENT_TURN_INTERRUPTED: &str = "turn.interrupted";
 pub const EVENT_TURN_FAILED: &str = "turn.failed";
+pub const EVENT_APPROVAL_REQUESTED: &str = "approval.requested";
+pub const EVENT_APPROVAL_RESOLVED: &str = "approval.resolved";
+pub const EVENT_APPROVAL_TIMED_OUT: &str = "approval.timed_out";
 pub const MAX_EVENT_LIMIT: i64 = 200;
 
 #[derive(Clone, Debug)]
@@ -63,6 +67,30 @@ pub(crate) fn insert_event(
 }
 
 impl Store {
+    /// 追加一个独立的 daemon event。调用方仍必须是 SessionActor，Store 不负责
+    /// 事件顺序或审批状态机；事务只保证该事件完整写入。
+    pub fn append_event(&mut self, event: &NewDaemonEvent) -> Result<EventSequence> {
+        self.ensure_writable()?;
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始 daemon event 事务失败")?;
+        let exists: Option<i64> = transaction
+            .query_row(
+                "SELECT 1 FROM sessions WHERE id = ?1",
+                [event.session_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("验证 daemon event 所属会话失败")?;
+        if exists.is_none() {
+            anyhow::bail!("会话不存在：{}", event.session_id.as_str());
+        }
+        let sequence = insert_event(&transaction, event)?;
+        transaction.commit().context("提交 daemon event 事务失败")?;
+        Ok(sequence)
+    }
+
     /// 按 session 和单调 sequence 查询可恢复的持久化事件。
     pub fn events_since(&self, query: &EventQuery) -> Result<Vec<StoredDaemonEvent>> {
         if query.limit <= 0 {

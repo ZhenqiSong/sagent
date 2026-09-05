@@ -44,6 +44,10 @@ pub enum RuntimeError {
     /// 受监管的 provider/tool worker 发生异常。
     #[error("worker task failed: {0}")]
     WorkerFailed(String),
+
+    /// 审批请求不存在、已结束或不属于当前 Session/Turn。
+    #[error("approval failed: {0}")]
+    Approval(String),
 }
 
 #[cfg(test)]

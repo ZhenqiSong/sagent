@@ -112,6 +112,35 @@ pub enum RuntimeEventKind {
     TurnFailed {
         reason: String,
     },
+    /// 工具调用需要用户审批；summary 已在 Runtime 内完成脱敏。
+    ApprovalRequested {
+        approval_id: sagent_types::ApprovalId,
+        tool_call_id: sagent_types::ToolCallId,
+        tool_name: String,
+        summary: String,
+        policy_key: String,
+        expires_at: String,
+    },
+    /// 用户已经响应审批请求。
+    ApprovalResolved {
+        approval_id: sagent_types::ApprovalId,
+        decision: sagent_agent::ApprovalDecision,
+    },
+    /// 审批超时且没有启动工具。
+    ApprovalTimedOut {
+        approval_id: sagent_types::ApprovalId,
+    },
+    /// 工具 worker 已经通过权限检查并开始执行。
+    ToolStarted {
+        tool_call_id: sagent_types::ToolCallId,
+        tool_name: String,
+    },
+    /// 工具 worker 已返回有界结果；详细正文通过 tool message 持久化。
+    ToolCompleted {
+        tool_call_id: sagent_types::ToolCallId,
+        ok: bool,
+        error_kind: Option<String>,
+    },
     /// actor 启动/停止诊断。
     ActorStarted,
     ActorStopped,

@@ -1,6 +1,7 @@
 //! SessionActor 的内部输入消息。
 
 use crate::RuntimeError;
+use crate::approval::{ApprovalOutcome, ApprovalRequest};
 use sagent_agent::SessionCommand;
 use sagent_provider::TokenUsage;
 use sagent_types::TurnId;
@@ -13,6 +14,10 @@ pub(crate) enum CommandReply {
     Accepted { turn_id: TurnId },
     /// 中断请求已经被 Actor 接收。
     Interrupted,
+    /// 审批响应已经被 Actor 接收；工具是否执行由后续事件决定。
+    ApprovalAccepted,
+    /// 客户端能力握手已更新。
+    Resumed,
     /// Actor 已经完成关闭。
     Closed,
 }
@@ -37,6 +42,17 @@ pub(crate) enum ActorInput {
     WorkerExited {
         turn_id: TurnId,
         result: Result<(), WorkerFailure>,
+    },
+    /// 工具 worker 发现当前调用需要用户审批。
+    ApprovalRequired {
+        turn_id: TurnId,
+        request: ApprovalRequest,
+    },
+    /// 审批 waiter 将决定重新投递回 Actor，避免 Actor 阻塞在等待上。
+    ApprovalOutcome {
+        turn_id: TurnId,
+        approval_id: sagent_types::ApprovalId,
+        outcome: ApprovalOutcome,
     },
 }
 

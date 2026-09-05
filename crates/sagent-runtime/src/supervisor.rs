@@ -10,11 +10,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use sagent_agent::{RequestId, SessionCommand, UserInput};
+use sagent_agent::{ApprovalDecision, RequestId, SessionCommand, UserInput};
 use sagent_provider::ModelProvider;
 use sagent_store::Store;
-use sagent_types::{SessionId, TurnId};
+use sagent_types::{ApprovalId, ClientCapabilities, SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -27,6 +28,7 @@ use crate::input::{ActorInput, CommandReply};
 const MAILBOX_CAPACITY: usize = 32;
 /// 每个 Session 运行时事件广播容量。
 const EVENT_CAPACITY: usize = 64;
+const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 为单个新 actor 打开独占 Store 的工厂。
 ///
@@ -52,6 +54,7 @@ pub struct SessionSupervisor {
     provider: Option<Arc<dyn ModelProvider>>,
     model: String,
     profile_revision: String,
+    approval_timeout: Duration,
 }
 
 impl SessionSupervisor {
@@ -70,6 +73,7 @@ impl SessionSupervisor {
             provider: None,
             model: "unconfigured".into(),
             profile_revision: "runtime-v1".into(),
+            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
         }
     }
 
@@ -138,6 +142,12 @@ impl SessionSupervisor {
         self
     }
 
+    /// 配置单个 pending approval 的最大等待时间。
+    pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
+        self.approval_timeout = timeout;
+        self
+    }
+
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, ManagedSession>> {
         self.sessions
             .lock()
@@ -164,6 +174,7 @@ impl SessionSupervisor {
             Some(factory) => actor.with_worker_factory(factory.clone(), utc_now),
             None => actor,
         };
+        let actor = actor.with_approval_timeout(self.approval_timeout);
         let actor = match &self.provider {
             Some(provider) => actor.with_provider(
                 provider.clone(),
@@ -226,9 +237,12 @@ impl SessionHandle {
         let reply = self.dispatch(SessionCommand::SubmitPrompt { request_id, input })?;
         match reply.await.map_err(|_| RuntimeError::ActorStopped)?? {
             CommandReply::Accepted { turn_id } => Ok(SubmitReceipt { turn_id }),
-            CommandReply::Closed | CommandReply::Interrupted => Err(
-                RuntimeError::InvalidLifecycle("actor 对 submit 返回了意外的终态应答".into()),
-            ),
+            CommandReply::Closed
+            | CommandReply::Interrupted
+            | CommandReply::ApprovalAccepted
+            | CommandReply::Resumed => Err(RuntimeError::InvalidLifecycle(
+                "actor 对 submit 返回了意外的终态应答".into(),
+            )),
         }
     }
 
@@ -237,9 +251,47 @@ impl SessionHandle {
         let reply = self.dispatch(SessionCommand::Interrupt { request_id })?;
         match reply.await.map_err(|_| RuntimeError::ActorStopped)?? {
             CommandReply::Interrupted => Ok(()),
-            CommandReply::Accepted { .. } | CommandReply::Closed => Err(
-                RuntimeError::InvalidLifecycle("actor 对 interrupt 返回了意外的应答".into()),
-            ),
+            CommandReply::Accepted { .. }
+            | CommandReply::Closed
+            | CommandReply::ApprovalAccepted
+            | CommandReply::Resumed => Err(RuntimeError::InvalidLifecycle(
+                "actor 对 interrupt 返回了意外的应答".into(),
+            )),
+        }
+    }
+
+    /// 向当前 Session 的 Actor 提交审批决定；真正的工具执行由 Actor 后续事件驱动。
+    pub async fn resolve_approval(
+        &self,
+        approval_id: ApprovalId,
+        decision: ApprovalDecision,
+    ) -> Result<(), RuntimeError> {
+        let reply = self.dispatch(SessionCommand::ResolveApproval {
+            approval_id,
+            decision,
+        })?;
+        match reply.await.map_err(|_| RuntimeError::ActorStopped)?? {
+            CommandReply::ApprovalAccepted => Ok(()),
+            CommandReply::Accepted { .. }
+            | CommandReply::Interrupted
+            | CommandReply::Closed
+            | CommandReply::Resumed => Err(RuntimeError::InvalidLifecycle(
+                "actor 对 approval 返回了意外的应答".into(),
+            )),
+        }
+    }
+
+    /// 更新客户端能力，特别是是否存在可响应审批的交互界面。
+    pub async fn resume(&self, client: ClientCapabilities) -> Result<(), RuntimeError> {
+        let reply = self.dispatch(SessionCommand::Resume { client })?;
+        match reply.await.map_err(|_| RuntimeError::ActorStopped)?? {
+            CommandReply::Resumed => Ok(()),
+            CommandReply::Accepted { .. }
+            | CommandReply::Interrupted
+            | CommandReply::Closed
+            | CommandReply::ApprovalAccepted => Err(RuntimeError::InvalidLifecycle(
+                "actor 对 resume 返回了意外的应答".into(),
+            )),
         }
     }
 
@@ -248,9 +300,12 @@ impl SessionHandle {
         let reply = self.dispatch(SessionCommand::Close)?;
         match reply.await.map_err(|_| RuntimeError::ActorStopped)?? {
             CommandReply::Closed => Ok(()),
-            CommandReply::Accepted { .. } | CommandReply::Interrupted => Err(
-                RuntimeError::InvalidLifecycle("actor 对 close 返回了意外的应答".into()),
-            ),
+            CommandReply::Accepted { .. }
+            | CommandReply::Interrupted
+            | CommandReply::ApprovalAccepted
+            | CommandReply::Resumed => Err(RuntimeError::InvalidLifecycle(
+                "actor 对 close 返回了意外的应答".into(),
+            )),
         }
     }
 

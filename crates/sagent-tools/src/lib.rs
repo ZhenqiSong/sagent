@@ -4,6 +4,7 @@
 //! 并生成稳定的模型 schema。
 //! Store 写入、RuntimeEvent 和 SessionActor 生命周期属于上层，不能由工具实现直接触碰。
 
+mod approval_policy;
 mod command_policy;
 mod definition;
 mod error;
@@ -15,6 +16,7 @@ mod schema;
 mod terminal;
 mod workspace;
 
+pub use approval_policy::{ApprovalPolicyDecision, classify_tool};
 pub use command_policy::{CommandRisk, classify_command};
 pub use definition::{ToolDefinition, ToolPermission};
 pub use error::RegistryError;

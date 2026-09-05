@@ -1,13 +1,17 @@
 //! SessionActor 的最小 submit 处理循环。
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use sagent_agent::{
-    PromptMessage, PromptRole, PromptSnapshot, RequestId, SessionCommand, SystemPromptParts,
-    TurnState, UserInput,
+    ApprovalDecision, PromptMessage, PromptRole, PromptSnapshot, RequestId, SessionCommand,
+    SystemPromptParts, TurnState, UserInput,
 };
 use sagent_provider::ModelProvider;
-use sagent_store::{NewGeneration, NewMessage, StartTurn, Store};
+use sagent_store::{
+    EVENT_APPROVAL_REQUESTED, EVENT_APPROVAL_RESOLVED, EVENT_APPROVAL_TIMED_OUT, NewDaemonEvent,
+    NewGeneration, NewMessage, StartTurn, Store,
+};
 use sagent_types::{SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -16,6 +20,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     RuntimeError,
     active_turn::ActiveTurn,
+    approval::{ApprovalManager, ApprovalOutcome, ApprovalRequest},
     event::{RuntimeEvent, RuntimeEventKind},
     input::{ActorInput, CommandReply, WorkerEvent},
     provider_worker::spawn_provider_worker,
@@ -24,6 +29,7 @@ use crate::{
 const DEFAULT_MODEL_ID: &str = "unconfigured";
 const DEFAULT_PROFILE_REVISION: &str = "runtime-v1";
 const EMPTY_TOOL_SCHEMA_HASH: &str = "sha256:empty-tools";
+const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 测试替身或后续 Provider 用来启动 worker 的函数。
 pub(crate) type WorkerFactory = Arc<
@@ -44,6 +50,8 @@ pub(crate) struct SessionActor {
     pub(crate) model: String,
     pub(crate) profile_revision: String,
     pub(crate) clock: fn() -> String,
+    pub(crate) approvals: ApprovalManager,
+    pub(crate) interactive_approval: bool,
 }
 
 impl SessionActor {
@@ -68,6 +76,8 @@ impl SessionActor {
             model: DEFAULT_MODEL_ID.to_owned(),
             profile_revision: DEFAULT_PROFILE_REVISION.to_owned(),
             clock: utc_now,
+            approvals: ApprovalManager::new(DEFAULT_APPROVAL_TIMEOUT),
+            interactive_approval: true,
         }
     }
 
@@ -79,6 +89,12 @@ impl SessionActor {
     ) -> Self {
         self.worker_factory = Some(worker_factory);
         self.clock = clock;
+        self
+    }
+
+    /// 覆盖审批等待时长；生产环境由 Runtime 配置注入，测试可使用很短的超时。
+    pub(crate) fn with_approval_timeout(mut self, timeout: Duration) -> Self {
+        self.approvals = ApprovalManager::new(timeout);
         self
     }
 
@@ -120,6 +136,19 @@ impl SessionActor {
                 self.handle_worker_exited(turn_id, result).await;
                 false
             }
+            ActorInput::ApprovalRequired { turn_id, request } => {
+                self.handle_approval_required(turn_id, request).await;
+                false
+            }
+            ActorInput::ApprovalOutcome {
+                turn_id,
+                approval_id,
+                outcome,
+            } => {
+                self.handle_approval_outcome(turn_id, approval_id, outcome)
+                    .await;
+                false
+            }
         }
     }
 
@@ -139,12 +168,14 @@ impl SessionActor {
                 Ok(CommandReply::Closed)
             }
             SessionCommand::Interrupt { .. } => self.interrupt_active("user interrupt").await,
-            SessionCommand::ResolveApproval { .. } => Err(RuntimeError::InvalidLifecycle(
-                "步骤 3 尚未实现 approval".into(),
-            )),
-            SessionCommand::Resume { .. } => Err(RuntimeError::InvalidLifecycle(
-                "步骤 3 尚未实现 resume".into(),
-            )),
+            SessionCommand::ResolveApproval {
+                approval_id,
+                decision,
+            } => self.resolve_approval(approval_id, decision),
+            SessionCommand::Resume { client } => {
+                self.interactive_approval = client.interactive_approval;
+                Ok(CommandReply::Resumed)
+            }
         }
     }
 
@@ -233,6 +264,8 @@ impl SessionActor {
             cancellation,
             worker,
             worker_abort,
+            approval_waiter: None,
+            approval_id: None,
             terminal: false,
         });
 
@@ -278,6 +311,211 @@ impl SessionActor {
                 .map_err(|error| RuntimeError::Persistence(error.to_string()))?,
         }
         Ok(())
+    }
+
+    /// 接收工具 worker 的审批请求。这里不能直接 await waiter，否则 Actor 将无法处理
+    /// `ResolveApproval` 或 `Interrupt`；waiter 只负责等待，结果通过 mailbox 回传。
+    async fn handle_approval_required(&mut self, turn_id: TurnId, request: ApprovalRequest) {
+        if !self.is_active_turn(turn_id) || self.is_cancelled(turn_id) {
+            return;
+        }
+        if request.session_id != self.session_id || request.turn_id != turn_id {
+            let _ = self
+                .fail_active(turn_id, "approval", "审批请求上下文不匹配".into())
+                .await;
+            return;
+        }
+        if !self.interactive_approval {
+            let _ = self
+                .fail_active(
+                    turn_id,
+                    "approval_unavailable",
+                    "当前客户端不支持交互式审批".into(),
+                )
+                .await;
+            return;
+        }
+        if self
+            .approvals
+            .is_allowed(&self.session_id, &request.policy_key)
+        {
+            // Session/Always 规则已经允许时不产生新的 pending 卡片；工具 worker
+            // 会在后续的 ToolResult/worker 回环中继续执行。
+            self.publish(RuntimeEvent {
+                session_id: self.session_id.clone(),
+                turn_id: Some(turn_id),
+                request_id: self.active.as_ref().map(|active| active.request_id),
+                kind: RuntimeEventKind::ApprovalResolved {
+                    approval_id: request.approval_id,
+                    decision: ApprovalDecision::Session,
+                },
+            });
+            return;
+        }
+
+        let approval_id = request.approval_id;
+        let waiter = match self.approvals.register(request.clone()) {
+            Ok(waiter) => waiter,
+            Err(error) => {
+                let _ = self
+                    .fail_active(turn_id, "approval", error.to_string())
+                    .await;
+                return;
+            }
+        };
+        let timeout = self.approvals.timeout();
+        let cancellation = self
+            .active
+            .as_ref()
+            .map(|active| active.cancellation.child_token())
+            .expect("active turn checked above");
+        let sender = self.command_tx.clone();
+        let waiter_task = tokio::spawn(async move {
+            let outcome = waiter.wait(timeout, cancellation).await;
+            let _ = sender
+                .send(ActorInput::ApprovalOutcome {
+                    turn_id,
+                    approval_id,
+                    outcome,
+                })
+                .await;
+        });
+
+        if let Some(active) = self.active.as_mut() {
+            active.state = TurnState::AwaitingApproval;
+            active.approval_id = Some(approval_id);
+            active.approval_waiter = Some(waiter_task);
+        }
+        if let Err(error) = self.persist_approval_event(
+            turn_id,
+            EVENT_APPROVAL_REQUESTED,
+            serde_json::json!({
+                "approval_id": approval_id,
+                "tool_call_id": request.tool_call_id,
+                "tool_name": request.tool_name.clone(),
+                "summary": request.summary.clone(),
+                "policy_key": request.policy_key.clone(),
+                "expires_at": request.expires_at.clone(),
+            }),
+        ) {
+            let _ = self.fail_active(turn_id, "approval", error).await;
+            return;
+        }
+        self.publish(RuntimeEvent {
+            session_id: self.session_id.clone(),
+            turn_id: Some(turn_id),
+            request_id: self.active.as_ref().map(|active| active.request_id),
+            kind: RuntimeEventKind::ApprovalRequested {
+                approval_id,
+                tool_call_id: request.tool_call_id,
+                tool_name: request.tool_name,
+                summary: request.summary,
+                policy_key: request.policy_key,
+                expires_at: request.expires_at,
+            },
+        });
+    }
+
+    async fn handle_approval_outcome(
+        &mut self,
+        turn_id: TurnId,
+        approval_id: sagent_types::ApprovalId,
+        outcome: ApprovalOutcome,
+    ) {
+        if !self.is_active_turn(turn_id)
+            || self.active.as_ref().and_then(|active| active.approval_id) != Some(approval_id)
+        {
+            return;
+        }
+        if matches!(
+            outcome,
+            ApprovalOutcome::TimedOut | ApprovalOutcome::Cancelled
+        ) {
+            self.approvals.expire(approval_id);
+        }
+        if let Some(active) = self.active.as_mut() {
+            // waiter 已经把结果送回 mailbox；不能在它自己的 task 中 await join handle。
+            active.approval_waiter.take();
+            active.approval_id = None;
+        }
+        match outcome {
+            ApprovalOutcome::Approved(decision) => {
+                if let Some(active) = self.active.as_mut() {
+                    active.state = TurnState::RunningTool;
+                }
+                self.publish(RuntimeEvent {
+                    session_id: self.session_id.clone(),
+                    turn_id: Some(turn_id),
+                    request_id: self.active.as_ref().map(|active| active.request_id),
+                    kind: RuntimeEventKind::ApprovalResolved {
+                        approval_id,
+                        decision,
+                    },
+                });
+                let _ = self.persist_approval_event(
+                    turn_id,
+                    EVENT_APPROVAL_RESOLVED,
+                    serde_json::json!({
+                        "approval_id": approval_id,
+                        "decision": decision,
+                    }),
+                );
+            }
+            ApprovalOutcome::Denied => {
+                self.publish(RuntimeEvent {
+                    session_id: self.session_id.clone(),
+                    turn_id: Some(turn_id),
+                    request_id: self.active.as_ref().map(|active| active.request_id),
+                    kind: RuntimeEventKind::ApprovalResolved {
+                        approval_id,
+                        decision: ApprovalDecision::Deny,
+                    },
+                });
+                let _ = self.persist_approval_event(
+                    turn_id,
+                    EVENT_APPROVAL_RESOLVED,
+                    serde_json::json!({
+                        "approval_id": approval_id,
+                        "decision": ApprovalDecision::Deny,
+                    }),
+                );
+                let _ = self
+                    .fail_active(turn_id, "approval_denied", "用户拒绝了工具执行".into())
+                    .await;
+            }
+            ApprovalOutcome::TimedOut => {
+                self.publish(RuntimeEvent {
+                    session_id: self.session_id.clone(),
+                    turn_id: Some(turn_id),
+                    request_id: self.active.as_ref().map(|active| active.request_id),
+                    kind: RuntimeEventKind::ApprovalTimedOut { approval_id },
+                });
+                let _ = self.persist_approval_event(
+                    turn_id,
+                    EVENT_APPROVAL_TIMED_OUT,
+                    serde_json::json!({ "approval_id": approval_id }),
+                );
+                let _ = self
+                    .fail_active(turn_id, "approval_timeout", "审批等待超时".into())
+                    .await;
+            }
+            ApprovalOutcome::Cancelled => {}
+        }
+    }
+
+    fn resolve_approval(
+        &mut self,
+        approval_id: sagent_types::ApprovalId,
+        decision: ApprovalDecision,
+    ) -> Result<CommandReply, RuntimeError> {
+        let active = self.active.as_ref().ok_or(RuntimeError::NoActiveTurn)?;
+        if active.state != TurnState::AwaitingApproval {
+            return Err(RuntimeError::Approval("当前 Turn 没有等待中的审批".into()));
+        }
+        self.approvals
+            .resolve(&self.session_id, &active.turn_id, approval_id, decision)
+            .map_err(|error| RuntimeError::Approval(error.to_string()))?;
+        Ok(CommandReply::ApprovalAccepted)
     }
 
     async fn handle_worker_event(&mut self, event: WorkerEvent) {
@@ -355,6 +593,7 @@ impl SessionActor {
             return Err(RuntimeError::NoActiveTurn);
         }
         active.cancellation.cancel();
+        self.approvals.cancel_for_turn(&turn_id);
         Self::stop_worker(&mut active).await;
         let timestamp = (self.clock)();
         if let Err(error) = self.store.interrupt_turn(&turn_id, reason, &timestamp) {
@@ -394,6 +633,7 @@ impl SessionActor {
             }
         };
         active.terminal = true;
+        self.approvals.cancel_for_turn(&turn_id);
         Self::stop_worker(&mut active).await;
         self.publish(RuntimeEvent {
             session_id: self.session_id.clone(),
@@ -424,6 +664,7 @@ impl SessionActor {
             return Ok(());
         }
         active.cancellation.cancel();
+        self.approvals.cancel_for_turn(&turn_id);
         Self::stop_worker(&mut active).await;
         let timestamp = (self.clock)();
         if let Err(error) = self
@@ -460,6 +701,11 @@ impl SessionActor {
             worker.abort();
             let _ = worker.await;
         }
+        if let Some(waiter) = active.approval_waiter.take() {
+            waiter.abort();
+            let _ = waiter.await;
+        }
+        active.approval_id = None;
     }
 
     fn is_cancelled(&self, turn_id: TurnId) -> bool {
@@ -476,6 +722,24 @@ impl SessionActor {
 
     fn publish(&self, event: RuntimeEvent) {
         let _ = self.event_tx.send(event);
+    }
+
+    fn persist_approval_event(
+        &mut self,
+        turn_id: TurnId,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), String> {
+        self.store
+            .append_event(&NewDaemonEvent {
+                session_id: self.session_id.clone(),
+                turn_id: Some(turn_id),
+                event_type: event_type.to_owned(),
+                payload,
+                created_at: (self.clock)(),
+            })
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -498,11 +762,12 @@ mod tests {
     use super::SessionActor;
     use crate::{
         actor::WorkerFactory,
+        approval::ApprovalRequest,
         event::RuntimeEventKind,
         input::{ActorInput, CommandReply, WorkerEvent},
     };
     use sagent_agent::{RequestId, SessionCommand, UserInput};
-    use sagent_types::{EventSequence, SessionId, TurnId};
+    use sagent_types::{EventSequence, SessionId, ToolCallId, TurnId};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -1082,6 +1347,114 @@ mod tests {
             .expect("应能读取消息");
         assert_eq!(messages.len(), 2, "迟到的 interrupt 不能产生额外消息");
         assert_eq!(messages[1].role, "assistant");
+
+        let (close_tx, close_reply) = oneshot::channel();
+        sender
+            .send(ActorInput::Command {
+                command: SessionCommand::Close,
+                reply_to: close_tx,
+            })
+            .await
+            .expect("关闭应能投递");
+        close_reply
+            .await
+            .expect("应返回关闭结果")
+            .expect("关闭应成功");
+        actor_task.await.expect("Actor 不应 panic");
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn approval_request_keeps_actor_responsive_until_resolve() {
+        let path = test_path("approval");
+        let session_id = SessionId::new("actor-approval");
+        let store = prepare_store(&path, &session_id);
+        let (sender, receiver) = mpsc::channel(8);
+        let (events, mut event_receiver) = broadcast::channel(16);
+        let actor = SessionActor::new(session_id.clone(), store, receiver, sender.clone(), events);
+        let actor_task = tokio::spawn(actor.run());
+
+        let (submit_tx, submit_reply) = oneshot::channel();
+        sender
+            .send(ActorInput::Command {
+                command: SessionCommand::SubmitPrompt {
+                    request_id: RequestId::new(),
+                    input: UserInput::new("审批测试").expect("输入有效"),
+                },
+                reply_to: submit_tx,
+            })
+            .await
+            .expect("提交应能投递");
+        let turn_id = match submit_reply.await.expect("应返回结果").expect("提交应成功") {
+            CommandReply::Accepted { turn_id } => turn_id,
+            _ => panic!("应返回 Accepted"),
+        };
+        let _ = event_receiver.recv().await;
+        let _ = event_receiver.recv().await;
+
+        let request = ApprovalRequest {
+            approval_id: sagent_types::ApprovalId::new(),
+            session_id: session_id.clone(),
+            turn_id,
+            tool_call_id: ToolCallId::new(),
+            tool_name: "terminal".into(),
+            summary: "该命令需要审批".into(),
+            policy_key: "terminal:recursive_delete".into(),
+            expires_at: "2026-09-05T00:00:00Z".into(),
+        };
+        let approval_id = request.approval_id;
+        sender
+            .send(ActorInput::ApprovalRequired { turn_id, request })
+            .await
+            .expect("审批请求应能投递");
+        let requested = event_receiver.recv().await.expect("应收到审批事件");
+        assert!(matches!(
+            requested.kind,
+            RuntimeEventKind::ApprovalRequested { approval_id: id, .. } if id == approval_id
+        ));
+
+        let (resolve_tx, resolve_reply) = oneshot::channel();
+        sender
+            .send(ActorInput::Command {
+                command: SessionCommand::ResolveApproval {
+                    approval_id,
+                    decision: sagent_agent::ApprovalDecision::Once,
+                },
+                reply_to: resolve_tx,
+            })
+            .await
+            .expect("审批响应应能投递");
+        assert!(matches!(
+            resolve_reply
+                .await
+                .expect("应返回审批结果")
+                .expect("审批应被接收"),
+            CommandReply::ApprovalAccepted
+        ));
+        let resolved = event_receiver.recv().await.expect("应收到审批完成事件");
+        assert!(matches!(
+            resolved.kind,
+            RuntimeEventKind::ApprovalResolved { approval_id: id, decision: sagent_agent::ApprovalDecision::Once }
+                if id == approval_id
+        ));
+        let persisted = Store::open_readonly(&path)
+            .expect("应能读取审批事件")
+            .events_since(&EventQuery {
+                session_id: session_id.clone(),
+                after_sequence: EventSequence::new(0).expect("序号有效"),
+                limit: 200,
+            })
+            .expect("审批事件查询应成功");
+        assert!(
+            persisted
+                .iter()
+                .any(|event| event.event_type == "approval.requested")
+        );
+        assert!(
+            persisted
+                .iter()
+                .any(|event| event.event_type == "approval.resolved")
+        );
 
         let (close_tx, close_reply) = oneshot::channel();
         sender

@@ -11,6 +11,7 @@
 #[allow(dead_code)]
 mod active_turn;
 mod actor;
+mod approval;
 mod error;
 mod event;
 #[allow(dead_code)]
@@ -21,6 +22,9 @@ mod supervisor;
 #[cfg(test)]
 mod test_support;
 
+pub use approval::{
+    ApprovalError, ApprovalManager, ApprovalOutcome, ApprovalRequest, ApprovalWaiter,
+};
 pub use error::RuntimeError;
 pub use event::{RuntimeEvent, RuntimeEventKind, RuntimeEventSubscription, SubscriptionError};
 pub use supervisor::{SessionHandle, SessionSupervisor, SubmitReceipt};

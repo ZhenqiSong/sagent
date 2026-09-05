@@ -1,7 +1,7 @@
 //! SessionActor 当前活跃 Turn 的运行时状态。
 
 use sagent_agent::{RequestId, TurnState};
-use sagent_types::TurnId;
+use sagent_types::{ApprovalId, TurnId};
 use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -16,6 +16,9 @@ pub(crate) struct ActiveTurn {
     pub(crate) worker: Option<JoinHandle<()>>,
     /// 指向实际 worker 的取消句柄。这样取消监控任务时不会遗留实际 worker。
     pub(crate) worker_abort: Option<AbortHandle>,
+    /// 当前 pending approval 的 waiter；Actor 只保存任务句柄，不在 mailbox 中同步等待。
+    pub(crate) approval_waiter: Option<JoinHandle<()>>,
+    pub(crate) approval_id: Option<ApprovalId>,
     /// 防止 Final/Failed/Cancelled/Interrupt 竞争时重复收口。
     pub(crate) terminal: bool,
 }

@@ -1,7 +1,7 @@
 # Sagent Rust 第四阶段 4.5 执行计划：最小工具、Terminal 与 Approval
 
 作者：SongZQ  
-状态：规划中  
+状态：执行中（步骤 0-4 已完成，步骤 5 待实现）
 前置条件：4.1、4.2、4.3、4.4 已完成。
 
 > 本计划以当前 Rust 代码为基线，同时对照 Python Hermes 的实际行为。4.5 的目标不是一次性复制所有 Python 工具，而是先建立一个安全、可测试、可恢复的最小工具闭环。
@@ -890,3 +890,40 @@ crates/sagent-protocol/
 ### 16.3 步骤 3 结论
 
 terminal 的执行和进程生命周期边界已经完成，但危险命令还没有等待用户审批。下一步进入步骤 4：实现 `ApprovalManager`，接入 Once、Session、Always、Deny、超时、interrupt 和重复 resolve。
+
+## 17. 步骤 4 执行记录
+
+执行日期：2026-09-05
+状态：基础审批闭环已完成
+
+### 17.1 已完成内容
+
+- 新增 `sagent-runtime::ApprovalRequest`、`ApprovalOutcome` 和 `ApprovalManager`；
+- pending approval 归属于单个 `SessionActor`，不使用进程级全局可变队列；
+- 审批 waiter 使用 oneshot + `CancellationToken`，Actor 不会因为等待审批而停止处理 mailbox；
+- `Once` 只允许当前调用，`Session` 保存当前 Session 的 policy key，`Always` 保存永久规则，`Deny` 直接结束工具审批；
+- 校验 `session_id`、`turn_id` 和 `approval_id`，错误 Session/Turn 不会消费 pending 请求；
+- 重复响应、过期响应和取消后的迟到响应返回稳定错误分类；
+- 支持 approval timeout、Session interrupt 和没有交互审批能力的客户端；
+- 新增 `SessionHandle::resolve_approval` 和 `SessionHandle::resume`；
+- 新增 `ApprovalRequested`、`ApprovalResolved`、`ApprovalTimedOut` RuntimeEvent；
+- approval 事件通过 Store 的通用 daemon event 入口持久化，仍由 SessionActor 保证写入顺序；
+- 新增 `sagent-tools::classify_tool`，将 `read_file`、`terminal` 和未知工具映射到 Allow/RequireApproval/Deny；
+- terminal 实际进程仍只由步骤 3 的执行器负责，审批通过后的工具回环接入留在步骤 5。
+
+### 17.2 测试与验证
+
+- ApprovalManager 覆盖 Once、Session、Always、Deny、timeout、cancel、Session mismatch 和重复 resolve；
+- Actor 覆盖 approval request → AwaitingApproval → ResolveApproval → ApprovalResolved；
+- runtime 覆盖 `interactive_approval=false` 的 fail-closed 路径；
+- `cargo test -p sagent-runtime`：通过；
+- `cargo test -p sagent-tools`：通过；
+- `cargo test -p sagent-store`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：待最终全工作区验证。
+
+### 17.3 当前边界
+
+- `Always` 规则目前保存在当前 Runtime 的明确策略集合中，Profile `config.yaml` 的跨进程恢复需要后续配置持久化接线；
+- Provider tool-call 聚合、工具结果消息写入和审批通过后重新执行 terminal 属于步骤 5；
+- `approval.respond` 的 JSON-RPC 分发属于 4.6，Ratatui 审批卡片属于 4.7。

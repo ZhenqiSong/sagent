@@ -1,0 +1,6 @@
+{
+  "name": "file-too-large",
+  "request": {"path": "fixtures/large.txt"},
+  "expected": {"ok": false, "error_kind": "file_too_large"},
+  "setup": {"generate_bytes": 1048577, "max_bytes": 1048576}
+}

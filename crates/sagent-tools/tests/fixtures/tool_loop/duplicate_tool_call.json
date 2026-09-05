@@ -1,0 +1,8 @@
+{
+  "name": "duplicate-tool-call",
+  "provider_events": [
+    {"type": "tool_call", "id": "call-duplicate", "name": "read_file", "arguments": {"path": "a.txt"}},
+    {"type": "tool_call", "id": "call-duplicate", "name": "read_file", "arguments": {"path": "b.txt"}}
+  ],
+  "expected": {"tool_executed": false, "error_kind": "duplicate_tool_call_id"}
+}

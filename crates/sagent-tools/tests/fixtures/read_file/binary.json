@@ -1,0 +1,6 @@
+{
+  "name": "binary-file",
+  "request": {"path": "fixtures/binary.bin"},
+  "expected": {"ok": false, "error_kind": "binary_file"},
+  "setup": {"generate_bytes": [0, 159, 146, 150]}
+}

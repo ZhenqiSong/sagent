@@ -1,0 +1,5 @@
+{
+  "name": "session",
+  "decision": "session",
+  "expected": {"current_tool_call_allowed": true, "next_same_policy_call_allowed": true, "other_session_allowed": false, "persist_policy": true}
+}

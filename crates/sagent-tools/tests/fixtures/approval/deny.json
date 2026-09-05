@@ -1,0 +1,5 @@
+{
+  "name": "deny",
+  "decision": "deny",
+  "expected": {"current_tool_call_allowed": false, "process_started": false, "turn_can_complete_normally": false}
+}

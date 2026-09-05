@@ -1075,6 +1075,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sagent-tools"
+version = "0.1.0"
+dependencies = [
+ "sagent-types",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "sagent-types"
 version = "0.1.0"
 dependencies = [

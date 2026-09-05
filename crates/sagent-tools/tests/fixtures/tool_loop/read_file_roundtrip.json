@@ -1,0 +1,8 @@
+{
+  "name": "read-file-roundtrip",
+  "provider_events": [
+    {"type": "tool_call", "id": "call-read-1", "name": "read_file", "arguments": {"path": "src/main.rs"}},
+    {"type": "finish", "reason": "tool_calls"}
+  ],
+  "expected_order": ["assistant_tool_call_persisted", "tool_started", "tool_completed", "tool_message_persisted", "provider_called_again", "assistant_final_persisted"]
+}

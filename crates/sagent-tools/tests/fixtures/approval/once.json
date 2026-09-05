@@ -1,0 +1,5 @@
+{
+  "name": "once",
+  "decision": "once",
+  "expected": {"current_tool_call_allowed": true, "next_same_policy_call_allowed": false, "persist_policy": false}
+}

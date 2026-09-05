@@ -1,0 +1,5 @@
+{
+  "name": "utf8",
+  "request": {"path": "src/main.rs", "offset": 1, "limit": 2000},
+  "expected": {"ok": true, "truncated": false, "error_kind": null}
+}

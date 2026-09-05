@@ -1,0 +1,5 @@
+{
+  "name": "invalid-tool-arguments",
+  "provider_events": [{"type": "tool_call", "id": "call-invalid", "name": "read_file", "arguments_text": "{not-json}"}],
+  "expected": {"tool_executed": false, "error_kind": "invalid_arguments"}
+}

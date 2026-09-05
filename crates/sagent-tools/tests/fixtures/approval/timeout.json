@@ -1,0 +1,5 @@
+{
+  "name": "timeout",
+  "decision": "timeout",
+  "expected": {"process_started": false, "event": "approval_timed_out", "turn_state": "failed"}
+}

@@ -1,0 +1,5 @@
+{
+  "name": "timeout",
+  "request": {"command": "long-running-test-command", "cwd": ".", "timeout_ms": 100, "output_limit": 1024},
+  "expected": {"ok": false, "error_kind": "timeout", "process_tree_terminated": true}
+}

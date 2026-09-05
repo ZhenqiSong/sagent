@@ -1,0 +1,5 @@
+{
+  "name": "success",
+  "request": {"command": "printf sagent", "cwd": ".", "timeout_ms": 30000, "output_limit": 32768},
+  "expected": {"ok": true, "exit_code": 0, "truncated": false, "error_kind": null}
+}

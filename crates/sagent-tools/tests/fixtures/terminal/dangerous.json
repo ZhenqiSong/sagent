@@ -1,0 +1,5 @@
+{
+  "name": "dangerous-command",
+  "request": {"command": "rm -rf ./build", "cwd": "."},
+  "expected": {"process_started": false, "requires_approval": true, "error_kind": "approval_required"}
+}

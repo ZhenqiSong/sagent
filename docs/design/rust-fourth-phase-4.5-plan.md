@@ -754,3 +754,64 @@ crates/sagent-protocol/
 ```
 
 4.5 的实现顺序必须保持：先工具契约，再单工具，再 terminal，再 approval，再 Actor 回环，最后做 Store 恢复和端到端测试。不能先改 TUI 或 RPC 来反向决定工具行为。
+
+## 13. 步骤 0 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 13.1 已完成内容
+
+- 新增 `docs/design/rust-fourth-phase-4.5-tool-behavior.md`；
+- 固定 ToolCall、ToolResult、ApprovalRequest 的最小字段和关联规则；
+- 固定 read_file 的 root、symlink、binary、size、truncation 和 cancellation 行为；
+- 固定 terminal 的 approval、timeout、output limit、exit code 和 process-tree cancel 行为；
+- 固定 Once/Session/Always/Deny、approval timeout、错误 approval_id 和 interrupt 行为；
+- 固定 `assistant(tool_calls) → tool → assistant(final)` transcript 顺序；
+- 固定 assistant tool-call、tool message 和 daemon event 的持久化边界；
+- 固定 late event、重复 ToolCallId、重复 tool result 和 tool schema hash 规则；
+- 创建 `crates/sagent-tools/tests/fixtures/` 下的 read_file、terminal、approval、tool_loop fixture；
+- 未修改 Provider、Runtime、Store 生产逻辑。
+
+### 13.2 验证结果
+
+- 16 个 JSON fixture 通过 PowerShell JSON 解析校验；
+- `git diff --check`：通过；
+- fixture 不包含真实路径、API key 或用户数据；
+- 二进制和超大文件使用 fixture metadata 描述，由后续测试在临时目录动态生成。
+
+### 13.3 步骤 0 结论
+
+4.5 的工具行为边界已经冻结。下一步进入步骤 1：创建 `sagent-tools` crate，实现 `ToolDefinition`、`ToolRegistry`、schema canonicalization 和 `tool_schema_hash`。
+
+## 14. 步骤 1 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 14.1 已完成内容
+
+- 将 `crates/sagent-tools` 加入 workspace；
+- 新增 `ToolPermission`，明确 `read_only`、`approval_required` 和 `deny` 三种工具权限；
+- 新增 `ToolDefinition`，统一工具名称、描述、输入 JSON Schema、权限、超时和输出上限；
+- 新增 `ToolResult`，统一 `tool_call_id`、工具名、成功状态、结果文本、截断标记、退出码和错误分类；
+- `ToolResult::success`/`failure` 会在构造时限制文本长度，并在超限时追加稳定的截断标记；
+- 对工具名称、输入 schema、超时和输出上限做注册前校验；
+- 新增 `ToolRegistry`，支持注册、重复名称拒绝、名称查询、定义查询和未知工具错误；
+- 新增 OpenAI-compatible function schema 转换，不把内部权限和资源限制直接暴露给模型；
+- 新增 canonical JSON：对象键排序、数组顺序保留、工具按名称排序；
+- 新增 `tool_schema_hash`，将名称、描述、输入 schema、权限和资源限制纳入 SHA-256 fingerprint，供 generation 判断工具集合是否变化；
+- 重复注册失败时不覆盖原有定义；
+- 未实现具体工具执行、审批等待、Runtime 回环、Store 持久化或 RPC dispatch，保持步骤 1 的边界。
+
+### 14.2 测试与验证
+
+- `cargo test -p sagent-tools`：通过，13 个测试全部通过；
+- `cargo clippy -p sagent-tools --all-targets -- -D warnings`：通过；
+- `cargo test --workspace --quiet`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：通过。
+
+### 14.3 步骤 1 结论
+
+工具契约和稳定注册表已经完成。后续 `read_file`、terminal、approval 和 tool loop 可以依赖同一套定义、权限和 schema hash，不需要各自重复定义工具元数据。下一步进入步骤 2：实现 `read_file` 的 workspace root、路径安全、UTF-8/二进制识别、截断和取消。

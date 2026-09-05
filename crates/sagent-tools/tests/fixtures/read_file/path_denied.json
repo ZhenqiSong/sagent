@@ -1,0 +1,5 @@
+{
+  "name": "path-denied",
+  "request": {"path": "../../outside.txt"},
+  "expected": {"ok": false, "error_kind": "path_denied"}
+}

@@ -1,0 +1,5 @@
+{
+  "name": "chinese-and-emoji",
+  "request": {"path": "fixtures/chinese.txt", "offset": 1, "limit": 2000},
+  "expected": {"ok": true, "content_contains": "你好，Sagent 🦀", "truncated": false}
+}

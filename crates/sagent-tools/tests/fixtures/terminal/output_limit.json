@@ -1,0 +1,5 @@
+{
+  "name": "output-limit",
+  "request": {"command": "generate-large-output", "cwd": ".", "timeout_ms": 30000, "output_limit": 64},
+  "expected": {"ok": true, "truncated": true, "error_kind": null}
+}

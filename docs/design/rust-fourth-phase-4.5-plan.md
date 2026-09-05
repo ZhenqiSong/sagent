@@ -851,3 +851,42 @@ crates/sagent-protocol/
 ### 15.3 步骤 2 结论
 
 `read_file` 的安全读取边界已经完成，后续 terminal 可以复用 `WorkspaceRoot`、`ReadFileLimits` 和 `ToolResult` 的有界输出约定。下一步进入步骤 3：实现 terminal process supervision，包括 cwd 校验、timeout、stdout/stderr 限制、进程树取消和清理。
+
+## 16. 步骤 3 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 16.1 已完成内容
+
+- 新增 `TerminalRequest` 和 `TerminalLimits`，统一 command、cwd、timeout 和 output limit；
+- 新增 `TerminalExecutor`，只执行前台 terminal 调用，不直接写 Store 或发布 RuntimeEvent；
+- terminal cwd 复用 `WorkspaceRoot`，增加目录解析并拒绝 root 外目录；
+- 新增 `CommandRisk` 和 `classify_command`，区分 Safe、RequireApproval 和 Deny；
+- `RequireApproval` 在本步骤直接返回 `approval_required`，不会启动进程，审批等待留给步骤 4；
+- 明确拒绝 shutdown、reboot、mkfs、diskpart 和格式化系统盘等命令；
+- 新增 `ProcessSupervisor`，按 ToolCallId 跟踪活动进程并在结束时注销；
+- POSIX 使用独立 process group，Windows 使用 Job Object，并保留 `taskkill /T /F` fallback；
+- timeout 和 CancellationToken 都会终止进程树，再返回结构化结果；
+- stdout/stderr 并行读取并设置有界输出，不因管道缓冲区满而阻塞；
+- terminal 子进程使用脱敏环境，不继承 provider API key、token、password、secret 和 private key；
+- 非零退出、spawn failure、timeout、cancelled、path denied 和 approval required 均有稳定 `error_kind`；
+- 不实现后台 process RPC、ApprovalManager、Store、Runtime Actor、RPC dispatch 或 TUI。
+
+### 16.2 测试与验证
+
+- 安全命令成功和 exit code 0；
+- 非零退出返回 `non_zero_exit` 和退出码；
+- cwd 越界在 spawn 前返回 `path_denied`；
+- 危险命令在审批前不启动进程；
+- 输出超过上限时设置 `truncated`；
+- timeout 和 CancellationToken 都能终止执行并清空 supervisor；
+- provider API key 不进入子进程环境；
+- `cargo test -p sagent-tools`：通过，30 个测试全部通过；
+- `cargo test --workspace --quiet`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：通过。
+
+### 16.3 步骤 3 结论
+
+terminal 的执行和进程生命周期边界已经完成，但危险命令还没有等待用户审批。下一步进入步骤 4：实现 `ApprovalManager`，接入 Once、Session、Always、Deny、超时、interrupt 和重复 resolve。

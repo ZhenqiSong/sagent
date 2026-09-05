@@ -186,7 +186,9 @@ impl ReadFileService {
             WorkspaceError::EmptyPath => ("invalid_path", "文件路径不能为空"),
             WorkspaceError::PathDenied => ("path_denied", "文件路径不在 workspace root 内"),
             WorkspaceError::PathNotFound => ("not_found", "文件不存在"),
-            WorkspaceError::NotRegularFile => ("not_file", "目标不是普通文件"),
+            WorkspaceError::NotRegularFile | WorkspaceError::NotDirectory => {
+                ("not_file", "目标不是普通文件")
+            }
             WorkspaceError::RootNotFound | WorkspaceError::RootNotDirectory => {
                 ("workspace_invalid", "workspace root 无效")
             }

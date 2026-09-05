@@ -27,6 +27,8 @@ pub enum WorkspaceError {
     PathNotFound,
     #[error("目标不是普通文件")]
     NotRegularFile,
+    #[error("目标不是目录")]
+    NotDirectory,
     #[error("文件系统操作失败：{0:?}")]
     Io(ErrorKind),
 }
@@ -52,6 +54,22 @@ impl WorkspaceRoot {
 
     /// 解析请求路径，并拒绝 root 外路径与逃逸的符号链接。
     pub fn resolve(&self, requested: impl AsRef<Path>) -> Result<PathBuf, WorkspaceError> {
+        self.resolve_kind(requested, false)
+    }
+
+    /// 解析可作为 terminal `cwd` 的目录。
+    pub fn resolve_directory(
+        &self,
+        requested: impl AsRef<Path>,
+    ) -> Result<PathBuf, WorkspaceError> {
+        self.resolve_kind(requested, true)
+    }
+
+    fn resolve_kind(
+        &self,
+        requested: impl AsRef<Path>,
+        directory: bool,
+    ) -> Result<PathBuf, WorkspaceError> {
         let requested = requested.as_ref();
         if requested.as_os_str().is_empty() {
             return Err(WorkspaceError::EmptyPath);
@@ -78,7 +96,10 @@ impl WorkspaceRoot {
             ErrorKind::NotFound => WorkspaceError::PathNotFound,
             kind => WorkspaceError::Io(kind),
         })?;
-        if !metadata.is_file() {
+        if directory && !metadata.is_dir() {
+            return Err(WorkspaceError::NotDirectory);
+        }
+        if !directory && !metadata.is_file() {
             return Err(WorkspaceError::NotRegularFile);
         }
         Ok(canonical)
@@ -120,6 +141,14 @@ mod tests {
         assert_eq!(
             root.resolve("ok.txt").unwrap(),
             fs::canonicalize(directory.join("ok.txt")).unwrap()
+        );
+        assert_eq!(
+            root.resolve_directory(".").unwrap(),
+            fs::canonicalize(&directory).unwrap()
+        );
+        assert_eq!(
+            root.resolve_directory("ok.txt"),
+            Err(WorkspaceError::NotDirectory)
         );
         assert_eq!(
             root.resolve("missing.txt"),

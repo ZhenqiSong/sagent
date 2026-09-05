@@ -526,3 +526,33 @@ Provider-neutral 契约已经明确，可以进入步骤 1。步骤 1 应只创�
 ### 14.3 步骤 2 结论
 
 Provider 的确定性测试边界已经建立。下一步进入步骤 3，实现独立的 SSE framing 和 JSON parser，将正常响应、半包 JSON、`[DONE]`、EOF 和错误状态转换为 `ProviderEvent`/`ProviderError`；步骤 3 仍不接入真实 endpoint。
+
+## 15. 步骤 3 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 15.1 已完成内容
+
+- 新增 `src/sse.rs`，实现增量 `SseDecoder` 和 `SseFrame`；
+- 支持 LF/CRLF、多个 `data:` 行合并、comment/keep-alive、event/id 字段和未知字段忽略；
+- 支持任意 TCP chunk 边界，包含 UTF-8 多字节字符拆分；
+- 增加 1 MiB SSE frame 大小上限，非法 UTF-8 和超限统一映射为 Protocol 错误；
+- 识别 OpenAI `[DONE]` 为 `SseEvent::Done`；
+- 新增 `src/openai_event.rs`，实现 OpenAI-compatible 文本 delta、tool-call delta、usage 和 finish_reason 解析；
+- 支持 `stop`、`length`、`tool_calls`、`content_filter` 和未知 finish reason；
+- 新增 `OpenAiStreamParser`，在 EOF 时要求同时存在 finish 和 `[DONE]`，否则返回 `IncompleteStream`；
+- OpenAI JSON 解析失败返回 Protocol 错误，不泄露完整响应体；
+- 新增 parser 单元测试和 fixture 分片集成测试。
+
+### 15.2 验证结果
+
+- `cargo fmt --all -- --check`：通过；
+- `cargo test -p sagent-provider --quiet`：通过，单元测试 14 个、Mock Provider/SSE 集成测试 6 个、SSE parser 集成测试 5 个；
+- `cargo clippy -p sagent-provider --all-targets -- -D warnings`：通过；
+- `cargo test --workspace --quiet`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过。
+
+### 15.3 步骤 3 结论
+
+SSE framing 和 OpenAI JSON 事件转换已经独立可测，尚未引入 HTTP client，也未接入真实 endpoint 或 SessionActor。下一步进入步骤 4，实现 OpenAI-compatible HTTP/SSE adapter，负责请求组装、HTTP 状态分类、stream 读取、取消和 parser 驱动。

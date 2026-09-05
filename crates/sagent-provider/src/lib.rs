@@ -10,9 +10,13 @@ mod types;
 
 /// 可复用的测试 Provider 和本地 SSE Server；不访问真实模型服务。
 pub mod mock;
+pub mod openai_event;
+pub mod sse;
 
 pub use error::ProviderError;
+pub use openai_event::{OpenAiStreamParser, parse_openai_frame};
 pub use provider::{ModelProvider, ProviderEventSink};
+pub use sse::{MAX_SSE_FRAME_SIZE, SseDecoder, SseEvent, SseFrame};
 pub use types::{
     ProviderEvent, ProviderFinish, ProviderMessage, ProviderRequest, ProviderRole, StopReason,
     TokenUsage,

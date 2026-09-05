@@ -999,6 +999,7 @@ name = "sagent-config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "sagent-provider",
  "sagent-types",
  "serde",
  "serde_yaml",

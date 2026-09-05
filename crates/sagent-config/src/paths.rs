@@ -20,6 +20,8 @@ pub struct SagentPaths {
     pub sagent_home: PathBuf,
     pub state_db: PathBuf,
     pub config_yaml: PathBuf,
+    /// 当前 Profile 的秘密配置文件；只用于读取 API key 等凭据。
+    pub env_file: PathBuf,
 }
 
 pub fn resolve_paths(
@@ -57,6 +59,7 @@ pub fn resolve_paths(
     Ok(SagentPaths {
         state_db: sagent_home.join("state.db"),
         config_yaml: sagent_home.join("config.yaml"),
+        env_file: sagent_home.join(".env"),
         sagent_home,
     })
 }

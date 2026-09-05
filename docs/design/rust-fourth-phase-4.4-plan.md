@@ -586,3 +586,35 @@ SSE framing 和 OpenAI JSON 事件转换已经独立可测，尚未引入 HTTP c
 ### 16.3 步骤 4 结论
 
 OpenAI-compatible HTTP/SSE adapter 已完成，Provider crate 现在可以在不依赖真实模型服务的情况下验证请求构造、流式事件、HTTP 错误和取消。下一步进入步骤 5：实现 Profile credential resolver，把 profile/provider/model/base URL/API key 配置安全地解析为 `OpenAiCompatibleProvider`，并补充真实配置到 Provider 的集成测试。
+
+## 17. 步骤 5 执行记录
+
+执行日期：2026-09-05
+状态：已完成
+
+### 17.1 已完成内容
+
+- 在 `sagent-config` 中新增 `src/provider.rs`；
+- `SagentPaths` 新增当前 Profile 的 `.env` 路径；
+- 支持从当前 Profile 的 `config.yaml` 读取 provider、model、base_url 和 api_key_env；
+- 支持 Python 兼容的 `providers.<name>.api/url/base_url/key_env` 配置形态；
+- 支持 model 字符串和 model 对象两种配置形态；
+- `.env` 非空值优先于同名进程环境变量，空值会回退到进程环境；
+- 命名 Profile 只读取自身 `config.yaml` 和 `.env`，不会跨 Profile 回退；
+- 校验缺失 provider、model、base_url、api_key_env、API key 和非法 Provider；
+- 成功配置会构造 `OpenAiCompatibleProvider`；
+- API key 只在 resolver 内部消费到 Provider，解析结果的密钥字段保持私有且 Debug 脱敏；
+- 新增 default Profile、命名 Profile 隔离、Python 配置兼容、覆盖参数、非法 URL、未知 Provider 和缺失配置测试；
+- `sagent-config` 仍不访问 SQLite、不改变 Session/Turn 状态。
+
+### 17.2 验证结果
+
+- `cargo fmt --all`：通过；
+- `cargo test -p sagent-config`：通过，23 个测试全部通过；
+- `cargo test --workspace --quiet`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：通过。
+
+### 17.3 步骤 5 结论
+
+Profile 配置和凭据已经可以安全解析为 OpenAI-compatible Provider，且 default/profile 配置隔离。下一步进入步骤 6：把 `ResolvedProvider` 接入 `SessionActor`，将 PromptSnapshot 转换为 ProviderRequest，并把 ProviderEvent 转换为 WorkerEvent。

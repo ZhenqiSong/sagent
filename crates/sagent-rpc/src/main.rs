@@ -4,8 +4,6 @@ mod args;
 mod connection;
 mod stdio;
 
-use std::io::{self, BufReader};
-
 use anyhow::{Context, Result};
 use clap::Parser;
 use sagent_config::{resolve_active_paths, resolve_paths};
@@ -43,15 +41,16 @@ impl SessionReadService for RpcService {
 }
 
 /// 进程入口只负责把启动错误写到 stderr，避免污染 stdout 协议流。
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
+    if let Err(error) = run().await {
         eprintln!("sagent-rpc: {error:#}");
         std::process::exit(1);
     }
 }
 
 /// 解析作用域、以只读模式打开数据库，并启动 NDJSON 请求循环。
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     let args = args::RpcArgs::parse();
     let paths = match args.profile.as_ref() {
         Some(profile) => resolve_paths(args.home.as_deref(), Some(profile))?,
@@ -65,11 +64,11 @@ fn run() -> Result<()> {
     let service = RpcService {
         sessions: SessionService::new(store),
     };
-    let stdin = io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-    let mut stdout = io::BufWriter::new(io::stdout().lock());
-    let mut connection = connection::ConnectionState::new();
-    stdio::run(&mut reader, &mut stdout, &service, &mut connection)
+    let reader = tokio::io::BufReader::new(tokio::io::stdin());
+    let writer = tokio::io::BufWriter::new(tokio::io::stdout());
+    let connection = connection::ConnectionState::new();
+    stdio::run(reader, writer, service, connection)
+        .await
         .context("stdio RPC 循环失败")?;
     Ok(())
 }

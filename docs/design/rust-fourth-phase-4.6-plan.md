@@ -183,6 +183,8 @@ DTO 全部 `#[serde(deny_unknown_fields)]`，params 只能是 JSON object，ID �
 
 ### 步骤 2：异步 stdio 和唯一 writer
 
+状态：已完成。
+
 **位置**：重构 `sagent-rpc/src/stdio.rs`、`main.rs`、Cargo 依赖。
 
 1. 启用 tokio `rt-multi-thread`、`io-util`、`sync`、`time`；
@@ -193,6 +195,13 @@ DTO 全部 `#[serde(deny_unknown_fields)]`，params 只能是 JSON object，ID �
 6. 保留 1 MiB frame 限制、parse error、notification 不响应。
 
 **验收**：并发 delta/response 的每一行都能独立解析；慢 client 不阻塞 interrupt 输入。
+
+完成记录：`sagent-rpc` 已改为 Tokio 异步入口，stdin reader、ConnectionState dispatcher
+和 stdout writer 分别运行在独立 task；请求与 outbound 帧均通过有界 channel 传递，stdout
+只由 writer task 写入。新增受限帧读取器，超出 1 MiB 后会继续消费到换行再处理下一帧；
+EOF、task 错误和 writer 失败会按 connection scope 取消/收口。现有 ready、parse error、
+notification、超大帧和多响应顺序测试已迁移到异步 transport 并通过工作区验证。Transient
+帧分类已预留，实际 delta 合并/丢弃策略由后续 event-forwarder 接入时实现。
 
 ### 步骤 3：RuntimeBootstrap 与 session.create
 

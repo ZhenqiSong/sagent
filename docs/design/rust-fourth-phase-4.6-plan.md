@@ -266,6 +266,16 @@ response 写到 stdout。bridge 仅转发 Runtime 提供的关联字段；Turn �
 
 **验收**：危险 terminal 在批准前不启动；Once 仅恢复当前调用；Deny/timeout/late response 不执行命令；interrupt 会取消 provider、工具和 waiter。
 
+完成记录：`session.interrupt` 与 `approval.respond` 已移入真实 feature 注册表。前者只要求
+成功 hello，后者还要求连接声明 `interactive_approval`；两个 gate 都由 `ConnectionState`
+复用 protocol 的 `MethodAccess` 规则。`SessionSupervisor::get_running` 专门服务控制面：它只
+返回已有 Actor，绝不会因为取消或审批请求启动闲置会话。interrupt 与 approval handler 仅把
+命令投递到 `SessionHandle` mailbox，绝不直接接触 CancellationToken、Store、ApprovalManager
+或 ToolWorker；Actor 仍是唯一能判定活跃 Turn、审批归属、过期与工具是否继续执行的组件。
+RuntimeError 会收敛为稳定协议错误；特别是无活动 Actor/审批不再有效统一返回目标 session 的
+`no_active_turn`。新增子进程集成测试覆盖 hello 前 interrupt、闲置会话不被控制请求启动、以及
+不具备审批 capability 的客户端被拒绝。
+
 ### 步骤 6：持久化 event replay
 
 **位置**：`method/session.rs`、Store DTO mapper、event bridge。
@@ -278,6 +288,14 @@ response 写到 stdout。bridge 仅转发 Runtime 提供的关联字段；Turn �
 6. sequence 全局递增但按 session 查询，不能假设本 session 连号。
 
 **验收**：重连后 tool/approval/终态顺序正确，其他 session 不串入。
+
+完成记录：`session.events.since` 已注册为 hello 后可调用的方法。它使用当前 Profile 的
+短生命周期只读 Store，先验证 session，再按 `session_id AND sequence > after_sequence`
+升序读取 daemon_events；因此既不会启动 Actor，也不会跨 Profile 或跨会话。默认页面为 50，
+请求值被限制在 1–200。返回 DTO 不嵌套 JSON-RPC envelope 或 SQLite 行；`has_more` 通过同一
+session 的 `latest_event_sequence` 与当前页最后 sequence 比较，正确处理全局 sequence 在不同
+session 之间不连续的事实。daemon_events 本身只保存可恢复事件，流式 delta 和 usage 没有持久化，
+因而不会被 replay。真实子进程测试覆盖升序分页、`has_more`、latest sequence 和大 limit 限制。
 
 ### 步骤 7：headless E2E 与故障测试
 
@@ -296,6 +314,15 @@ response 写到 stdout。bridge 仅转发 Runtime 提供的关联字段；Turn �
 9. 重启恢复旧 Turn fail-closed，新 prompt 可开始。
 
 所有自动 E2E 使用临时 home、fixture config/.env 与本地 Mock SSE，不使用真实 key；真实 Provider smoke 保持 opt-in。
+
+完成记录：新增 headless Mock SSE 子进程 E2E。测试在临时 Profile 中写入本地 endpoint、
+模型与 fixture-only key，并保持 stdin 连接直到收到 `turn.completed`；这很关键，因为 EOF
+按 transport 契约表示客户端断开并会停止 event bridge。测试验证真实 binary 的
+hello → prompt.submit → SSE delta → message.complete → turn.completed 顺序，特别断言 submit
+response 先于首个 delta；随后重开 state.db 验证最终 assistant 消息已经持久化。测试没有使用
+真实网络或密钥，且 stderr 必须为空。已有子进程测试共同覆盖解析错误、超大帧、握手、审批
+capability、控制请求、事件 replay、Profile 路径隔离和 EOF 行为；更复杂的工具审批 timeout 与
+并行 Actor 行为由 runtime 专项测试覆盖。
 
 ## 9. 推荐提交边界与质量门禁
 

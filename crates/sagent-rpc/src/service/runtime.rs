@@ -8,11 +8,12 @@ use std::{
 
 use sagent_protocol::{
     GatewayPingResult, GatewayService, ProtocolError, SessionCreateParams, SessionCreateResult,
-    SessionCreateService, SessionListParams, SessionListResult, SessionReadService,
-    SessionResumeParams, SessionResumeResult, SessionService, SessionSummaryDto,
+    SessionCreateService, SessionEventDto, SessionEventsSinceParams, SessionEventsSinceResult,
+    SessionListParams, SessionListResult, SessionReadService, SessionResumeParams,
+    SessionResumeResult, SessionService, SessionSummaryDto,
 };
 use sagent_runtime::SessionSupervisor;
-use sagent_store::{NewSession, Store};
+use sagent_store::{EventQuery, NewSession, Store};
 use sagent_types::SessionId;
 use uuid::Uuid;
 
@@ -98,6 +99,57 @@ impl RuntimePromptContext {
                 session_id.as_str().to_owned(),
             ))
         }
+    }
+
+    /// 从当前 Profile 的持久化事件日志补读一个稳定页面。
+    ///
+    /// 运行时 delta 从不写入 daemon_events，因而这里天然只会返回可恢复事实。sequence
+    /// 是全库递增的游标而非 session 内连续计数，`has_more` 必须与本 session 的最新值
+    /// 比较，不能假定下一条序号相邻。
+    pub fn events_since(
+        &self,
+        params: &SessionEventsSinceParams,
+    ) -> Result<SessionEventsSinceResult, ProtocolError> {
+        const DEFAULT_LIMIT: u32 = 50;
+        const MAX_LIMIT: u32 = 200;
+
+        let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        self.require_session(&params.session_id)?;
+        let store = Store::open_readonly(&self.state_db).map_err(store_error)?;
+        let events = store
+            .events_since(&EventQuery {
+                session_id: params.session_id.clone(),
+                after_sequence: params.after_sequence,
+                limit: i64::from(limit),
+            })
+            .map_err(store_error)?;
+        let latest_sequence = store
+            .latest_event_sequence(&params.session_id)
+            .map_err(store_error)?
+            .unwrap_or_default();
+        let last_sequence = events
+            .last()
+            .map(|event| event.sequence)
+            .unwrap_or(params.after_sequence);
+
+        Ok(SessionEventsSinceResult {
+            // DTO 映射隔离 Store 的内部记录，后续调整 SQLite 行结构不会改变线上协议。
+            events: events.into_iter().map(event_dto).collect(),
+            has_more: latest_sequence > last_sequence,
+            latest_sequence,
+        })
+    }
+}
+
+/// 将已提交的 daemon event 变为协议事件，而不是嵌套另一层 JSON-RPC envelope。
+fn event_dto(event: sagent_store::StoredDaemonEvent) -> SessionEventDto {
+    SessionEventDto {
+        sequence: event.sequence,
+        session_id: event.session_id,
+        turn_id: event.turn_id,
+        event_type: event.event_type,
+        payload: event.payload,
+        created_at: event.created_at,
     }
 }
 

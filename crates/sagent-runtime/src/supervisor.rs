@@ -105,6 +105,21 @@ impl SessionSupervisor {
         Ok(handle)
     }
 
+    /// 获取一个已经运行的会话 Actor，不会为控制请求创建新 Actor。
+    ///
+    /// `interrupt` 与 `resolve_approval` 只能影响已有活动 Turn；若在这里隐式启动
+    /// Actor，客户端的一次取消请求会改变会话运行状态且掩盖 `NoActiveTurn` 语义。
+    pub fn get_running(&self, session_id: &SessionId) -> Result<SessionHandle, RuntimeError> {
+        let mut guard = self.lock_sessions();
+        reap_stale(&mut guard);
+        let managed = guard.get(session_id).ok_or(RuntimeError::NoActiveTurn)?;
+        Ok(SessionHandle {
+            session_id: session_id.clone(),
+            command_tx: managed.command_tx.clone(),
+            events: managed.events.clone(),
+        })
+    }
+
     /// 停止并移除一个会话：发送 `Close`、等待 actor 结束，再删除条目。
     ///
     /// 会话本就不在运行时视为幂等成功。已发出的旧句柄此后返回 `ActorStopped`。

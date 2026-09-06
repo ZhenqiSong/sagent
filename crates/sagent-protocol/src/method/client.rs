@@ -136,6 +136,9 @@ mod tests {
                 "client.hello",
                 "session.create",
                 "prompt.submit",
+                "session.interrupt",
+                "approval.respond",
+                "session.events.since",
             ]
         );
         assert!(result.capabilities.interactive_approval);
@@ -144,12 +147,12 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_client_capability_is_reported_without_advertising_unwired_methods() {
+    fn non_interactive_client_still_sees_registered_approval_method_but_cannot_call_it() {
         let result = negotiate_hello(&hello(false)).expect("相同版本应协商成功");
 
         assert!(!result.capabilities.interactive_approval);
         assert!(
-            !result
+            result
                 .features
                 .iter()
                 .any(|feature| feature == "approval.respond")

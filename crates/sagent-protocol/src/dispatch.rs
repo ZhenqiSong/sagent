@@ -7,10 +7,12 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ClientHelloParams, ConnectionAccess, GatewayPingParams, GatewayPingResult, JsonRpcRequest,
-    JsonRpcResponse, PromptSubmitParams, PromptSubmitResult, ProtocolError, RequestId,
-    SessionCreateParams, SessionCreateService, SessionListParams, SessionReadService,
-    SessionResumeParams, negotiate_hello, planned_method_access,
+    ApprovalRespondParams, ApprovalRespondResult, ClientHelloParams, ConnectionAccess,
+    GatewayPingParams, GatewayPingResult, JsonRpcRequest, JsonRpcResponse, PromptSubmitParams,
+    PromptSubmitResult, ProtocolError, RequestId, SessionCreateParams, SessionCreateService,
+    SessionEventsSinceParams, SessionEventsSinceResult, SessionInterruptParams,
+    SessionInterruptResult, SessionListParams, SessionReadService, SessionResumeParams,
+    negotiate_hello, planned_method_access,
 };
 
 /// 网关基础能力的最小服务接口。
@@ -33,19 +35,63 @@ pub trait PromptService {
     }
 }
 
+/// 同步协议入口的控制方法兼容接口。
+///
+/// 真实 transport 会把控制请求投递到异步 Actor mailbox；默认值只用于让没有 Runtime
+/// 的 protocol 调用方保留已注册方法的稳定错误，不会执行取消或审批副作用。
+pub trait SessionControlService {
+    /// 同步调用方中断 Turn 的兼容入口。
+    fn interrupt_session(
+        &self,
+        _: &SessionInterruptParams,
+    ) -> Result<SessionInterruptResult, ProtocolError> {
+        Err(ProtocolError::RuntimeUnavailable(
+            "session.interrupt requires the RPC runtime".to_owned(),
+        ))
+    }
+
+    /// 同步调用方提交审批决定的兼容入口。
+    fn respond_approval(
+        &self,
+        _: &ApprovalRespondParams,
+    ) -> Result<ApprovalRespondResult, ProtocolError> {
+        Err(ProtocolError::RuntimeUnavailable(
+            "approval.respond requires the RPC runtime".to_owned(),
+        ))
+    }
+
+    /// 同步调用方补读持久化事件的兼容入口。
+    fn events_since_session(
+        &self,
+        _: &SessionEventsSinceParams,
+    ) -> Result<SessionEventsSinceResult, ProtocolError> {
+        Err(ProtocolError::RuntimeUnavailable(
+            "session.events.since requires the RPC runtime".to_owned(),
+        ))
+    }
+}
+
 /// 可被 JSON-RPC 入口直接分派的服务能力。
 ///
 /// 第三阶段的只读方法仍由同一 trait 提供；第四阶段仅额外加入不会启动 Actor 的
 /// `session.create`，避免 transport 为单个写方法引入第二套分发入口。
 pub trait DispatchService:
-    GatewayService + SessionReadService + SessionCreateService + PromptService
+    GatewayService + SessionReadService + SessionCreateService + PromptService + SessionControlService
 {
 }
 
 impl<T> PromptService for T where T: GatewayService + SessionReadService + SessionCreateService {}
+impl<T> SessionControlService for T where
+    T: GatewayService + SessionReadService + SessionCreateService
+{
+}
 
 impl<T> DispatchService for T where
-    T: GatewayService + SessionReadService + SessionCreateService + PromptService
+    T: GatewayService
+        + SessionReadService
+        + SessionCreateService
+        + PromptService
+        + SessionControlService
 {
 }
 
@@ -117,6 +163,7 @@ fn dispatch_request_with_access<S: DispatchService>(
         "gateway" => dispatch_gateway(action, request.params, service),
         "session" => dispatch_session(action, request.params, service),
         "prompt" => dispatch_prompt(action, request.params, service),
+        "approval" => dispatch_approval(action, request.params, service),
         _ => Err(ProtocolError::MethodNotFound(request.method)),
     }
 }
@@ -200,7 +247,33 @@ fn dispatch_session<S: DispatchService>(
             serde_json::to_value(service.resume_session(&params)?)
                 .map_err(|error| ProtocolError::Internal(error.to_string()))
         }
+        "interrupt" => {
+            let params: SessionInterruptParams = parse_params(params)?;
+            serde_json::to_value(service.interrupt_session(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
+        "events.since" => {
+            let params: SessionEventsSinceParams = parse_params(params)?;
+            serde_json::to_value(service.events_since_session(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
         _ => Err(ProtocolError::MethodNotFound(format!("session.{action}"))),
+    }
+}
+
+/// `approval.*` 的同步兼容分发；实际决策仍由 RPC Actor 入口处理。
+fn dispatch_approval<S: DispatchService>(
+    action: &str,
+    params: Option<Value>,
+    service: &S,
+) -> Result<Value, ProtocolError> {
+    match action {
+        "respond" => {
+            let params: ApprovalRespondParams = parse_params(params)?;
+            serde_json::to_value(service.respond_approval(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
+        _ => Err(ProtocolError::MethodNotFound(format!("approval.{action}"))),
     }
 }
 
@@ -398,7 +471,10 @@ mod tests {
                 "session.resume",
                 "client.hello",
                 "session.create",
-                "prompt.submit"
+                "prompt.submit",
+                "session.interrupt",
+                "approval.respond",
+                "session.events.since"
             ])
         );
         assert_eq!(result["capabilities"]["interactive_approval"], true);
@@ -412,6 +488,12 @@ mod tests {
             request.params = Some(match method.as_str() {
                 "gateway.ping" | "session.list" | "session.create" => json!({}),
                 "prompt.submit" => json!({"session_id": "missing", "text": "hello"}),
+                "session.interrupt" => json!({"session_id": "missing"}),
+                "approval.respond" => json!({
+                    "session_id": "missing", "turn_id": "missing",
+                    "approval_id": "missing", "decision": "deny"
+                }),
+                "session.events.since" => json!({"session_id": "missing"}),
                 "session.resume" => json!({"session_id": "missing"}),
                 "client.hello" => json!({
                     "protocol_version": 1,

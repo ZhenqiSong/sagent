@@ -56,15 +56,23 @@ const REGISTERED_METHODS: &[MethodSpec] = &[
         name: "prompt.submit",
         access: MethodAccess::HelloRequired,
     },
+    MethodSpec {
+        name: "session.interrupt",
+        access: MethodAccess::HelloRequired,
+    },
+    MethodSpec {
+        name: "approval.respond",
+        access: MethodAccess::InteractiveApprovalRequired,
+    },
+    MethodSpec {
+        name: "session.events.since",
+        access: MethodAccess::HelloRequired,
+    },
 ];
 
 /// 未来交互方法的访问规则先固定；它们在注册前绝不进入 feature list。
-pub fn planned_method_access(method: &str) -> Option<MethodAccess> {
-    match method {
-        "session.interrupt" | "session.events.since" => Some(MethodAccess::HelloRequired),
-        "approval.respond" => Some(MethodAccess::InteractiveApprovalRequired),
-        _ => None,
-    }
+pub fn planned_method_access(_: &str) -> Option<MethodAccess> {
+    None
 }
 
 /// 返回当前真实可调用的方法，顺序是线上协议的一部分。
@@ -137,7 +145,7 @@ impl ConnectionAccess {
 mod tests {
     use sagent_types::{ClientCapabilities, ClientId, ClientSurface};
 
-    use super::{ConnectionAccess, MethodAccess, planned_method_access, registered_features};
+    use super::{ConnectionAccess, MethodAccess, registered_features, registered_method};
     use crate::ProtocolError;
 
     fn client(interactive_approval: bool) -> ClientCapabilities {
@@ -160,7 +168,10 @@ mod tests {
                 "session.resume",
                 "client.hello",
                 "session.create",
-                "prompt.submit"
+                "prompt.submit",
+                "session.interrupt",
+                "approval.respond",
+                "session.events.since"
             ]
         );
     }
@@ -190,7 +201,7 @@ mod tests {
                 .is_ok()
         );
         assert_eq!(
-            planned_method_access("approval.respond"),
+            registered_method("approval.respond").map(|spec| spec.access),
             Some(MethodAccess::InteractiveApprovalRequired)
         );
     }

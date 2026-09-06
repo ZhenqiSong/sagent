@@ -2,12 +2,13 @@
 
 use std::{
     fs,
-    io::Write,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
-use sagent_store::{NewMessage, NewSession, Store};
+use sagent_provider::mock::{MockSseChunk, MockSseServer};
+use sagent_store::{MessageQuery, NewDaemonEvent, NewMessage, NewSession, Store};
 use sagent_types::SessionId;
 use serde_json::{Value, json};
 
@@ -48,6 +49,22 @@ fn create_fixture(home: &Path) -> PathBuf {
             ))
             .expect("应能写入可见消息");
     }
+    // 这些均是可恢复事实；真实 stream delta 不进入 fixture，也不应进入 events.since。
+    for (event_type, created_at) in [
+        ("turn.started", "2026-09-01T10:01:00Z"),
+        ("tool.completed", "2026-09-01T10:01:30Z"),
+        ("turn.completed", "2026-09-01T10:02:00Z"),
+    ] {
+        store
+            .append_event(&NewDaemonEvent {
+                session_id: visible_id.clone(),
+                turn_id: None,
+                event_type: event_type.to_owned(),
+                payload: json!({"fixture": true}),
+                created_at: created_at.to_owned(),
+            })
+            .expect("应能写入可恢复 fixture 事件");
+    }
     store
         .create_session(&NewSession {
             id: archived_id.clone(),
@@ -83,6 +100,48 @@ fn run_rpc(home: &Path, profile: Option<&str>, input: &str) -> std::process::Out
         .write_all(input.as_bytes())
         .expect("应能写入 RPC 请求");
     child.wait_with_output().expect("应能等待 RPC 退出")
+}
+
+/// 保持 stdin 打开，直到收到指定终态事件。
+///
+/// EOF 代表客户端主动断开，transport 会停止 event bridge；流式 E2E 因而不能复用
+/// `run_rpc` 的“写完即关闭 stdin”模型，必须模拟一个仍在观察事件的真实客户端。
+fn run_rpc_until_event(home: &Path, input: &str, terminal_event: &str) -> (Vec<Value>, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sagent-rpc"))
+        .args(["--home", home.to_str().expect("临时路径必须是 UTF-8")])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("应能启动 sagent-rpc");
+    let mut stdin = child.stdin.take().expect("应有 stdin");
+    stdin
+        .write_all(input.as_bytes())
+        .expect("应能写入 RPC 请求");
+    stdin.flush().expect("应能刷新 RPC 请求");
+
+    let stdout = child.stdout.take().expect("应有 stdout");
+    let mut stdout = BufReader::new(stdout);
+    let mut frames = Vec::new();
+    loop {
+        let mut line = String::new();
+        let count = stdout.read_line(&mut line).expect("应能读取 NDJSON 输出");
+        assert_ne!(count, 0, "终态事件前 stdout 不应 EOF");
+        let frame: Value = serde_json::from_str(line.trim_end()).expect("每帧必须是 JSON");
+        let terminal = frame["params"]["type"] == terminal_event;
+        frames.push(frame);
+        if terminal {
+            break;
+        }
+    }
+    drop(stdin);
+    let output = child.wait_with_output().expect("应能等待 RPC 退出");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (frames, String::from_utf8_lossy(&output.stderr).into_owned())
 }
 
 fn output_frames(output: &[u8]) -> Vec<Value> {
@@ -180,7 +239,10 @@ fn stdio_protocol_negotiates_client_hello_before_read_only_requests() {
             "session.resume",
             "client.hello",
             "session.create",
-            "prompt.submit"
+            "prompt.submit",
+            "session.interrupt",
+            "approval.respond",
+            "session.events.since"
         ])
     );
     assert_eq!(
@@ -291,6 +353,146 @@ fn prompt_submit_validates_input_and_hides_unconfigured_provider_details() {
     assert_eq!(frames[3]["error"]["code"], json!(-32011));
     assert_eq!(frames[3]["error"]["message"], json!("runtime unavailable"));
     assert!(frames[3]["error"].get("data").is_none());
+    remove(&home);
+}
+
+#[test]
+fn control_requests_require_the_right_connection_state_and_an_active_turn() {
+    let home = test_home("control-gate");
+    remove(&home);
+    create_fixture(&home);
+    let input = concat!(
+        // hello 前不会因为 session_id 不存在或无 active actor 而泄露运行时状态。
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.interrupt\",\"params\":{\"session_id\":\"visible-session\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"client.hello\",\"params\":{\"protocol_version\":1,\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"surface\":\"tui\",\"capabilities\":{\"interactive_approval\":false,\"supports_stream_edits\":false}}}\n",
+        // 已持久化但未运行的会话不能被取消请求隐式启动。
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"session.interrupt\",\"params\":{\"session_id\":\"visible-session\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"approval.respond\",\"params\":{\"session_id\":\"visible-session\",\"turn_id\":\"turn-1\",\"approval_id\":\"approval-1\",\"decision\":\"deny\"}}\n",
+    );
+
+    let output = run_rpc(&home, None, input);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let frames = output_frames(&output.stdout);
+
+    assert_eq!(frames[1]["error"]["code"], json!(-32006));
+    assert_eq!(frames[3]["error"]["code"], json!(-32010));
+    assert_eq!(
+        frames[3]["error"]["data"],
+        json!({"session_id": "visible-session", "turn_id": null})
+    );
+    assert_eq!(frames[4]["error"]["code"], json!(-32008));
+    remove(&home);
+}
+
+#[test]
+fn events_since_replays_only_current_session_facts_in_sequence_order() {
+    let home = test_home("events-since");
+    remove(&home);
+    create_fixture(&home);
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.hello\",\"params\":{\"protocol_version\":1,\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"surface\":\"tui\",\"capabilities\":{\"interactive_approval\":false,\"supports_stream_edits\":false}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session.events.since\",\"params\":{\"session_id\":\"visible-session\",\"after_sequence\":0,\"limit\":2}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"session.events.since\",\"params\":{\"session_id\":\"visible-session\",\"after_sequence\":2,\"limit\":999}}\n",
+    );
+
+    let output = run_rpc(&home, None, input);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let frames = output_frames(&output.stdout);
+
+    let first_page = &frames[2]["result"];
+    assert_eq!(first_page["events"].as_array().map(Vec::len), Some(2));
+    assert_eq!(first_page["events"][0]["sequence"], json!(1));
+    assert_eq!(first_page["events"][1]["sequence"], json!(2));
+    assert_eq!(first_page["events"][0]["event_type"], json!("turn.started"));
+    assert_eq!(first_page["has_more"], json!(true));
+    assert_eq!(first_page["latest_sequence"], json!(3));
+
+    let second_page = &frames[3]["result"];
+    assert_eq!(second_page["events"].as_array().map(Vec::len), Some(1));
+    assert_eq!(second_page["events"][0]["sequence"], json!(3));
+    assert_eq!(second_page["has_more"], json!(false));
+    remove(&home);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mock_sse_drives_real_rpc_stream_and_persists_final_message() {
+    let home = test_home("mock-sse-e2e");
+    remove(&home);
+    fs::create_dir_all(&home).expect("应能创建临时 Profile");
+    let server = MockSseServer::spawn(vec![MockSseChunk::text(include_str!(
+        "../../sagent-provider/tests/fixtures/provider/normal_text.sse"
+    ))])
+    .await
+    .expect("应能启动本地 Mock SSE");
+    // 仅使用 fixture key；resolver 从当前临时 Profile 读取，不依赖开发机环境。
+    fs::write(
+        home.join("config.yaml"),
+        format!(
+            "provider: openai-compatible\nmodel: mock-model\nbase_url: {}\napi_key_env: SAGE_TEST_KEY\n",
+            server.url()
+        ),
+    )
+    .expect("应能写入临时 provider 配置");
+    fs::write(home.join(".env"), "SAGE_TEST_KEY=fixture-key\n").expect("应能写入临时凭据");
+    // session id 在 create 响应后才知道；为在同一 stdin 批次中提交 prompt，测试先
+    // 在同一 Profile 写入会话，实际 create → submit 串联由客户端状态机负责。
+    let session_id = SessionId::new("mock-sse-session");
+    let mut store = Store::open_readwrite(&home.join("state.db")).expect("应能打开状态库");
+    store
+        .create_session(&NewSession {
+            id: session_id.clone(),
+            source: Some("rpc-test".to_owned()),
+            model: Some("mock-model".to_owned()),
+            title: None,
+            started_at: "2026-09-06T00:00:00Z".to_owned(),
+        })
+        .expect("应能创建 E2E 会话");
+    drop(store);
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.hello\",\"params\":{\"protocol_version\":1,\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"surface\":\"tui\",\"capabilities\":{\"interactive_approval\":false,\"supports_stream_edits\":false}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"prompt.submit\",\"params\":{\"session_id\":\"mock-sse-session\",\"text\":\"你好\"}}\n",
+    )
+    .to_owned();
+    let home_for_process = home.clone();
+    let (frames, stderr) = tokio::task::spawn_blocking(move || {
+        run_rpc_until_event(&home_for_process, &input, "turn.completed")
+    })
+    .await
+    .expect("阻塞子进程任务不应 panic");
+
+    assert!(stderr.is_empty(), "stderr 不应泄露 fixture key 或诊断");
+    let submit = frames
+        .iter()
+        .position(|frame| frame["id"] == json!(2))
+        .expect("submit 必须有立即响应");
+    let first_delta = frames
+        .iter()
+        .position(|frame| frame["params"]["type"] == "message.delta")
+        .expect("Mock SSE 必须产生 delta");
+    assert!(submit < first_delta, "submit response 必须先于首个 delta");
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame["params"]["type"] == "message.complete")
+    );
+
+    server.wait().await.expect("Mock SSE 应服务一次请求");
+    let store = Store::open_readonly(&home.join("state.db")).expect("应能重开状态库");
+    let messages = store
+        .get_messages_for_display(&session_id, &MessageQuery::default())
+        .expect("应能读取持久化消息");
+    assert_eq!(
+        messages.last().map(|message| message.content.as_str()),
+        Some("你好，Sagent")
+    );
     remove(&home);
 }
 

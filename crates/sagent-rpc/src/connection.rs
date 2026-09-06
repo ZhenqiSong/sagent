@@ -33,12 +33,23 @@ impl ConnectionState {
     /// prompt 的参数和 Actor 调用都在 RPC 层异步处理，但 hello gate 仍复用 protocol
     /// 的唯一访问规则，避免同步和异步入口对同一连接产生不同的授权语义。
     pub fn require_prompt_submit(&self) -> Result<&ClientCapabilities, ProtocolError> {
-        self.access
-            .require("prompt.submit", MethodAccess::HelloRequired)?;
+        self.require_client("prompt.submit", MethodAccess::HelloRequired)
+    }
+
+    /// 按协议注册表验证交互方法，并返回同一连接已协商的能力快照。
+    ///
+    /// interrupt 与 approval 不能自行判断 capability，否则新增控制方法时容易与
+    /// protocol 的访问规则分叉；所有异步 handler 都经由这一条边界进入。
+    pub fn require_client(
+        &self,
+        method: &str,
+        access: MethodAccess,
+    ) -> Result<&ClientCapabilities, ProtocolError> {
+        self.access.require(method, access)?;
         self.access
             .client()
             .ok_or_else(|| ProtocolError::HandshakeRequired {
-                method: "prompt.submit".to_owned(),
+                method: method.to_owned(),
             })
     }
 

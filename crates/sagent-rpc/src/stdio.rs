@@ -2,11 +2,13 @@
 
 use std::{any::Any, io};
 
-use sagent_agent::{RequestId as RuntimeRequestId, UserInput};
+use sagent_agent::{ApprovalDecision, RequestId as RuntimeRequestId, UserInput};
 use sagent_protocol::{
+    ApprovalDecisionDto, ApprovalRespondParams, ApprovalRespondResult, ApprovalRespondStatus,
     DispatchService, EventParams, JsonRpcError, JsonRpcEvent, JsonRpcRequest, JsonRpcResponse,
-    PromptSubmitParams, PromptSubmitResult, PromptSubmitStatus, ProtocolError, ProtocolFeatures,
-    RequestId,
+    MethodAccess, PromptSubmitParams, PromptSubmitResult, PromptSubmitStatus, ProtocolError,
+    ProtocolFeatures, RequestId, SessionEventsSinceParams, SessionInterruptParams,
+    SessionInterruptResult, SessionInterruptStatus,
 };
 use sagent_runtime::RuntimeError;
 use serde::Serialize;
@@ -88,6 +90,20 @@ fn runtime_error(error: RuntimeError) -> ProtocolError {
         | RuntimeError::Approval(_) => {
             ProtocolError::Internal("runtime operation failed".to_owned())
         }
+    }
+}
+
+/// 控制方法可提供目标 Session，因此 `NoActiveTurn` 必须回传精确会话而非通用占位值。
+fn runtime_error_for_session(
+    error: RuntimeError,
+    session_id: &sagent_types::SessionId,
+) -> ProtocolError {
+    match error {
+        RuntimeError::NoActiveTurn | RuntimeError::Approval(_) => ProtocolError::NoActiveTurn {
+            session_id: session_id.as_str().to_owned(),
+            turn_id: None,
+        },
+        other => runtime_error(other),
     }
 }
 
@@ -226,6 +242,34 @@ async fn dispatcher_loop<S: DispatchService + Send + 'static>(
                     None => connection.dispatch(request, &service),
                 }
             }
+            InboundFrame::Request(request)
+                if matches!(
+                    request.method.as_str(),
+                    "session.interrupt" | "approval.respond"
+                ) =>
+            {
+                let runtime = (&service as &dyn Any)
+                    .downcast_ref::<crate::service::RuntimeService>()
+                    .map(crate::service::RuntimeService::prompt_context);
+                match runtime {
+                    Some(runtime) => {
+                        dispatch_control_request(request, runtime, &mut connection).await
+                    }
+                    // fake 不含 Actor；交给同步兼容入口保留 hello/capability gate。
+                    None => connection.dispatch(request, &service),
+                }
+            }
+            InboundFrame::Request(request) if request.method == "session.events.since" => {
+                let runtime = (&service as &dyn Any)
+                    .downcast_ref::<crate::service::RuntimeService>()
+                    .map(crate::service::RuntimeService::prompt_context);
+                match runtime {
+                    Some(runtime) => {
+                        dispatch_events_since_request(request, runtime, &mut connection)
+                    }
+                    None => connection.dispatch(request, &service),
+                }
+            }
             InboundFrame::Request(request) => connection.dispatch(request, &service),
             InboundFrame::Response(response) => Some(response),
         };
@@ -238,6 +282,130 @@ async fn dispatcher_loop<S: DispatchService + Send + 'static>(
         }
     }
     Ok(())
+}
+
+/// 处理持久化事件补读；它只读取短生命周期 Store，不需要启动或占用 SessionActor。
+fn dispatch_events_since_request(
+    request: JsonRpcRequest,
+    runtime: RuntimePromptContext,
+    connection: &mut ConnectionState,
+) -> Option<JsonRpcResponse<Value>> {
+    let id = request.id.clone();
+    let result = (|| {
+        validate_jsonrpc(&request)?;
+        connection.require_client("session.events.since", MethodAccess::HelloRequired)?;
+        let params: SessionEventsSinceParams = parse_rpc_params(request.params)?;
+        serde_json::to_value(runtime.events_since(&params)?)
+            .map_err(|error| ProtocolError::Internal(error.to_string()))
+    })();
+    id.map(|id| match result {
+        Ok(result) => JsonRpcResponse::success(id, result),
+        Err(error) => JsonRpcResponse::failure(id, error.to_jsonrpc()),
+    })
+}
+
+/// 异步处理只影响既有活动 Turn 的控制方法。
+///
+/// 此处不创建 Actor、不直接操作 CancellationToken/ApprovalManager。Actor 收到 mailbox
+/// 命令后才决定是否存在活跃 Turn、审批是否匹配及何时持久化终态。
+async fn dispatch_control_request(
+    request: JsonRpcRequest,
+    runtime: RuntimePromptContext,
+    connection: &mut ConnectionState,
+) -> Option<JsonRpcResponse<Value>> {
+    let id = request.id.clone();
+    let result = match request.method.as_str() {
+        "session.interrupt" => {
+            async {
+                validate_jsonrpc(&request)?;
+                connection.require_client("session.interrupt", MethodAccess::HelloRequired)?;
+                let params: SessionInterruptParams = parse_rpc_params(request.params)?;
+                let handle = active_handle(&runtime, &params.session_id)?;
+                handle
+                    .interrupt(RuntimeRequestId::new())
+                    .await
+                    .map_err(|error| runtime_error_for_session(error, &params.session_id))?;
+                serde_json::to_value(SessionInterruptResult {
+                    status: SessionInterruptStatus::Interrupted,
+                })
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+            }
+            .await
+        }
+        "approval.respond" => {
+            async {
+                validate_jsonrpc(&request)?;
+                connection.require_client(
+                    "approval.respond",
+                    MethodAccess::InteractiveApprovalRequired,
+                )?;
+                let params: ApprovalRespondParams = parse_rpc_params(request.params)?;
+                let handle = active_handle(&runtime, &params.session_id)?;
+                // turn_id 是客户端的定位信息，不能作为授权事实。Actor 以当前 active
+                // Turn 和 approval_id 为准，因而过期、串会话或重复审批都不能启动工具。
+                let _requested_turn = params.turn_id;
+                handle
+                    .resolve_approval(params.approval_id, approval_decision(params.decision))
+                    .await
+                    .map_err(|error| runtime_error_for_session(error, &params.session_id))?;
+                serde_json::to_value(ApprovalRespondResult {
+                    status: ApprovalRespondStatus::Accepted,
+                })
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+            }
+            .await
+        }
+        _ => Err(ProtocolError::MethodNotFound(request.method)),
+    };
+
+    id.map(|id| match result {
+        Ok(result) => JsonRpcResponse::success(id, result),
+        Err(error) => JsonRpcResponse::failure(id, error.to_jsonrpc()),
+    })
+}
+
+/// 获取运行中的 Actor；控制请求绝不将闲置会话变成运行中会话。
+fn active_handle(
+    runtime: &RuntimePromptContext,
+    session_id: &sagent_types::SessionId,
+) -> Result<sagent_runtime::SessionHandle, ProtocolError> {
+    runtime.require_session(session_id)?;
+    runtime
+        .supervisor()
+        .get_running(session_id)
+        .map_err(|error| runtime_error_for_session(error, session_id))
+}
+
+/// 将控制 DTO 显式映射为 agent 决策，避免 protocol 类型向 Actor 泄漏。
+fn approval_decision(decision: ApprovalDecisionDto) -> ApprovalDecision {
+    match decision {
+        ApprovalDecisionDto::Once => ApprovalDecision::Once,
+        ApprovalDecisionDto::Session => ApprovalDecision::Session,
+        ApprovalDecisionDto::Always => ApprovalDecision::Always,
+        ApprovalDecisionDto::Deny => ApprovalDecision::Deny,
+    }
+}
+
+/// 统一控制方法的 JSON-RPC version 校验。
+fn validate_jsonrpc(request: &JsonRpcRequest) -> Result<(), ProtocolError> {
+    if request.jsonrpc == "2.0" {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidRequest)
+    }
+}
+
+/// 解析任何 RPC handler 的对象参数；数组或标量不能绕过 DTO 的 deny_unknown_fields。
+fn parse_rpc_params<T: serde::de::DeserializeOwned>(
+    params: Option<Value>,
+) -> Result<T, ProtocolError> {
+    let params = params.unwrap_or_else(|| serde_json::json!({}));
+    if !params.is_object() {
+        return Err(ProtocolError::InvalidParams(
+            "params must be an object".to_owned(),
+        ));
+    }
+    serde_json::from_value(params).map_err(|error| ProtocolError::InvalidParams(error.to_string()))
 }
 
 /// 异步处理 `prompt.submit`，并用闸门维持 response → event 的协议顺序。

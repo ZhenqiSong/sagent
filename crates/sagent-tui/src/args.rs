@@ -17,10 +17,15 @@ pub struct TuiArgs {
     /// 具名 Profile；后续作为 `sagent-rpc --profile` 的受控参数。
     #[arg(long)]
     pub profile: Option<String>,
+    /// RPC 子进程的可执行文件路径；仅作为受控 argv 的第一个元素。
+    #[arg(long, default_value = "sagent-rpc")]
+    pub rpc_bin: PathBuf,
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use clap::Parser;
 
     use super::TuiArgs;
@@ -38,5 +43,6 @@ mod tests {
 
         assert_eq!(args.home, Some(r"D:\data\sagent".into()));
         assert_eq!(args.profile.as_deref(), Some("coder"));
+        assert_eq!(args.rpc_bin, PathBuf::from("sagent-rpc"));
     }
 }

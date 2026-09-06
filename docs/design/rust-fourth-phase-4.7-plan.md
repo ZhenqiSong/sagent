@@ -172,6 +172,12 @@ method=event   → 按 params.type 转为 RpcEvent Action
 
 测试：guard 的副作用用可注入 terminal backend 测试；Windows/macOS/Linux 用手动 smoke 验证 panic 后终端可用。
 
+完成记录：已引入 `ratatui`、`crossterm` 与为后续异步 client 预留的 `tokio`，实现
+`TerminalGuard`。它在进入时启用 raw mode、alternate screen、bracketed paste 和隐藏光标，
+在 Drop、部分初始化失败与 panic hook 中均尽力按反序恢复终端。空屏 loop 每 100ms 轮询
+Crossterm，`q` 与首次 `Ctrl-C` 被规范化为 reducer 的 `QuitRequested`；draw 仅接收不可变
+AppState。键盘映射通过纯单元测试覆盖；三平台的实际 terminal 恢复仍须在后续手动 smoke 中验证。
+
 ### 步骤 2：RPC 子进程 client 与握手
 
 1. 实现 NDJSON codec：一行一个 JSON，对超长/非法行返回连接错误；
@@ -182,6 +188,14 @@ method=event   → 按 params.type 转为 RpcEvent Action
 
 测试：使用 test child binary/fake stdio 验证 response 按 id 匹配、event 不会占用 response waiter、stdout 非 JSON 导致有界失败。
 
+完成记录：已新增 `rpc::codec` 与 `rpc::client`。`RpcClient::spawn` 仅将 `--home`、
+`--profile` 作为 `sagent-rpc` 的受控 argv，并分别独占子进程 stdin/stdout；NDJSON reader
+限制单帧最大 1 MiB，非法 JSON、EOF、未知或非数字 response id 都会断开连接并取消全部
+pending waiter。启动严格等待 `gateway.ready` 后再发送 `client.hello(surface=tui,
+interactive_approval=true)`；协商成功才使 reducer 进入 `Connected`。已用纯 transport 与
+response 路由测试覆盖单行编码、event/response 区分、超长帧和乱序 response。下一步接入
+session picker 前，实际终端可使用 `--rpc-bin` 指向本地 `sagent-rpc` 二进制进行手动握手 smoke。
+
 ### 步骤 3：session picker、create 与 resume
 
 1. hello 成功后发送 `session.list`；
@@ -191,6 +205,13 @@ method=event   → 按 params.type 转为 RpcEvent Action
 5. 不访问 SQLite，不从 UI 猜测消息可见性或压缩规则。
 
 测试：reducer 验证选择/新建/错误回滚；RPC fake 验证 create 后 resume 使用服务端返回的 session_id。
+
+完成记录：已为 `AppState` 增加仅供绘制的会话摘要、活动会话快照、transcript 和 picker
+overlay；新增 `app::controller`，它是唯一将 picker action 转换成 `session.list`、
+`session.create`、`session.resume` 调用的副作用层。新建路径严格使用服务端返回的
+`session_id` 再恢复；resume 的 messages 只映射为 ViewModel，TUI 不访问 SQLite 或重写
+可见性规则。Ratatui picker 支持方向键/j/k、Enter、n 与 Esc；测试覆盖空列表边界、
+不可信选择索引和服务端消息顺序映射。
 
 ### 步骤 4：composer、submit 与 streaming transcript
 
@@ -203,6 +224,13 @@ method=event   → 按 params.type 转为 RpcEvent Action
 
 测试：response 先于 delta、旧 turn delta 被忽略、同 session busy 错误不丢失 composer、CJK/emoji 宽度与长行换行稳定。
 
+完成记录：已增加 Unicode 字符索引 composer、`Ctrl-Enter` 提交、Enter 换行与一次性
+bracketed paste action；`prompt.submit` 成功后保存服务端 `turn_id` 并创建瞬态 stream buffer。
+终端 tick 会消费 RPC event，只有 session_id 与 turn_id 同时匹配时才追加 `message.delta`；
+`message.complete` 或 Turn 终态触发 `session.resume`，成功快照会替换 transcript 并清除
+临时 turn，避免把 delta 当作持久化消息或重复恢复。测试覆盖 Unicode 删除与旧 Turn delta
+忽略；真实 Provider streaming smoke 仍属于步骤 8 的 opt-in 验证。
+
 ### 步骤 5：interrupt、工具活动与 approval overlay
 
 1. 有 active Turn 时 `Ctrl-C` 发送 `session.interrupt`；重复按键在 pending interrupt 期间去重；
@@ -213,6 +241,12 @@ method=event   → 按 params.type 转为 RpcEvent Action
 6. `approval.timed_out`、`turn.interrupted`、`turn.failed` 必须关闭关联 overlay。
 
 测试：没有 approval capability 时不发送 approval.respond；Deny 只发 DTO 不执行工具；interrupt response 不等于 Turn 已结束。
+
+完成记录：已增加 active Turn 的 interrupt 去重标志、工具活动状态和 approval overlay。
+有活跃 Turn 时 Ctrl-C 只发送一次 `session.interrupt`，其成功响应不会提前清除 Turn；只有
+终态 event 才触发 resume。`approval.requested` 只消费 Runtime 的脱敏摘要，弹层将
+`1/2/3/0/Esc` 映射为 Once/Session/Always/Deny 的 `approval.respond` DTO，TUI 不执行工具。
+审批超时、审批已解决和匹配的 Turn 终态都会关闭弹层；提交失败保留弹层并显示错误。
 
 ### 步骤 6：恢复、重连与 ViewModel 一致性
 
@@ -225,6 +259,12 @@ method=event   → 按 params.type 转为 RpcEvent Action
 
 测试：模拟 EOF 后收到不连续 sequence；确认另一个 session 的 event 不进入当前 ViewModel；确认重连不会重复 transcript 条目。
 
+完成记录：终端收到 transport 断线后会返回保留 ViewModel 的 `TerminalExit::Reconnect`；
+入口按有界指数退避关闭旧 client、重启同一 Profile 的 RPC 子进程并重新 hello。恢复时先
+用 `session.resume` 替换 transcript，再按当前会话的 checkpoint 分页调用
+`session.events.since`；只接受严格大于 checkpoint 的同会话 sequence，并更新 checkpoint。
+临时 delta 和 active Turn 不参与回放，避免把未持久化文本伪造成历史。
+
 ### 步骤 7：渲染质量与可访问性
 
 1. 窄终端断点：隐藏侧栏，不截断 composer；
@@ -235,6 +275,11 @@ method=event   → 按 params.type 转为 RpcEvent Action
 
 测试：纯 layout 测试覆盖 40/80/160 列、超长 token、CJK/emoji；snapshot 只测试 ViewModel/布局关系，不冻结整张 ANSI 屏幕截图。
 
+完成记录：已引入 `unicode-width` 并实现按终端显示列宽的安全换行，中文、emoji 与长
+无空格 token 不会按 UTF-8 byte 截断。布局在窄于 40 列时压缩状态栏与快捷键提示，但
+始终保留 composer；transcript 每次仅拼接末尾 100 条，避免长会话使每个 redraw 全量
+复制历史。测试覆盖窄布局断点、显式换行、CJK/emoji 和长 token 的列宽边界。
+
 ### 步骤 8：端到端与手动验证
 
 1. 使用已有 `MockSseServer` 配置临时 Profile，启动真实 `sagent-tui` 与 `sagent-rpc`；
@@ -242,6 +287,10 @@ method=event   → 按 params.type 转为 RpcEvent Action
 3. 增加 interrupt、approval deny、断线重连的伪终端测试；
 4. Windows/macOS/Linux 手动检查 raw mode、alternate screen 和 Ctrl-C 恢复；
 5. 真实 Provider smoke 保持 opt-in，绝不进入默认测试。
+
+完成记录：默认测试已覆盖重连退避的指数增长与 30 秒上限，以及 stdout 断线时必须丢弃
+瞬态 active Turn/delta、同时保留 composer 的恢复契约。真实 Provider 与三平台 raw-mode
+smoke 仍保持人工 opt-in 验证，不能写入默认 `cargo test`。
 
 ## 6. 初始不实现的项目
 

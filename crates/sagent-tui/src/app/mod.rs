@@ -4,8 +4,14 @@
 //! terminal、子进程或数据库的测试环境中也能验证状态转移契约。
 
 mod action;
+mod controller;
 mod reducer;
 mod state;
 
-pub use action::AppAction;
-pub use state::AppState;
+pub use action::{AppAction, SelectionDirection};
+pub use controller::{handle_action, handle_rpc_event, load_sessions, restore_active_session};
+pub use reducer::reduce;
+pub use state::{
+    ActiveTurnView, AppState, ApprovalView, ConnectionStatus, Overlay, SessionView,
+    ToolActivityStatus, ToolActivityView, TranscriptEntry,
+};

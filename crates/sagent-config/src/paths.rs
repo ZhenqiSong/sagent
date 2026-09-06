@@ -17,13 +17,17 @@ use crate::{ProfileName, read_active_profile};
 /// 该结构只描述路径，不创建目录或文件，也不打开数据库。
 #[derive(Debug)]
 pub struct SagentPaths {
+    /// 当前 Profile 的根目录。
     pub sagent_home: PathBuf,
+    /// 会话数据库路径；open 时才会决定是否创建文件。
     pub state_db: PathBuf,
+    /// 非秘密 YAML 配置路径。
     pub config_yaml: PathBuf,
     /// 当前 Profile 的秘密配置文件；只用于读取 API key 等凭据。
     pub env_file: PathBuf,
 }
 
+/// 根据显式 home、环境变量和 Profile 名称解析所有文件路径。
 pub fn resolve_paths(
     home_override: Option<&Path>,
     profile: Option<&ProfileName>,
@@ -129,6 +133,7 @@ pub fn platform_default_home() -> PathBuf {
     home.join(".sagent")
 }
 
+/// 将可能已经指向命名 Profile 的路径折返到共享 Profile 根目录。
 pub fn profile_root(home: &Path) -> PathBuf {
     // `SAGENT_HOME` 可能已经指向 `<root>/profiles/<name>`。此时 profile 操作仍必须
     // 回到 `<root>`，否则会错误计算成 `<root>/profiles/<name>/profiles/<other>`。

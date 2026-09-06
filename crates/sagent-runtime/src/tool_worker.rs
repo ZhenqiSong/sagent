@@ -18,12 +18,19 @@ use crate::tool_dispatch::ToolDispatchPlan;
 /// 工具执行后回传给 Actor 的模型无关结果。
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ToolExecutionResult {
+    /// Provider 原始调用 ID，用于和 assistant tool call 配对。
     pub call_id: String,
+    /// 工具名称。
     pub name: String,
+    /// 工具是否成功完成。
     pub ok: bool,
+    /// 受输出限制后的正文。
     pub content: String,
+    /// 是否丢弃了超出上限的输出。
     pub truncated: bool,
+    /// 进程退出码；非进程工具通常为空。
     pub exit_code: Option<i32>,
+    /// 稳定的机器可读失败分类。
     pub error_kind: Option<String>,
 }
 

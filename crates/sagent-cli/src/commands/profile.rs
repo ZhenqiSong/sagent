@@ -20,8 +20,11 @@ use crate::{commands::CommandContext, output::print_output};
 /// `profile` 分组下的命令参数与处理器。
 #[derive(Debug, Subcommand)]
 pub enum ProfileCommand {
+    /// 列出根目录下可用 Profile。
     List,
+    /// 创建一个命名 Profile。
     Create { name: String },
+    /// 将命名 Profile 写为当前选择。
     Use { name: String },
 }
 

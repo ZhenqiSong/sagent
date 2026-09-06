@@ -115,10 +115,12 @@ pub fn attach_process_tree_guard(guard: &ProcessTreeGuard, pid: u32) -> std::io:
 }
 
 impl ProcessSupervisor {
+    /// 创建空的活动进程登记表。
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// 登记一个正在执行的工具调用。
     pub fn register(&self, tool_call_id: impl Into<String>) {
         self.active
             .lock()
@@ -126,6 +128,7 @@ impl ProcessSupervisor {
             .insert(tool_call_id.into());
     }
 
+    /// 移除已完成或已取消的工具调用。
     pub fn unregister(&self, tool_call_id: &str) {
         self.active
             .lock()
@@ -133,6 +136,7 @@ impl ProcessSupervisor {
             .remove(tool_call_id);
     }
 
+    /// 返回当前登记的活动进程数量。
     pub fn active_count(&self) -> usize {
         self.active.lock().expect("process registry poisoned").len()
     }
@@ -177,7 +181,9 @@ where
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct BoundedOutput {
+    /// 已解码且受限的输出文本。
     pub content: String,
+    /// 是否因达到上限而丢弃了部分输出。
     pub truncated: bool,
 }
 
@@ -309,6 +315,7 @@ pub async fn drain_output(
     tokio::join!(stdout, stderr)
 }
 
+/// 移除明显的密钥、令牌和密码变量，生成可传给子进程的环境快照。
 pub fn sanitize_environment(
     environment: impl IntoIterator<Item = (String, String)>,
 ) -> std::collections::HashMap<String, String> {

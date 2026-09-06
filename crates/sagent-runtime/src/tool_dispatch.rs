@@ -11,9 +11,13 @@ use crate::ToolCall;
 /// 已通过 registry 校验、可以交给工具 worker 的调用计划。
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ToolDispatchPlan {
+    /// Provider 请求的完整调用。
     pub call: ToolCall,
+    /// registry 声明的权限级别。
     pub permission: ToolPermission,
+    /// registry 声明的超时限制。
     pub timeout_ms: u64,
+    /// registry 声明的输出上限。
     pub output_limit: usize,
 }
 

@@ -29,6 +29,7 @@ pub struct ReadFileRequest {
 }
 
 impl ReadFileRequest {
+    /// 创建规范化的读取请求；零值会被提升为最小有效值。
     pub fn new(path: impl Into<String>, offset: usize, limit: usize) -> Self {
         Self {
             path: path.into(),
@@ -57,9 +58,13 @@ fn default_limit() -> usize {
 /// read_file 的文件和输出限制。
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ReadFileLimits {
+    /// 单文件最多读取的字节数。
     pub max_file_bytes: u64,
+    /// 返回内容最多保留的字符数。
     pub max_output_chars: usize,
+    /// 单次最多返回的行数。
     pub max_lines: usize,
+    /// 单行最多保留的字符数。
     pub max_line_chars: usize,
 }
 
@@ -82,14 +87,17 @@ pub struct ReadFileService {
 }
 
 impl ReadFileService {
+    /// 将 workspace 与读取限制绑定为一个无状态服务。
     pub fn new(workspace: WorkspaceRoot, limits: ReadFileLimits) -> Self {
         Self { workspace, limits }
     }
 
+    /// 返回该读取服务绑定的 workspace。
     pub fn workspace(&self) -> &WorkspaceRoot {
         &self.workspace
     }
 
+    /// 返回当前读取限制。
     pub fn limits(&self) -> &ReadFileLimits {
         &self.limits
     }

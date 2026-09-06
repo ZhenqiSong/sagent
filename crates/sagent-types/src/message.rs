@@ -1,3 +1,5 @@
+//! 从 SQLite 读取后供 CLI、Runtime 和协议层共享的消息 DTO。
+
 use serde::{Deserialize, Serialize};
 
 use crate::{MessageId, SessionId};
@@ -6,18 +8,31 @@ use crate::{MessageId, SessionId};
 pub struct StoredMessage {
     /// SQLite messages.id，对外保留强类型边界。
     pub id: MessageId,
+    /// 消息所属的会话。
     pub session_id: SessionId,
+    /// 逻辑角色，例如 user、assistant 或 tool。
     pub role: String,
+    /// 消息正文；工具结果也通过此字段进入模型上下文。
     pub content: String,
+    /// 数据库记录的创建时间。
     pub timestamp: Option<String>,
+    /// 工具结果关联的 Provider call id。
     pub tool_call_id: Option<String>,
+    /// 工具名称；普通消息为空。
     pub tool_name: Option<String>,
+    /// assistant 发起的工具调用 JSON。
     pub tool_calls: Option<String>,
+    /// Provider 返回的推理文本（如有）。
     pub reasoning: Option<String>,
+    /// Provider 的结束原因。
     pub finish_reason: Option<String>,
+    /// UI 展示类型。
     pub display_kind: Option<String>,
+    /// UI 展示所需的附加 JSON 元数据。
     pub display_metadata: Option<String>,
+    /// 是否属于当前可见消息链。
     pub active: bool,
+    /// 是否已被压缩归档。
     pub compacted: bool,
 }
 

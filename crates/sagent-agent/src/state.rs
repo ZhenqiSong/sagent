@@ -28,10 +28,15 @@ pub enum TurnState {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind", content = "message")]
 pub enum TurnFailure {
+    /// 用户输入或 Prompt 参数不合法。
     InvalidInput(String),
+    /// Provider 请求、网络或协议失败。
     Provider(String),
+    /// 工具校验、执行或审批失败。
     Tool(String),
+    /// 关键事实无法写入 Store。
     Persistence(String),
+    /// 取消令牌导致回合停止。
     Cancelled(String),
 }
 

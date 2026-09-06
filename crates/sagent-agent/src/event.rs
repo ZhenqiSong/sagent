@@ -8,13 +8,19 @@ use serde::{Deserialize, Serialize};
 /// SessionActor 对外发布的事实性事件。
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TurnEvent {
+    /// 用户输入已通过 busy 校验。
     PromptAccepted {
+        /// 发生事件的 Turn。
         turn_id: TurnId,
     },
+    /// 用户消息已完成 Store 提交。
     UserMessagePersisted {
+        /// 发生事件的 Turn。
         turn_id: TurnId,
+        /// 新消息的数据库 ID。
         message_id: MessageId,
     },
+    /// Prompt 快照已固定，可安全交给 Provider。
     PromptSnapshotReady {
         turn_id: TurnId,
         hash: String,

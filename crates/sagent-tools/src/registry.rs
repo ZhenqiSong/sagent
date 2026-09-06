@@ -16,6 +16,7 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
+    /// 创建空注册表。
     pub fn new() -> Self {
         Self::default()
     }
@@ -30,23 +31,28 @@ impl ToolRegistry {
         Ok(())
     }
 
+    /// 按名称查找工具，不改变注册表。
     pub fn get(&self, name: &str) -> Option<&ToolDefinition> {
         self.definitions.get(name)
     }
 
+    /// 按名称查找工具，找不到时返回稳定错误。
     pub fn require(&self, name: &str) -> Result<&ToolDefinition, RegistryError> {
         self.get(name)
             .ok_or_else(|| RegistryError::UnknownTool(name.to_owned()))
     }
 
+    /// 判断注册表是否包含指定工具。
     pub fn contains(&self, name: &str) -> bool {
         self.definitions.contains_key(name)
     }
 
+    /// 返回按字典序排列的工具名。
     pub fn names(&self) -> Vec<&str> {
         self.definitions.keys().map(String::as_str).collect()
     }
 
+    /// 返回按名称稳定排列的工具定义引用。
     pub fn definitions(&self) -> Vec<&ToolDefinition> {
         self.definitions.values().collect()
     }

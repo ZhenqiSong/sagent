@@ -12,6 +12,7 @@ pub struct OpenAiStreamParser {
 }
 
 impl OpenAiStreamParser {
+    /// 创建尚未接收任何 SSE frame 的解析器。
     pub fn new() -> Self {
         Self::default()
     }

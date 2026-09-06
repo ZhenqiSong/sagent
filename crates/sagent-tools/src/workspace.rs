@@ -48,6 +48,7 @@ impl WorkspaceRoot {
         Ok(Self { root })
     }
 
+    /// 返回 canonical 化后的安全根目录。
     pub fn root(&self) -> &Path {
         &self.root
     }

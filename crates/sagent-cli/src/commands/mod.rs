@@ -18,8 +18,11 @@ pub mod session;
 /// `execute` 函数的参数列表。
 #[derive(Clone, Debug)]
 pub struct CommandContext {
+    /// 用户显式指定的数据目录。
     pub home: Option<PathBuf>,
+    /// 用户显式指定的 Profile 名称。
     pub profile: Option<String>,
+    /// 本次命令的输出格式。
     pub format: OutputFormat,
 }
 
@@ -29,10 +32,12 @@ pub struct CommandContext {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Profile {
+        /// Profile 子命令。
         #[command(subcommand)]
         command: profile::ProfileCommand,
     },
     Session {
+        /// Session 子命令。
         #[command(subcommand)]
         command: session::SessionCommand,
     },

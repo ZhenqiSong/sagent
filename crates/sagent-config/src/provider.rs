@@ -18,6 +18,7 @@ pub struct ProviderConfig {
     pub provider: Option<String>,
     /// 可以是简单字符串，也可以是包含 `name`/`model` 等字段的对象。
     pub model: Option<ModelSetting>,
+    /// 全局 OpenAI-compatible endpoint。
     pub base_url: Option<String>,
     #[serde(alias = "key_env")]
     pub api_key_env: Option<String>,
@@ -50,23 +51,34 @@ impl ModelSetting {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ModelDetail {
+    /// 模型显示名或请求名。
     pub name: Option<String>,
+    /// 与 `name` 兼容的旧字段。
     pub model: Option<String>,
+    /// 覆盖顶层 Provider 名称。
     pub provider: Option<String>,
+    /// 覆盖顶层 endpoint。
     pub base_url: Option<String>,
+    /// 凭据环境变量名。
     pub api_key_env: Option<String>,
+    /// Python 配置兼容别名。
     pub key_env: Option<String>,
 }
 
 /// `providers.<name>` 中的一个用户自定义 Provider。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct UserProviderConfig {
+    /// UI 展示名称，不参与 endpoint 解析。
     pub name: Option<String>,
+    /// Python 配置中的 API endpoint 字段。
     pub api: Option<String>,
+    /// 兼容配置中的 URL 字段。
     pub url: Option<String>,
+    /// OpenAI-compatible endpoint。
     pub base_url: Option<String>,
     #[serde(alias = "key_env")]
     pub api_key_env: Option<String>,
+    /// Provider 使用的模型名。
     pub model: Option<String>,
 }
 
@@ -83,8 +95,11 @@ impl UserProviderConfig {
 ///
 /// API key 被消费进 `OpenAiCompatibleProvider`，不会作为公开字段暴露。
 pub struct ResolvedProvider {
+    /// 最终采用的 Provider 名称。
     pub provider: String,
+    /// 最终采用的模型名称。
     pub model: String,
+    /// 已绑定密钥的 HTTP 客户端。
     pub client: OpenAiCompatibleProvider,
 }
 
@@ -171,8 +186,11 @@ fn read_dotenv_value(path: &Path, name: &str) -> Result<Option<String>> {
 /// `api_key` 保持私有，避免调用方意外序列化或打印密钥；只有本模块负责把它消费进
 /// `OpenAiCompatibleProvider`。
 pub struct ResolvedProviderConfig {
+    /// 解析后的 Provider 名称。
     pub provider: String,
+    /// 解析后的模型名称。
     pub model: String,
+    /// 解析后的 endpoint。
     pub base_url: String,
     api_key: String,
 }

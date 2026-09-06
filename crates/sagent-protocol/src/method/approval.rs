@@ -17,15 +17,20 @@ pub enum ApprovalDecisionDto {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApprovalRespondParams {
+    /// 目标会话。
     pub session_id: SessionId,
+    /// 审批所属 Turn。
     pub turn_id: TurnId,
+    /// 待处理的审批请求。
     pub approval_id: ApprovalId,
+    /// 用户选择的审批范围。
     pub decision: ApprovalDecisionDto,
 }
 
 /// `approval.respond` 的立即受理结果。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalRespondResult {
+    /// 表示决定已进入 Runtime mailbox。
     pub status: ApprovalRespondStatus,
 }
 

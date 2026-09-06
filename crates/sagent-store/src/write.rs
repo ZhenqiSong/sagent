@@ -37,12 +37,19 @@ pub struct NewMessage {
     pub content: String,
     /// RFC 3339 格式的消息时间，由上层时钟提供。
     pub timestamp: String,
+    /// Provider 工具调用 ID；仅 tool 消息使用。
     pub tool_call_id: Option<String>,
+    /// 工具名称；普通消息为空。
     pub tool_name: Option<String>,
+    /// assistant 发起的工具调用 JSON。
     pub tool_calls: Option<String>,
+    /// Provider 推理文本。
     pub reasoning: Option<String>,
+    /// Provider 的完成原因。
     pub finish_reason: Option<String>,
+    /// 展示层消息分类。
     pub display_kind: Option<String>,
+    /// 展示层附加 JSON 元数据。
     pub display_metadata: Option<String>,
 }
 

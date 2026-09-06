@@ -11,6 +11,7 @@ use sagent_config::{resolve_active_paths, resolve_paths};
 use sagent_protocol::{GatewayPingResult, GatewayService, SessionReadService, SessionService};
 use sagent_store::Store;
 
+/// 将只读协议服务适配到 Store；transport 不直接接触数据库。
 struct RpcService {
     sessions: SessionService,
 }
@@ -40,6 +41,7 @@ impl SessionReadService for RpcService {
     }
 }
 
+/// 进程入口只负责把启动错误写到 stderr，避免污染 stdout 协议流。
 fn main() {
     if let Err(error) = run() {
         eprintln!("sagent-rpc: {error:#}");
@@ -47,6 +49,7 @@ fn main() {
     }
 }
 
+/// 解析作用域、以只读模式打开数据库，并启动 NDJSON 请求循环。
 fn run() -> Result<()> {
     let args = args::RpcArgs::parse();
     let paths = match args.profile.as_ref() {

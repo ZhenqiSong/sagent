@@ -21,10 +21,13 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(name = "sagent", version, about = "Sagent 命令行工具")]
 struct Cli {
+    /// 覆盖默认 Sagent 数据根目录；必须是绝对路径。
     #[arg(long, global = true)]
     home: Option<PathBuf>,
+    /// 选择要操作的 Profile。
     #[arg(long, global = true)]
     profile: Option<String>,
+    /// 选择人类可读文本或机器可读 JSON 输出。
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
     #[command(subcommand)]
@@ -49,8 +52,7 @@ fn run(cli: Cli) -> Result<()> {
 
 /// 将当前已知的 CLI 边界错误映射为稳定退出码。
 ///
-/// 具体业务错误仍由下层保留完整诊断；此处只决定脚本调用方的错误类别。后续引入
-/// `sagent-types` 的领域错误后，应改为基于类型而非文本分类。
+/// 具体业务错误仍由下层保留完整诊断；此处只决定脚本调用方的错误类别。
 fn exit_code(error: &anyhow::Error) -> ExitCode {
     let diagnostic = format!("{error:#}");
     let code = if diagnostic.contains("--home 必须是绝对路径")

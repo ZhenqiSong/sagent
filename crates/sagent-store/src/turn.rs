@@ -15,31 +15,49 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct NewGeneration {
+    /// 生成该上下文的会话。
     pub session_id: SessionId,
+    /// 会话内单调递增的上下文代数。
     pub generation: i64,
+    /// system prompt 的 fingerprint。
     pub system_hash: String,
+    /// 工具 schema 与权限限制的 fingerprint。
     pub tool_schema_hash: String,
+    /// 请求使用的模型。
     pub model_id: String,
+    /// Profile 配置版本。
     pub profile_revision: String,
+    /// 创建时间。
     pub created_at: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredGeneration {
+    /// generation 所属会话。
     pub session_id: SessionId,
+    /// 会话内 generation 编号。
     pub generation: i64,
+    /// system prompt fingerprint。
     pub system_hash: String,
+    /// tool schema fingerprint。
     pub tool_schema_hash: String,
+    /// generation 使用的模型。
     pub model_id: String,
+    /// 生成时的 Profile 版本。
     pub profile_revision: String,
+    /// generation 创建时间。
     pub created_at: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct StartTurn {
+    /// 新 Turn 的 UUID。
     pub turn_id: TurnId,
+    /// Turn 所属会话。
     pub session_id: SessionId,
+    /// 使用的 generation。
     pub generation: i64,
+    /// 开始时间。
     pub started_at: String,
 }
 
@@ -47,10 +65,15 @@ pub struct StartTurn {
 /// 不包含足以重新执行 Provider 或工具的可变运行时状态。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredRunningTurn {
+    /// 遗留 Turn 标识。
     pub turn_id: TurnId,
+    /// Turn 所属会话。
     pub session_id: SessionId,
+    /// 遗留 Turn 使用的 generation。
     pub generation: i64,
+    /// Turn 开始时间。
     pub started_at: String,
+    /// 已持久化的用户消息主键。
     pub user_message_id: Option<MessageId>,
 }
 

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PromptSubmitParams {
+    /// 目标会话。
     pub session_id: SessionId,
     /// Runtime 接线时拒绝空白输入。
     pub text: String,
@@ -22,7 +23,9 @@ pub enum PromptSubmitStatus {
 /// 立即响应；最终内容由 event 发送。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptSubmitResult {
+    /// 立即响应的状态；最终文本通过事件发送。
     pub status: PromptSubmitStatus,
+    /// 本次请求创建的 Turn。
     pub turn_id: TurnId,
 }
 

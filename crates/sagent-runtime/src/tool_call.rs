@@ -12,8 +12,11 @@ use thiserror::Error;
 /// 做映射；不能假设上游 ID 一定是本地 UUID。
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// Provider 原始调用标识。
     pub call_id: String,
+    /// 请求执行的工具名。
     pub name: String,
+    /// Provider 拼接完成的对象参数。
     pub arguments: Value,
 }
 

@@ -10,9 +10,13 @@ use thiserror::Error;
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PersistedTurnStatus {
+    /// Provider/工具仍可能继续工作的回合。
     Running,
+    /// 已写入最终 assistant 消息的回合。
     Completed,
+    /// 用户主动中断且没有最终回答的回合。
     Interrupted,
+    /// 因 Provider、工具或持久化错误终止的回合。
     Failed,
 }
 

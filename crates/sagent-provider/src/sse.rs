@@ -12,15 +12,20 @@ pub const MAX_SSE_FRAME_SIZE: usize = 1024 * 1024;
 /// 已完成的 SSE frame。
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SseFrame {
+    /// SSE `event` 字段；没有时由默认事件类型处理。
     pub event: Option<String>,
+    /// SSE `id` 字段，用于诊断，不参与模型语义。
     pub id: Option<String>,
+    /// 合并同一 frame 的所有 data 行。
     pub data: String,
 }
 
 /// SSE 解码后的事件；`Done` 是 OpenAI-compatible 流的特殊结束标记。
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SseEvent {
+    /// 一个已由空行分隔的普通 SSE frame。
     Frame(SseFrame),
+    /// OpenAI-compatible 流的 `[DONE]` 标记。
     Done,
 }
 
@@ -42,6 +47,8 @@ impl SseDecoder {
 
     /// 推入任意网络字节块，返回其中已经由空行结束的事件。
     pub fn push(&mut self, bytes: &[u8]) -> Result<Vec<SseEvent>, ProviderError> {
+        // 只有发现换行才消费 buffer；这样半个 UTF-8 字符或半行 JSON 会自然
+        // 留到下一个网络 chunk，而不会在当前调用中提前报错。
         self.buffer.extend_from_slice(bytes);
 
         let mut events = Vec::new();
@@ -116,6 +123,7 @@ impl SseDecoder {
     }
 
     fn dispatch_frame(&mut self) -> Result<Option<SseEvent>, ProviderError> {
+        // 取出当前 frame 的字段并清零大小计数，为下一帧重新开始限制。
         self.frame_size = 0;
         let data_lines = std::mem::take(&mut self.data_lines);
         let event = self.event.take();

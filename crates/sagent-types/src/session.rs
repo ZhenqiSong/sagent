@@ -1,18 +1,30 @@
+//! 面向列表和恢复接口的会话 DTO。
+
 use serde::{Deserialize, Serialize};
 
 use crate::{SessionId, StoredMessage};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSummary {
+    /// 会话唯一标识。
     pub id: SessionId,
+    /// 创建来源，例如 cli、tui 或 gateway。
     pub source: Option<String>,
+    /// 会话绑定的模型。
     pub model: Option<String>,
+    /// 用户可编辑的标题。
     pub title: Option<String>,
+    /// 会话开始时间。
     pub started_at: Option<String>,
+    /// 会话结束时间。
     pub ended_at: Option<String>,
+    /// 结束原因。
     pub end_reason: Option<String>,
+    /// 最近一条活动的时间。
     pub last_active: Option<String>,
+    /// 不超过固定长度的预览文本。
     pub preview: Option<String>,
+    /// 当前可见消息数。
     pub message_count: i64,
 }
 

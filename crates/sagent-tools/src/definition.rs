@@ -22,11 +22,17 @@ pub enum ToolPermission {
 /// 注册到 ToolRegistry 的稳定工具元数据。
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
+    /// 传给 Provider 的工具名称。
     pub name: String,
+    /// 模型可见的工具说明。
     pub description: String,
+    /// JSON Schema 格式的参数定义。
     pub input_schema: Value,
+    /// Runtime 使用的权限分类。
     pub permission: ToolPermission,
+    /// 单次执行的超时时间（毫秒）。
     pub timeout_ms: u64,
+    /// 返回给模型的最大字符数。
     pub output_limit: usize,
 }
 

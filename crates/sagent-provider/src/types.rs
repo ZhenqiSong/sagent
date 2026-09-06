@@ -20,15 +20,20 @@ pub enum ProviderRole {
 /// assistant 消息中需要原样重放给 Provider 的函数调用。
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderToolCall {
+    /// Provider 分配的调用 ID。
     pub id: String,
+    /// Provider 识别的函数名。
     pub name: String,
+    /// 已解析的 JSON 参数。
     pub arguments: Value,
 }
 
 /// 发送给 Provider 的一条消息。
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderMessage {
+    /// 消息角色。
     pub role: ProviderRole,
+    /// 消息文本。
     pub content: String,
     /// Tool 消息关联的调用 ID；普通消息为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,15 +49,23 @@ pub struct ProviderMessage {
 /// 自身的 RequestId 转换成稳定文本。API key 刻意不属于该结构，避免被序列化或日志记录。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderRequest {
+    /// 会话关联信息，仅用于诊断和事件关联。
     pub session_id: SessionId,
+    /// 当前回合。
     pub turn_id: TurnId,
+    /// Runtime 生成的请求标识文本。
     pub request_id: String,
+    /// Provider 模型名称。
     pub model: String,
+    /// 按模型上下文顺序排列的消息。
     pub messages: Vec<ProviderMessage>,
     /// 发送给模型的 OpenAI-compatible function schemas。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// 允许模型使用的工具 schema。
     pub tools: Vec<Value>,
+    /// 可选采样温度。
     pub temperature: Option<f32>,
+    /// 是否请求流式响应。
     pub stream: bool,
 }
 
@@ -88,7 +101,9 @@ pub enum StopReason {
 /// Provider 调用结束后的结构化结果。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderFinish {
+    /// Provider 宣布的停止原因。
     pub reason: StopReason,
+    /// Provider 返回的 token 统计。
     pub usage: Option<TokenUsage>,
     /// 上游 request id 只用于诊断和关联，不代表本地 RequestId。
     pub provider_request_id: Option<String>,
@@ -97,8 +112,11 @@ pub struct ProviderFinish {
 /// 模型调用的 token 使用统计。
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TokenUsage {
+    /// 输入 token 数量。
     pub prompt_tokens: u64,
+    /// 输出 token 数量。
     pub completion_tokens: u64,
+    /// 输入与输出总和。
     pub total_tokens: u64,
 }
 

@@ -179,7 +179,8 @@ fn stdio_protocol_negotiates_client_hello_before_read_only_requests() {
             "session.list",
             "session.resume",
             "client.hello",
-            "session.create"
+            "session.create",
+            "prompt.submit"
         ])
     );
     assert_eq!(
@@ -263,6 +264,33 @@ fn interactive_methods_are_gated_by_connection_hello_and_capability() {
     assert_eq!(frames[3]["error"]["code"], json!(-32006));
     assert_eq!(frames[4]["result"]["protocol_version"], json!(1));
     assert_eq!(frames[5]["error"]["code"], json!(-32008));
+    remove(&home);
+}
+
+#[test]
+fn prompt_submit_validates_input_and_hides_unconfigured_provider_details() {
+    let home = test_home("prompt-unconfigured");
+    remove(&home);
+    create_fixture(&home);
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.hello\",\"params\":{\"protocol_version\":1,\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"surface\":\"tui\",\"capabilities\":{\"interactive_approval\":false,\"supports_stream_edits\":false}}}\n",
+        // 空白文本属于协议输入错误，不能被“尚未配置 Provider”掩盖。
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"prompt.submit\",\"params\":{\"session_id\":\"visible-session\",\"text\":\"   \"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"prompt.submit\",\"params\":{\"session_id\":\"visible-session\",\"text\":\"hello\"}}\n",
+    );
+
+    let output = run_rpc(&home, None, input);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let frames = output_frames(&output.stdout);
+
+    assert_eq!(frames[2]["error"]["code"], json!(-32602));
+    assert_eq!(frames[3]["error"]["code"], json!(-32011));
+    assert_eq!(frames[3]["error"]["message"], json!("runtime unavailable"));
+    assert!(frames[3]["error"].get("data").is_none());
     remove(&home);
 }
 

@@ -50,14 +50,18 @@ const REGISTERED_METHODS: &[MethodSpec] = &[
         name: "session.create",
         access: MethodAccess::HelloRequired,
     },
+    // `prompt.submit` 的实际执行需要 Tokio Actor，因此由 sagent-rpc 的异步
+    // dispatcher 接管；登记在这里仍使 hello/ready 与连接访问规则保持同源。
+    MethodSpec {
+        name: "prompt.submit",
+        access: MethodAccess::HelloRequired,
+    },
 ];
 
 /// 未来交互方法的访问规则先固定；它们在注册前绝不进入 feature list。
 pub fn planned_method_access(method: &str) -> Option<MethodAccess> {
     match method {
-        "prompt.submit" | "session.interrupt" | "session.events.since" => {
-            Some(MethodAccess::HelloRequired)
-        }
+        "session.interrupt" | "session.events.since" => Some(MethodAccess::HelloRequired),
         "approval.respond" => Some(MethodAccess::InteractiveApprovalRequired),
         _ => None,
     }
@@ -155,7 +159,8 @@ mod tests {
                 "session.list",
                 "session.resume",
                 "client.hello",
-                "session.create"
+                "session.create",
+                "prompt.submit"
             ]
         );
     }

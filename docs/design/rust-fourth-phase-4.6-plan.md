@@ -240,6 +240,19 @@ runtime 配置尚未定义，bootstrap 不会猜测当前目录，read_file/term
 
 **验收**：response 在首个 delta 前到达；`message.complete` 发生时 final message 已在 Store；同 session 第二个 prompt busy，其他 session 可并行。
 
+完成记录：`prompt.submit` 已登记为真实 feature，但只有 `sagent-rpc` 的异步 transport
+会把它接入 `SessionSupervisor`；protocol crate 仍保持不依赖 Tokio 的同步兼容入口。RPC 在
+成功 hello 后校验对象参数和非空 `UserInput`，从不接受客户端提供的 home/profile/model/key。
+为避免把 rusqlite 的非 `Sync` 连接跨 `await` 使用，`RuntimeService` 会先提取只包含 DB 路径、
+Supervisor 和 provider 状态的 `RuntimePromptContext`，会话存在性检查使用短生命周期 Store，
+Actor 仍独占自己的可写 Store。提交前先订阅事件，bridge 由一次性 gate 暂停；response 先进入
+唯一 outbound FIFO 后才 release gate，因此不会遗漏早期事件，也不会让 delta 先于 submit
+response 写到 stdout。bridge 仅转发 Runtime 提供的关联字段；Turn 终态或连接取消时停止，不会
+隐式 interrupt Actor。provider 未配置、空白输入、未知会话与 Runtime 错误均映射为稳定 JSON-RPC
+错误，且不会把配置、SQLite 或 provider 细节暴露给客户端。集成测试覆盖 hello 后的空白输入优先
+校验与未配置 provider 的无泄露错误；真实流式顺序、busy 和 Store 完成事实将在步骤 7 用 Mock SSE
+完成端到端验收。
+
 ### 步骤 5：interrupt 和 approval.respond
 
 **位置**：`method/session.rs`、`method/approval.rs`、runtime service。

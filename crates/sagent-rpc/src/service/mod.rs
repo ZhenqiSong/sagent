@@ -5,4 +5,4 @@
 
 mod runtime;
 
-pub use runtime::RuntimeService;
+pub use runtime::{RuntimePromptContext, RuntimeService};

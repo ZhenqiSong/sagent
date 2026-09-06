@@ -2,6 +2,7 @@
 
 mod args;
 mod connection;
+mod event_bridge;
 mod runtime_bootstrap;
 mod service;
 mod stdio;

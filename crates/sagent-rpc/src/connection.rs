@@ -1,7 +1,8 @@
 //! 单条 RPC 连接的状态与状态化请求分发。
 
 use sagent_protocol::{
-    ConnectionAccess, DispatchService, JsonRpcRequest, JsonRpcResponse, dispatch_with_access,
+    ConnectionAccess, DispatchService, JsonRpcRequest, JsonRpcResponse, MethodAccess,
+    ProtocolError, dispatch_with_access,
 };
 use sagent_types::ClientCapabilities;
 use serde_json::Value;
@@ -22,9 +23,23 @@ impl ConnectionState {
     }
 
     /// 返回当前连接已经协商的客户端能力。
-    #[allow(dead_code)] // 后续 Runtime 接线会用它把 client capability 传给 SessionActor。
+    #[allow(dead_code)] // 当前由 require_prompt_submit 消费；保留只读观察口供连接测试与后续方法复用。
     pub fn client(&self) -> Option<&ClientCapabilities> {
         self.access.client()
+    }
+
+    /// 校验异步 `prompt.submit` 的连接前置条件。
+    ///
+    /// prompt 的参数和 Actor 调用都在 RPC 层异步处理，但 hello gate 仍复用 protocol
+    /// 的唯一访问规则，避免同步和异步入口对同一连接产生不同的授权语义。
+    pub fn require_prompt_submit(&self) -> Result<&ClientCapabilities, ProtocolError> {
+        self.access
+            .require("prompt.submit", MethodAccess::HelloRequired)?;
+        self.access
+            .client()
+            .ok_or_else(|| ProtocolError::HandshakeRequired {
+                method: "prompt.submit".to_owned(),
+            })
     }
 
     /// 将请求交给协议层，并复用当前连接的 capability 快照。

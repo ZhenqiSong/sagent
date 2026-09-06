@@ -1,11 +1,14 @@
 //! 标准输入输出上的异步 NDJSON JSON-RPC transport。
 
-use std::io;
+use std::{any::Any, io};
 
+use sagent_agent::{RequestId as RuntimeRequestId, UserInput};
 use sagent_protocol::{
     DispatchService, EventParams, JsonRpcError, JsonRpcEvent, JsonRpcRequest, JsonRpcResponse,
-    ProtocolError, ProtocolFeatures, RequestId,
+    PromptSubmitParams, PromptSubmitResult, PromptSubmitStatus, ProtocolError, ProtocolFeatures,
+    RequestId,
 };
+use sagent_runtime::RuntimeError;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
@@ -13,6 +16,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::connection::ConnectionState;
+use crate::{event_bridge, service::RuntimePromptContext};
 
 /// 单行请求最大字节数，防止 transport 无界读取。
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
@@ -21,7 +25,7 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 256;
 
 /// 输出帧的优先级；瞬态 delta 将由后续 event-forwarder 使用合并/丢弃策略。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FrameClass {
+pub(crate) enum FrameClass {
     /// response、审批和 Turn 终态不能丢失。
     Critical,
     /// delta、usage 等允许在拥塞时降级处理。
@@ -30,7 +34,7 @@ enum FrameClass {
 }
 
 /// 已经序列化完成的一条 stdout NDJSON 帧。
-struct OutboundFrame {
+pub(crate) struct OutboundFrame {
     bytes: Vec<u8>,
     class: FrameClass,
 }
@@ -45,8 +49,45 @@ impl OutboundFrame {
     }
 
     /// 创建不可丢弃的控制帧。
-    fn critical<T: Serialize>(value: &T) -> io::Result<Self> {
+    pub(crate) fn critical<T: Serialize>(value: &T) -> io::Result<Self> {
         Self::from_value(value, FrameClass::Critical)
+    }
+
+    /// Runtime event 的 delta 是瞬态内容；终态和持久化确认仍作为 critical，避免
+    /// 后续拥塞策略为了保护 stdout 而错误丢弃已提交的事实。
+    pub(crate) fn event(event: &sagent_runtime::RuntimeEvent) -> io::Result<Self> {
+        let class = match event.kind {
+            sagent_runtime::RuntimeEventKind::ModelTextDelta { .. }
+            | sagent_runtime::RuntimeEventKind::ModelUsage { .. }
+            | sagent_runtime::RuntimeEventKind::SubscriberLagged { .. } => FrameClass::Transient,
+            _ => FrameClass::Critical,
+        };
+        Self::from_value(&event_bridge::jsonrpc_event(event), class)
+    }
+}
+
+/// 将 Runtime 内部错误收敛为协议可承诺的错误分类，绝不把 SQLite/Provider 细节上送。
+fn runtime_error(error: RuntimeError) -> ProtocolError {
+    match error {
+        RuntimeError::Busy { session_id } => ProtocolError::SessionBusy {
+            session_id: session_id.as_str().to_owned(),
+        },
+        RuntimeError::MailboxFull | RuntimeError::MailboxClosed | RuntimeError::ActorStopped => {
+            ProtocolError::RuntimeUnavailable("session actor unavailable".to_owned())
+        }
+        RuntimeError::NoActiveTurn => ProtocolError::NoActiveTurn {
+            session_id: "unknown".to_owned(),
+            turn_id: None,
+        },
+        RuntimeError::Persistence(_) => {
+            ProtocolError::StoreUnavailable("persistence failed".to_owned())
+        }
+        RuntimeError::InvalidLifecycle(_)
+        | RuntimeError::RequiresTransition
+        | RuntimeError::WorkerFailed(_)
+        | RuntimeError::Approval(_) => {
+            ProtocolError::Internal("runtime operation failed".to_owned())
+        }
     }
 }
 
@@ -165,6 +206,26 @@ async fn dispatcher_loop<S: DispatchService + Send + 'static>(
         inbound = request_rx.recv() => inbound,
     } {
         let response = match inbound {
+            InboundFrame::Request(request) if request.method == "prompt.submit" => {
+                let runtime = (&service as &dyn Any)
+                    .downcast_ref::<crate::service::RuntimeService>()
+                    .map(crate::service::RuntimeService::prompt_context);
+                match runtime {
+                    Some(runtime) => {
+                        dispatch_prompt_request(
+                            request,
+                            runtime,
+                            &mut connection,
+                            outbound_tx.clone(),
+                            cancellation.child_token(),
+                        )
+                        .await
+                    }
+                    // 供 transport 单元测试使用的 fake 没有 Actor；仍交回 protocol，
+                    // 从而保留握手 gate 与稳定的 runtime_unavailable 兼容响应。
+                    None => connection.dispatch(request, &service),
+                }
+            }
             InboundFrame::Request(request) => connection.dispatch(request, &service),
             InboundFrame::Response(response) => Some(response),
         };
@@ -179,16 +240,114 @@ async fn dispatcher_loop<S: DispatchService + Send + 'static>(
     Ok(())
 }
 
+/// 异步处理 `prompt.submit`，并用闸门维持 response → event 的协议顺序。
+async fn dispatch_prompt_request(
+    request: JsonRpcRequest,
+    runtime: RuntimePromptContext,
+    connection: &mut ConnectionState,
+    outbound_tx: mpsc::Sender<OutboundFrame>,
+    cancellation: CancellationToken,
+) -> Option<JsonRpcResponse<Value>> {
+    let id = request.id.clone();
+    let result = async {
+        if request.jsonrpc != "2.0" {
+            return Err(ProtocolError::InvalidRequest);
+        }
+        let client = connection.require_prompt_submit()?.clone();
+        let params = parse_prompt_params(request.params)?;
+
+        // 先取得/订阅 Actor，再 submit；订阅的 receiver 会暂存首个事件，gate 在响应
+        // 入队之前不放行，因此既不会漏掉 PromptAccepted，也不会让 delta 抢在 response 前。
+        let input = UserInput::new(params.text)
+            .map_err(|_| ProtocolError::InvalidParams("text must not be blank".to_owned()))?;
+        // 输入契约优先于环境依赖：即使当前没有 Provider，也必须把空白输入明确报告为
+        // invalid params，而不是让客户端误以为补齐配置即可提交无效回合。
+        if !runtime.provider_ready() {
+            return Err(ProtocolError::RuntimeUnavailable(
+                "model provider is not configured".to_owned(),
+            ));
+        }
+        runtime.require_session(&params.session_id)?;
+        let handle = runtime
+            .supervisor()
+            .get_or_start(params.session_id)
+            .await
+            .map_err(runtime_error)?;
+        let gate = event_bridge::spawn(handle.subscribe(), outbound_tx.clone(), cancellation);
+        // capability 是连接级快照。每次 submit 前发送 Resume，确保复用的 Actor
+        // 不会沿用上一条已关闭连接的审批能力。
+        handle.resume(client).await.map_err(runtime_error)?;
+        let receipt = handle
+            .submit(RuntimeRequestId::new(), input)
+            .await
+            .map_err(runtime_error)?;
+        Ok((
+            PromptSubmitResult {
+                status: PromptSubmitStatus::Streaming,
+                turn_id: receipt.turn_id,
+            },
+            Some(gate),
+        ))
+    }
+    .await;
+
+    match (id, result) {
+        (Some(id), Ok((result, gate))) => {
+            // response 与 bridge 的 event 进入同一个 FIFO；先交给调用方发送 response，
+            // 随后由 dispatcher 放开 gate，保证 writer 可观察的顺序。
+            let response = match serde_json::to_value(result) {
+                Ok(result) => JsonRpcResponse::success(id, result),
+                Err(error) => {
+                    return Some(JsonRpcResponse::failure(
+                        id,
+                        ProtocolError::Internal(error.to_string()).to_jsonrpc(),
+                    ));
+                }
+            };
+            if let Some(gate) = gate {
+                // response 必须先进入与 event 共用的 FIFO，再放开 bridge；否则 Tokio
+                // 调度可能让已订阅的首个 delta 越过 response。
+                if outbound_tx
+                    .send(OutboundFrame::critical(&response).ok()?)
+                    .await
+                    .is_err()
+                {
+                    return None;
+                }
+                gate.release();
+                return None;
+            }
+            Some(response)
+        }
+        (Some(id), Err(error)) => Some(JsonRpcResponse::failure(id, error.to_jsonrpc())),
+        (None, Ok((_result, gate))) => {
+            if let Some(gate) = gate {
+                gate.release();
+            }
+            None
+        }
+        (None, Err(_)) => None,
+    }
+}
+
+/// `prompt.submit` 的 params 必须是对象，和 protocol 的其它方法维持同一输入边界。
+fn parse_prompt_params(params: Option<Value>) -> Result<PromptSubmitParams, ProtocolError> {
+    let params = params.unwrap_or_else(|| serde_json::json!({}));
+    if !params.is_object() {
+        return Err(ProtocolError::InvalidParams(
+            "params must be an object".to_owned(),
+        ));
+    }
+    serde_json::from_value(params).map_err(|error| ProtocolError::InvalidParams(error.to_string()))
+}
+
 /// writer task：stdout 的唯一所有者，保证每帧完整写入并 flush。
 async fn writer_loop<W: AsyncWrite + Unpin>(
     mut writer: W,
     mut outbound_rx: mpsc::Receiver<OutboundFrame>,
-    cancellation: CancellationToken,
+    _: CancellationToken,
 ) -> io::Result<()> {
-    while let Some(frame) = tokio::select! {
-        _ = cancellation.cancelled() => None,
-        frame = outbound_rx.recv() => frame,
-    } {
+    while let Some(frame) = outbound_rx.recv().await {
         // 当前步骤还没有产生 transient event，但读取 class 可以确保后续 delta
         // 降级策略接入时仍由 writer 统一处理，不会出现第二个 stdout 写入者。
         match frame.class {
@@ -264,6 +423,10 @@ where
                 writer_task.abort();
                 return dispatcher_result;
             }
+            // stdin EOF 后不应让仍在运行的 event bridge 持有 outbound sender；取消
+            // connection scope 只停止转发，不会向 Actor 投递 interrupt。writer 会继续
+            // 排空此前已经入队的 response/event，随后自然结束。
+            cancellation.cancel();
             join_result(writer_task.await)
         }
         result = &mut dispatcher_task => {
@@ -282,6 +445,9 @@ where
                 writer_task.abort();
                 return reader_result;
             }
+            // dispatcher 正常结束只意味着 request 流关闭；此时也要停止 bridge，保证
+            // outbound channel 能关闭并让唯一 writer 排空后退出。
+            cancellation.cancel();
             join_result(writer_task.await)
         }
     }

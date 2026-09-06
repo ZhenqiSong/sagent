@@ -72,13 +72,14 @@ mod tests {
                 "session.resume",
                 "client.hello",
                 "session.create",
+                "prompt.submit",
             ]
         );
         assert_eq!(
             serde_json::to_value(features).expect("能力集合应能序列化"),
             json!({
                 "protocol_version": 1,
-                "features": ["gateway.ping", "session.list", "session.resume", "client.hello", "session.create"]
+                "features": ["gateway.ping", "session.list", "session.resume", "client.hello", "session.create", "prompt.submit"]
             })
         );
     }

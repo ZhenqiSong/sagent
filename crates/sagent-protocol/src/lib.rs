@@ -10,7 +10,8 @@ pub mod method;
 pub mod service;
 
 pub use dispatch::{
-    DispatchService, GatewayService, dispatch, dispatch_with_access, request_with_number_id,
+    DispatchService, GatewayService, PromptService, dispatch, dispatch_with_access,
+    request_with_number_id,
 };
 pub use envelope::{
     EventParams, JsonRpcError, JsonRpcEvent, JsonRpcRequest, JsonRpcResponse, RequestId,

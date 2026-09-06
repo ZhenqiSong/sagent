@@ -28,6 +28,18 @@ pub struct RuntimeService {
     provider_ready: bool,
 }
 
+/// `prompt.submit` 所需的可跨 await 使用的运行时快照。
+///
+/// 它刻意不携带 `SessionService` 的只读 SQLite 连接：rusqlite Connection 不是 Sync，
+/// dispatcher 不能在 await Actor mailbox 时借用它。会话存在性检查改为短生命周期打开
+/// Store，Actor 则始终通过 Supervisor 获取自己的独占连接。
+#[derive(Clone)]
+pub struct RuntimePromptContext {
+    state_db: PathBuf,
+    supervisor: Arc<SessionSupervisor>,
+    provider_ready: bool,
+}
+
 impl RuntimeService {
     /// 将已初始化的只读服务、Actor factory 和当前模型组合为 RPC 适配层。
     pub fn new(
@@ -47,15 +59,45 @@ impl RuntimeService {
     }
 
     /// 返回当前 Profile 的 Supervisor；后续 submit/interrupt 只能经此句柄进入 Actor。
-    #[allow(dead_code)] // 步骤 4 的 prompt.submit 将通过该入口取得/启动 SessionActor。
     pub fn supervisor(&self) -> Arc<SessionSupervisor> {
         Arc::clone(&self.supervisor)
     }
 
-    /// Provider 是否已由 bootstrap 完成安全解析。
-    #[allow(dead_code)] // 步骤 4 会据此将未配置 Provider 映射为 runtime_unavailable。
+    /// 提取不含共享 SQLite Connection 的 prompt 运行时快照。
+    pub fn prompt_context(&self) -> RuntimePromptContext {
+        RuntimePromptContext {
+            state_db: self.state_db.clone(),
+            supervisor: self.supervisor(),
+            provider_ready: self.provider_ready,
+        }
+    }
+}
+
+impl RuntimePromptContext {
+    /// Provider 是否已在启动时通过安全的 Profile 配置解析。
     pub fn provider_ready(&self) -> bool {
         self.provider_ready
+    }
+
+    /// 返回 SessionActor 的唯一入口。
+    pub fn supervisor(&self) -> Arc<SessionSupervisor> {
+        Arc::clone(&self.supervisor)
+    }
+
+    /// 在启动 Actor 前验证会话已持久化到当前 Profile。
+    pub fn require_session(&self, session_id: &SessionId) -> Result<(), ProtocolError> {
+        let store = Store::open_readonly(&self.state_db).map_err(store_error)?;
+        if store
+            .get_session(session_id)
+            .map_err(store_error)?
+            .is_some()
+        {
+            Ok(())
+        } else {
+            Err(ProtocolError::SessionNotFound(
+                session_id.as_str().to_owned(),
+            ))
+        }
     }
 }
 

@@ -8,9 +8,9 @@ use serde_json::Value;
 
 use crate::{
     ClientHelloParams, ConnectionAccess, GatewayPingParams, GatewayPingResult, JsonRpcRequest,
-    JsonRpcResponse, ProtocolError, RequestId, SessionCreateParams, SessionCreateService,
-    SessionListParams, SessionReadService, SessionResumeParams, negotiate_hello,
-    planned_method_access,
+    JsonRpcResponse, PromptSubmitParams, PromptSubmitResult, ProtocolError, RequestId,
+    SessionCreateParams, SessionCreateService, SessionListParams, SessionReadService,
+    SessionResumeParams, negotiate_hello, planned_method_access,
 };
 
 /// 网关基础能力的最小服务接口。
@@ -19,13 +19,35 @@ pub trait GatewayService {
     fn ping(&self) -> GatewayPingResult;
 }
 
+/// 同步协议入口的 prompt 兼容接口。
+///
+/// 正式 RPC transport 会在进入该同步 dispatcher 前把 `prompt.submit` 转到
+/// SessionActor；这个默认实现仅让没有 Tokio runtime 的协议调用者得到明确、稳定的
+/// 失败，而不是错误地把已公告的方法报告为不存在。
+pub trait PromptService {
+    /// 同步调用方提交 prompt 的兼容入口。
+    fn submit_prompt(&self, _: &PromptSubmitParams) -> Result<PromptSubmitResult, ProtocolError> {
+        Err(ProtocolError::RuntimeUnavailable(
+            "prompt.submit requires the RPC runtime".to_owned(),
+        ))
+    }
+}
+
 /// 可被 JSON-RPC 入口直接分派的服务能力。
 ///
 /// 第三阶段的只读方法仍由同一 trait 提供；第四阶段仅额外加入不会启动 Actor 的
 /// `session.create`，避免 transport 为单个写方法引入第二套分发入口。
-pub trait DispatchService: GatewayService + SessionReadService + SessionCreateService {}
+pub trait DispatchService:
+    GatewayService + SessionReadService + SessionCreateService + PromptService
+{
+}
 
-impl<T> DispatchService for T where T: GatewayService + SessionReadService + SessionCreateService {}
+impl<T> PromptService for T where T: GatewayService + SessionReadService + SessionCreateService {}
+
+impl<T> DispatchService for T where
+    T: GatewayService + SessionReadService + SessionCreateService + PromptService
+{
+}
 
 /// 校验并分派一个请求。
 ///
@@ -94,7 +116,27 @@ fn dispatch_request_with_access<S: DispatchService>(
         "client" => dispatch_client(action, request.params, access),
         "gateway" => dispatch_gateway(action, request.params, service),
         "session" => dispatch_session(action, request.params, service),
+        "prompt" => dispatch_prompt(action, request.params, service),
         _ => Err(ProtocolError::MethodNotFound(request.method)),
+    }
+}
+
+/// `prompt.*` 的同步兼容分发。
+///
+/// 真实 stdio 路径会在 RPC 层异步执行本方法；保留此入口可确保协议公告与无 runtime
+/// 的调用方一致，并把参数校验集中在同一个 DTO 上。
+fn dispatch_prompt<S: DispatchService>(
+    action: &str,
+    params: Option<Value>,
+    service: &S,
+) -> Result<Value, ProtocolError> {
+    match action {
+        "submit" => {
+            let params: PromptSubmitParams = parse_params(params)?;
+            serde_json::to_value(service.submit_prompt(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
+        _ => Err(ProtocolError::MethodNotFound(format!("prompt.{action}"))),
     }
 }
 
@@ -355,7 +397,8 @@ mod tests {
                 "session.list",
                 "session.resume",
                 "client.hello",
-                "session.create"
+                "session.create",
+                "prompt.submit"
             ])
         );
         assert_eq!(result["capabilities"]["interactive_approval"], true);
@@ -368,6 +411,7 @@ mod tests {
             let mut request = request_with_number_id(9, method.clone());
             request.params = Some(match method.as_str() {
                 "gateway.ping" | "session.list" | "session.create" => json!({}),
+                "prompt.submit" => json!({"session_id": "missing", "text": "hello"}),
                 "session.resume" => json!({"session_id": "missing"}),
                 "client.hello" => json!({
                     "protocol_version": 1,

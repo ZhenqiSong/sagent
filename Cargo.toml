@@ -11,6 +11,7 @@ members = [
     "crates/sagent-runtime",
     "crates/sagent-provider",
     "crates/sagent-tools",
+    "crates/sagent-tui",
 ]
 
 [workspace.package]

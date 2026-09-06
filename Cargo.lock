@@ -1107,6 +1107,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sagent-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "sagent-protocol",
+ "sagent-types",
+ "serde",
+]
+
+[[package]]
 name = "sagent-types"
 version = "0.1.0"
 dependencies = [

@@ -132,7 +132,7 @@ pub enum RuntimeEventKind {
     },
     /// 工具 worker 已经通过权限检查并开始执行。
     ToolStarted {
-        tool_call_id: sagent_types::ToolCallId,
+        call_id: String,
         tool_name: String,
     },
     /// Provider 已生成一个尚未执行的工具调用；call_id 保留上游字符串。
@@ -142,7 +142,8 @@ pub enum RuntimeEventKind {
     },
     /// 工具 worker 已返回有界结果；详细正文通过 tool message 持久化。
     ToolCompleted {
-        tool_call_id: sagent_types::ToolCallId,
+        call_id: String,
+        tool_name: String,
         ok: bool,
         error_kind: Option<String>,
     },

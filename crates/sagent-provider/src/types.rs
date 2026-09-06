@@ -2,6 +2,7 @@
 
 use sagent_types::{SessionId, TurnId};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Provider 可理解的消息角色。
 ///
@@ -16,6 +17,14 @@ pub enum ProviderRole {
     Tool,
 }
 
+/// assistant 消息中需要原样重放给 Provider 的函数调用。
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProviderToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
 /// 发送给 Provider 的一条消息。
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderMessage {
@@ -24,6 +33,9 @@ pub struct ProviderMessage {
     /// Tool 消息关联的调用 ID；普通消息为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// assistant 消息发起的完整函数调用；tool 消息保持为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ProviderToolCall>,
 }
 
 /// 一次模型请求的 provider-neutral 表示。
@@ -37,6 +49,9 @@ pub struct ProviderRequest {
     pub request_id: String,
     pub model: String,
     pub messages: Vec<ProviderMessage>,
+    /// 发送给模型的 OpenAI-compatible function schemas。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<Value>,
     pub temperature: Option<f32>,
     pub stream: bool,
 }
@@ -47,7 +62,7 @@ pub struct ProviderRequest {
 pub enum ProviderEvent {
     /// 模型文本增量；Runtime 将其转换为瞬态 ModelTextDelta。
     TextDelta { text: String },
-    /// 工具调用增量只在 4.4 保留中性结构，实际执行属于 4.5。
+    /// 流式工具调用片段；Runtime 会先完整聚合并校验，再交由工具/审批回环执行。
     ToolCallDelta {
         call_id: String,
         name: Option<String>,
@@ -118,7 +133,9 @@ mod tests {
                 role: ProviderRole::User,
                 content: "你好".into(),
                 tool_call_id: None,
+                tool_calls: vec![],
             }],
+            tools: vec![],
             temperature: Some(0.2),
             stream: true,
         };

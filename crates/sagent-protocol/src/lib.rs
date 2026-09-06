@@ -14,12 +14,19 @@ pub use envelope::{
     EventParams, JsonRpcError, JsonRpcEvent, JsonRpcRequest, JsonRpcResponse, RequestId,
 };
 pub use error::{
-    INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, ProtocolError,
-    SESSION_NOT_FOUND, STORE_UNAVAILABLE,
+    CAPABILITY_NOT_GRANTED, HANDSHAKE_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST,
+    METHOD_NOT_FOUND, NO_ACTIVE_TURN, PARSE_ERROR, ProtocolError, RUNTIME_UNAVAILABLE,
+    SESSION_BUSY, SESSION_NOT_FOUND, STORE_UNAVAILABLE, UNSUPPORTED_PROTOCOL_VERSION,
 };
 pub use method::{
-    GatewayPingParams, GatewayPingResult, PROTOCOL_VERSION, ProtocolFeatures, SessionDetailDto,
-    SessionListParams, SessionListResult, SessionMessageDto, SessionResumeParams,
-    SessionResumeResult, SessionSummaryDto,
+    ApprovalDecisionDto, ApprovalRespondParams, ApprovalRespondResult, ApprovalRespondStatus,
+    ClientHelloCapabilities, ClientHelloParams, ClientHelloResult, ConnectionAccess,
+    GatewayPingParams, GatewayPingResult, MethodAccess, MethodSpec, PROTOCOL_VERSION,
+    PromptSubmitParams, PromptSubmitResult, PromptSubmitStatus, ProtocolFeatures,
+    SessionBusyPolicy, SessionCreateParams, SessionCreateResult, SessionDetailDto, SessionEventDto,
+    SessionEventsSinceParams, SessionEventsSinceResult, SessionInterruptParams,
+    SessionInterruptResult, SessionInterruptStatus, SessionListParams, SessionListResult,
+    SessionMessageDto, SessionPolicy, SessionResumeParams, SessionResumeResult, SessionSummaryDto,
+    negotiate_hello, planned_method_access, registered_features, registered_method,
 };
 pub use service::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, SessionReadService, SessionService};

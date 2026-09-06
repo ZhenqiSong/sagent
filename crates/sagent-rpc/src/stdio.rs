@@ -14,6 +14,8 @@ pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
 /// 写出一条完整 NDJSON 帧；调用者应确保 writer 是 stdout。
 pub fn write_frame<W: Write, T: Serialize>(writer: &mut W, value: &T) -> io::Result<()> {
+    // 先完整序列化再追加换行，保证每次 write 的协议单位都是一条 NDJSON record；
+    // 业务日志绝不能写 stdout，否则会破坏客户端的逐行解析。
     serde_json::to_writer(&mut *writer, value)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     writer.write_all(b"\n")?;
@@ -29,7 +31,7 @@ pub fn write_ready<W: Write>(writer: &mut W) -> io::Result<()> {
             method: "event".to_owned(),
             params: EventParams {
                 event_type: "gateway.ready".to_owned(),
-                payload: ProtocolFeatures::phase_three(),
+                payload: ProtocolFeatures::available(),
             },
         },
     )
@@ -41,6 +43,8 @@ pub fn run<R: BufRead, W: Write, S: DispatchService>(
     writer: &mut W,
     service: &S,
 ) -> io::Result<()> {
+    // ready 必须先于任何请求响应发送，让客户端即使还没有发 hello，也能发现
+    // 此 binary 当前真正注册的方法集合。
     write_ready(writer)?;
     let mut line = String::new();
 
@@ -80,6 +84,8 @@ pub fn run<R: BufRead, W: Write, S: DispatchService>(
         };
 
         if let Some(response) = dispatch(request, service) {
+            // dispatch 对 notification 返回 None；这里不补空行或 ACK，严格遵守
+            // JSON-RPC 的“通知没有响应”语义。
             write_frame(writer, &response)?;
         }
     }

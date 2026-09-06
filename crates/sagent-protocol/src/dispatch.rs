@@ -7,8 +7,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    GatewayPingParams, GatewayPingResult, JsonRpcRequest, JsonRpcResponse, ProtocolError,
-    RequestId, SessionListParams, SessionReadService, SessionResumeParams,
+    ClientHelloParams, GatewayPingParams, GatewayPingResult, JsonRpcRequest, JsonRpcResponse,
+    ProtocolError, RequestId, SessionListParams, SessionReadService, SessionResumeParams,
+    negotiate_hello,
 };
 
 /// 网关基础能力的最小服务接口。
@@ -53,9 +54,25 @@ fn dispatch_request<S: DispatchService>(
         .ok_or_else(|| ProtocolError::MethodNotFound(request.method.clone()))?;
 
     match namespace {
+        "client" => dispatch_client(action, request.params),
         "gateway" => dispatch_gateway(action, request.params, service),
         "session" => dispatch_session(action, request.params, service),
         _ => Err(ProtocolError::MethodNotFound(request.method)),
+    }
+}
+
+/// `client.*` 方法的二级分发入口。
+///
+/// hello 本身是纯协商，不读取 Store；连接对象将在下一步保存协商后的 capability，
+/// 并以该快照拦截后续交互请求。
+fn dispatch_client(action: &str, params: Option<Value>) -> Result<Value, ProtocolError> {
+    match action {
+        "hello" => {
+            let params: ClientHelloParams = parse_params(params)?;
+            serde_json::to_value(negotiate_hello(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
+        _ => Err(ProtocolError::MethodNotFound(format!("client.{action}"))),
     }
 }
 
@@ -125,10 +142,13 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{GatewayService, dispatch, request_with_number_id};
+    use sagent_types::{ClientId, ClientSurface};
+
     use crate::{
         GatewayPingResult, JsonRpcRequest, RequestId, SessionListParams, SessionListResult,
         SessionReadService, SessionResumeParams, SessionResumeResult,
         error::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND},
+        registered_features,
     };
 
     struct FakeGateway;
@@ -249,5 +269,62 @@ mod tests {
         assert!(value.get("result").is_none());
         assert!(value.get("error").is_some());
         assert_eq!(value.get("id"), Some(&Value::from(6)));
+    }
+
+    #[test]
+    fn hello_only_advertises_registered_features_without_touching_the_service() {
+        let mut request = request_with_number_id(8, "client.hello");
+        request.params = Some(json!({
+            "protocol_version": 1,
+            "client_id": ClientId::new(),
+            "surface": ClientSurface::Tui,
+            "capabilities": {
+                "interactive_approval": true,
+                "supports_stream_edits": false
+            }
+        }));
+
+        let response = dispatch(request, &FakeGateway).expect("带 id 的请求应返回响应");
+        let result = response.result.expect("hello 应协商成功");
+
+        assert_eq!(
+            result["features"],
+            json!([
+                "gateway.ping",
+                "session.list",
+                "session.resume",
+                "client.hello"
+            ])
+        );
+        assert_eq!(result["capabilities"]["interactive_approval"], true);
+        assert_eq!(result["session_policy"]["busy_policy"], "reject");
+    }
+
+    #[test]
+    fn every_advertised_feature_has_a_dispatch_entry() {
+        for method in registered_features() {
+            let mut request = request_with_number_id(9, method.clone());
+            request.params = Some(match method.as_str() {
+                "gateway.ping" | "session.list" => json!({}),
+                "session.resume" => json!({"session_id": "missing"}),
+                "client.hello" => json!({
+                    "protocol_version": 1,
+                    "client_id": ClientId::new(),
+                    "surface": ClientSurface::Api,
+                    "capabilities": {
+                        "interactive_approval": false,
+                        "supports_stream_edits": false
+                    }
+                }),
+                _ => unreachable!("注册表只应包含已知方法"),
+            });
+
+            let response = dispatch(request, &FakeGateway).expect("带 id 的请求应得到响应");
+            assert_ne!(
+                response.error.as_ref().map(|error| error.code),
+                Some(METHOD_NOT_FOUND),
+                "公告的方法 {method} 必须有分发入口"
+            );
+        }
     }
 }

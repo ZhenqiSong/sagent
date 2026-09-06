@@ -81,7 +81,9 @@ mod tests {
                 role: ProviderRole::User,
                 content: "hello".into(),
                 tool_call_id: None,
+                tool_calls: vec![],
             }],
+            tools: vec![],
             temperature: None,
             stream: true,
         };

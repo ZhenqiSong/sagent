@@ -50,6 +50,8 @@ pub(crate) fn insert_event(
 ) -> Result<EventSequence> {
     let payload_json =
         serde_json::to_string(&event.payload).context("序列化 daemon event payload 失败")?;
+    // sequence 由 SQLite rowid 分配，而不是由调用方传入；这样同一 Store 写入者
+    // 可以把它当作断线续传和恢复扫描的单调游标。
     transaction
         .execute(
             "INSERT INTO daemon_events (session_id, turn_id, event_type, payload_json, created_at)
@@ -96,6 +98,8 @@ impl Store {
         if query.limit <= 0 {
             anyhow::bail!("事件查询 limit 必须大于 0");
         }
+        // 限制单页大小，调用方以“严格大于 after_sequence”继续查询，因而不会
+        // 在分页边界重复或漏掉事件。
         let limit = query.limit.min(MAX_EVENT_LIMIT);
         let exists: Option<i64> = self
             .connection
@@ -161,6 +165,72 @@ impl Store {
             .context("执行事件查询失败")?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .context("读取事件结果失败")
+    }
+
+    /// 按 Turn 的 sequence 顺序读取可恢复事实。恢复路径不能只靠 Session 范围的
+    /// 最近事件，否则旧 Turn 的 tool/approval 事件会污染当前 running Turn。
+    pub fn events_for_turn(
+        &self,
+        turn_id: &TurnId,
+        after_sequence: EventSequence,
+    ) -> Result<Vec<StoredDaemonEvent>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT sequence, session_id, turn_id, event_type, payload_json, created_at
+                 FROM daemon_events
+                 WHERE turn_id = ?1 AND sequence > ?2
+                 ORDER BY sequence ASC LIMIT ?3",
+            )
+            .context("准备 Turn 恢复事件查询失败")?;
+        let rows = statement
+            .query_map(
+                params![
+                    turn_id.as_uuid().to_string(),
+                    after_sequence.get(),
+                    MAX_EVENT_LIMIT
+                ],
+                |row| {
+                    let sequence: i64 = row.get(0)?;
+                    let turn_id_text: Option<String> = row.get(2)?;
+                    let payload_json: String = row.get(4)?;
+                    let turn_id = turn_id_text
+                        .map(|value| {
+                            TurnId::parse(&value).map_err(|error| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    2,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(error),
+                                )
+                            })
+                        })
+                        .transpose()?;
+                    let payload = serde_json::from_str(&payload_json).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?;
+                    Ok(StoredDaemonEvent {
+                        sequence: EventSequence::new(sequence).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                0,
+                                rusqlite::types::Type::Integer,
+                                Box::new(error),
+                            )
+                        })?,
+                        session_id: SessionId::new(row.get::<_, String>(1)?),
+                        turn_id,
+                        event_type: row.get(3)?,
+                        payload,
+                        created_at: row.get(5)?,
+                    })
+                },
+            )
+            .context("执行 Turn 恢复事件查询失败")?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("读取 Turn 恢复事件失败")
     }
 
     pub fn latest_event_sequence(&self, session_id: &SessionId) -> Result<Option<EventSequence>> {

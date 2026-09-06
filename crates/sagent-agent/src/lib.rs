@@ -13,7 +13,9 @@ pub mod transition;
 
 pub use command::{ApprovalDecision, CommandError, RequestId, SessionCommand, UserInput};
 pub use event::TurnEvent;
-pub use prompt::{PromptError, PromptMessage, PromptRole, PromptSnapshot, SystemPromptParts};
+pub use prompt::{
+    PromptError, PromptMessage, PromptRole, PromptSnapshot, PromptToolCall, SystemPromptParts,
+};
 pub use state::{TurnFailure, TurnState};
 pub use transcript::{Transcript, TranscriptError};
 pub use transition::{TransitionError, apply_command, apply_event};

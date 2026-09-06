@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 pub enum MockAction {
     /// 发送一段文本增量。
     Delta(String),
-    /// 发送一段中性的工具调用增量；4.5 才执行工具。
+    /// 发送一段中性的工具调用增量；Runtime 会在流结束后聚合并执行它。
     ToolCallDelta {
         call_id: String,
         name: Option<String>,

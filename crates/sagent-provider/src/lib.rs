@@ -1,7 +1,7 @@
 //! Provider-neutral 模型调用契约。
 //!
 //! 本 crate 只定义 Provider 请求、流式事件和错误边界，不负责 SQLite、Turn 状态
-//! 或 RuntimeEvent。具体 Provider（例如 OpenAI-compatible SSE）在后续模块中实现，
+//! 或 RuntimeEvent。具体 Provider（例如 OpenAI-compatible SSE）实现这一契约，
 //! 并通过 [`ModelProvider`] 把结果交给 `sagent-runtime`。
 
 mod error;
@@ -21,6 +21,6 @@ pub use openai_event::{OpenAiStreamParser, parse_openai_frame};
 pub use provider::{ModelProvider, ProviderEventSink};
 pub use sse::{MAX_SSE_FRAME_SIZE, SseDecoder, SseEvent, SseFrame};
 pub use types::{
-    ProviderEvent, ProviderFinish, ProviderMessage, ProviderRequest, ProviderRole, StopReason,
-    TokenUsage,
+    ProviderEvent, ProviderFinish, ProviderMessage, ProviderRequest, ProviderRole,
+    ProviderToolCall, StopReason, TokenUsage,
 };

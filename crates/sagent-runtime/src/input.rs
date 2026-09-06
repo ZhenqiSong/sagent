@@ -3,6 +3,7 @@
 use crate::RuntimeError;
 use crate::approval::{ApprovalOutcome, ApprovalRequest};
 use crate::tool_call::ToolCall;
+use crate::tool_worker::ToolExecutionResult;
 use sagent_agent::SessionCommand;
 use sagent_provider::TokenUsage;
 use sagent_types::TurnId;
@@ -75,5 +76,11 @@ pub(crate) enum WorkerEvent {
         turn_id: TurnId,
         text: String,
         calls: Vec<ToolCall>,
+    },
+    /// 工具 worker 完成当前调用后回传结果。类型保留 Vec 是为 worker 边界复用，
+    /// Actor 目前强制它恰好包含一个结果，以便逐项审批和持久化。
+    ToolResults {
+        turn_id: TurnId,
+        results: Vec<ToolExecutionResult>,
     },
 }

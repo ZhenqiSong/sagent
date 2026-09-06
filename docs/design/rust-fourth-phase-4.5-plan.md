@@ -1,7 +1,7 @@
 # Sagent Rust 第四阶段 4.5 执行计划：最小工具、Terminal 与 Approval
 
 作者：SongZQ  
-状态：执行中（步骤 0-5.1 已完成，步骤 5.2 待实现）
+状态：已完成（步骤 0-5.7 已完成）
 前置条件：4.1、4.2、4.3、4.4 已完成。
 
 > 本计划以当前 Rust 代码为基线，同时对照 Python Hermes 的实际行为。4.5 的目标不是一次性复制所有 Python 工具，而是先建立一个安全、可测试、可恢复的最小工具闭环。
@@ -962,3 +962,184 @@ terminal 的执行和进程生命周期边界已经完成，但危险命令还�
 5. 最大 tool round、重复结果和完整 Provider → Tool → Provider → Final 回环。
 
 下一步为步骤 5.2：实现 `tool_worker.rs`，先接入 `read_file`，再接入带 approval gate 的 `terminal`。
+
+## 19. 步骤 5.2 执行记录：受监管 ToolWorker
+
+执行日期：2026-09-05
+状态：已完成
+
+### 19.1 已完成内容
+
+- 新增 `sagent-runtime::ToolWorker`，统一持有 `ReadFileService` 和 `TerminalExecutor`；
+- 按 `ToolDispatchPlan` 顺序执行工具，第一版不并行，保证 transcript 顺序稳定；
+- `read_file` 参数通过 `ReadFileRequest` 反序列化，沿用 workspace root、UTF-8、二进制、大小和取消策略；
+- `terminal` 参数通过 `TerminalRequest` 反序列化，沿用 cwd、timeout、输出上限和进程树清理；
+- `ApprovalRequired` 权限在启动工具前直接返回 `approval_required`，不会创建 terminal 子进程；
+- Provider 原始 `call_id` 在 `ToolExecutionResult` 中保留，底层 `ToolCallId` 仅作为本地工具服务的内部标识；
+- 参数错误、审批阻断、取消和无执行器均转换为有限长度的结构化结果；
+- 新增 read_file 成功、Provider call_id 保留、审批阻断和批量取消测试。
+
+### 19.2 验证结果
+
+- `cargo test -p sagent-runtime`：通过，41 个单元测试及全部运行时集成测试通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：通过；
+- 工具 worker 不直接访问 Store、不发布 RuntimeEvent，符合 4.5 的唯一写入者约束。
+
+### 19.3 当前边界
+
+ToolWorker 已能执行单批工具，结果接入 Actor 和 Store 的工作在步骤 5.3 完成；后续仍由调用方负责：
+
+1. approval 通过后重新启动被暂停的工具；
+2. 将结果加入 PromptSnapshot 并继续调用 Provider；
+3. 处理最大 tool round 和完整终态竞争。
+
+## 20. 步骤 5.3 执行记录：ToolResult mailbox 与消息持久化
+
+执行日期：2026-09-05
+状态：基础闭环已完成
+
+### 20.1 已完成内容
+
+- 新增 `WorkerEvent::ToolResults`，ToolWorker 结果通过 Actor mailbox 返回；
+- `ToolCalls` 处理成功后，Actor 先原子写入 assistant tool-call 消息，再启动 ToolWorker；
+- 新增 `Store::commit_assistant_tool_calls`，校验 Turn、Session、running 状态和 JSON 数组结构；
+- assistant tool-call 写入 `tool_calls` 和 `finish_reason=tool_calls`，并产生 `message.committed` 事件；
+- ToolWorker 结果按 Provider 原始顺序写入 `role=tool` 消息，并保留原始 `tool_call_id`；
+- `commit_tool_result` 根据 `display_metadata.ok/error_kind` 写入正确的 `tool.completed` 成功状态；
+- 新增 `ToolStarted`、`ToolCompleted` 运行时事件的 Provider call-id 字段；
+- Provider 正常退出后，如果工具回环已经开始，Actor 不再误判为 `worker_exit`；
+- 新增 Provider → assistant(tool_calls) → ToolWorker → tool message 的集成测试；
+- Tool 结果完成后暂时以 `tool_loop` 失败收口，明确标记 Provider 继续回环尚未实现。
+
+### 20.2 验证结果
+
+- `cargo test -p sagent-runtime --test tool_actor`：通过；
+- `cargo test -p sagent-runtime`：通过；
+- `cargo test -p sagent-store`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：通过。
+
+### 20.3 当前边界与下一步
+
+本步骤已经完成工具消息的 Actor/Store 闭环，但尚未将已持久化的 tool message 重新构造成下一次 Provider 请求。下一步步骤 5.4 实现：
+
+1. 从活动消息恢复 user、assistant(tool_calls)、tool 顺序；
+2. 构造包含工具结果的 PromptSnapshot；
+3. 再次调用 Provider；
+4. 支持多个 tool round；
+5. 设置最大回环轮数并在超限时返回 `tool_loop_limit`；
+6. Provider 最终返回文本后调用 `complete_turn`。
+
+## 21. 步骤 5.4 执行记录：Provider → Tool → Provider 回环
+
+执行日期：2026-09-05
+状态：已完成
+
+### 21.1 已完成内容
+
+- 新增 `PromptToolCall` 与 `ProviderToolCall`，保留 Provider 返回的原始字符串 `call_id`、工具名和 JSON object 参数；不再把上游 id 强制转换为本地 UUID；
+- `ProviderRequest` 增加 `tools`，OpenAI 适配器会发送 registry 的 schema，并把 assistant 的历史 tool call 按 OpenAI `tool_calls` 格式序列化；
+- Actor 用 registry 的真实 schema hash 创建/复用 generation，工具集合变化会进入 generation 边界；
+- 每批 tool result 持久化后，Actor 从 Store 的模型消息查询重新构造 PromptSnapshot，顺序为 system、user、assistant(tool_calls)、tool；
+- system prompt 沿用 Turn 开始时的 `SystemPromptParts`，不会因工具回环重新解析 Profile 或重建而破坏 prompt cache；
+- ToolWorker 完成后启动下一轮 Provider；下一轮能收到先前 assistant tool call 和全部 tool result，并可继续调用工具或返回最终文本；
+- 新增每个 Turn 默认最多 8 批工具调用的限制，Supervisor 可通过 `with_max_tool_rounds` 配置；超限的下一批调用不会写入 Store，并以 `tool_loop_limit` 结束 Turn；
+- 增加 provider exit credit，已把控制权交给 ToolWorker 的上一轮 Provider 即使延迟退出，也不会误终止下一轮 Provider。
+
+### 21.2 测试与验证
+
+- `tool_results_are_replayed_to_the_next_provider_round_before_final_text` 覆盖两轮 Provider：第一轮 `read_file`，第二轮断言请求中带有 assistant `tool_calls` 和对应 `tool` message 后生成最终回答；
+- `tool_loop_stops_before_persisting_a_call_beyond_the_configured_limit` 覆盖连续工具调用，在上限为 2 时第三轮以 `tool_loop_limit` 失败，并断言第三个调用没有被持久化；
+- `cargo test --workspace --quiet`、`cargo clippy --workspace --all-targets -- -D warnings` 和 `git diff --check` 作为最终工作区验证。
+
+### 21.3 当前边界与下一步
+
+- 目前 `read_file` 已可进入完整回环；terminal 的 approval 恢复、拒绝和超时结果将作为后续步骤的具体恢复路径补齐；
+- 下一步继续完成步骤 5.5：将 approval 的恢复结果接回被暂停的工具批次，并补充取消/迟到事件的回归测试。
+
+## 22. 步骤 5.5 执行记录：审批暂停与工具批次恢复
+
+执行日期：2026-09-05
+状态：已完成
+
+### 22.1 已完成内容
+
+- 新增 `PendingToolBatch`，由 `ActiveTurn` 保存工具计划、当前游标和一次性批准标记；已完成结果只保留在 Store，审批恢复不会重跑此前成功的工具；
+- Actor 将 Provider 的工具批次改为逐项推进：每次只启动当前调用，完成后持久化结果、推进游标，再决定下一项或回到 Provider；
+- `classify_tool` 成为 terminal 的动态风险入口：安全命令直接执行，需要审批的命令进入 `AwaitingApproval`，明确禁止的命令不进入审批或进程执行；
+- 对需要审批的调用创建并持久化 `ApprovalRequested`，`Once`、`Session`、`Always` 的批准会恢复当前游标；`Once` 的授权只对当前调用有效；
+- 新增 `TerminalExecutor::execute_authorized`。普通 `execute` 仍会拒绝危险命令；只有 Actor 已通过策略或用户审批后才使用授权入口；
+- `Deny`、approval timeout、无交互审批能力都会先写入失败的 `tool` message（含原始 `tool_call_id` 和稳定 `error_kind`），再将 Turn 失败，避免 transcript 留下无结果的 assistant tool call；
+- interrupt / cancellation 仍不伪造 tool result；active turn 被移除后，迟到的审批或工具事件会被忽略。
+
+### 22.2 测试与验证
+
+- `approval_once_resumes_the_paused_terminal_call_and_replays_its_result`：批准前没有 `ToolStarted`；Once 后只恢复当前 terminal 调用，第二轮 Provider 收到对应 tool message 并完成 Turn；
+- `approval_denial_persists_a_tool_error_without_starting_terminal`：Deny 后没有进程启动，写入 `approval_denied` tool result，并以确定的失败原因结束；
+- 既有 `ApprovalManager` 测试继续覆盖 Once、Session、Always、timeout、cancel、错误 Session/Turn 与重复 resolve；
+- 最终执行 `cargo test --workspace --quiet`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `git diff --check`。
+
+### 22.3 当前边界与下一步
+
+- `Always` 目前仍仅保存于当前 Runtime 的明确规则集合；跨进程写入 Profile 配置属于后续配置持久化接线；
+- 下一步步骤 5.6：补齐 Store 的恢复读取，利用 daemon events 识别 pending approval、已完成 tool call 与中断中的 Turn，确保进程重启后不会重复执行工具。
+
+## 23. 步骤 5.6 执行记录：重启后的 fail-closed 恢复
+
+执行日期：2026-09-05
+状态：已完成
+
+### 23.1 已完成内容
+
+- 新增 `Store::get_running_turn` 与 `Store::events_for_turn`，恢复读取限定在单个 Turn 的 sequence 顺序，不会被同一 Session 的旧事件污染；
+- `begin_turn` 在事务内拒绝同一 Session 的第二个 running Turn，Actor 启动会先处理旧 Turn，避免并行遗留状态；
+- 每次真实启动 ToolWorker 前都持久化 `tool.started`，记录 Provider 原始 `call_id`；`tool.completed` 仍由 tool message 的原子事务写入；
+- `approval.requested` payload 增加 `provider_call_id`，使恢复逻辑能把审批事实准确关联到 assistant tool call；
+- 新增纯恢复判定器 `recovery.rs`：从 assistant tool_calls、tool.started、tool.completed 与 approval 事件推导尚未完成的调用；
+- SessionActor 启动并处理第一条 mailbox 输入前执行恢复计划；不会启动 Provider、ToolWorker 或 terminal；
+- 已开始但没有完成结果的调用写入 `runtime_restarted_unknown`；未开始且审批未完成的调用写入 `approval_interrupted_by_restart`；其他未开始调用写入 `runtime_restarted_not_executed`；随后将旧 Turn 标记为 `runtime_restarted` failed；
+- 重启恢复不会自动重新展示或继续旧 approval。由于原进程的 Provider/工具执行边界已经丢失，统一安全收口比猜测“命令是否已经运行”更可靠；用户可在新 Turn 中重新请求操作。
+
+### 23.2 测试与验证
+
+- recovery 判定器覆盖 pending approval 且未启动工具时的 `approval_interrupted_by_restart` 分类；
+- `startup_records_unknown_tool_result_without_reexecuting_and_allows_a_new_turn` 构造 `tool.started` 无 `tool.completed` 的崩溃快照，验证启动 Actor 后写入结果未知的 tool message、关闭旧 Turn，且没有执行原 terminal；
+- `cargo test --workspace --quiet`、`cargo clippy --workspace --all-targets -- -D warnings` 与 `git diff --check` 作为最终验证。
+
+### 23.3 当前边界与下一步
+
+- `Always` 规则尚未写入 Profile 配置，仍只在当前 Runtime 生命周期内有效；
+- 下一步步骤 5.7：补齐 Provider、ToolWorker、approval waiter 的取消/超时/迟到事件竞争测试，尤其验证 interrupt 与 final/tool result 同时到达时只产生一个终态。
+
+## 24. 步骤 5.7 执行记录：取消、超时与终态竞争
+
+执行日期：2026-09-05
+状态：已完成
+
+### 24.1 已完成内容
+
+- `ActiveTurn` 新增独立的 `tool_task` 句柄。Provider monitor、实际 Provider worker、当前工具任务和 approval waiter 均由同一个 active Turn 管理；
+- `interrupt`、失败和完成收口会先取消共享的 `CancellationToken`。工具任务最多等待 3 秒，让 `TerminalExecutor` 有机会终止并回收子进程树；只有超时才 `abort` Tokio task；
+- 工具任务结束后，Actor 才推进当前 `PendingToolBatch` 游标。若 Turn 已被 interrupt/fail/complete 移除，迟到的 `ToolResults` 不再有 active Turn 可写入，因此不会生成迟到的 tool message；
+- 已完成的 Turn 会先从 Actor 的 active slot 移除。随后到达的 `interrupt` 返回 `RuntimeError::NoActiveTurn`，不会追加 `turn.interrupted` 或覆盖既有的 `turn.completed` 终态；
+- approval timeout 先持久化确定的 `approval_timeout` tool 结果并结束 Turn；之后的 `approval.resolve` 因没有 pending approval 被拒绝，且 terminal 从未启动；
+- 保持恢复策略 fail-closed：进程重启与运行时取消均不自动重放已经开始或可能已经开始的外部工具操作。
+
+### 24.2 竞争场景测试
+
+- `interrupt_cancels_running_tool_without_persisting_a_late_result`：等待长时间 terminal 实际启动后 interrupt，断言收到 `TurnInterrupted` 时 process supervisor 的活动进程数为零，数据库只保留 user 和 assistant tool-call，不写入迟到的 tool result；
+- `approval_timeout_wins_without_starting_terminal_or_accepting_a_late_decision`：等待 approval timeout，断言没有 `ToolStarted`，迟到的 resolve 返回错误，且 Store 中持久化 `approval_timeout` tool message；
+- `late_interrupt_cannot_overwrite_a_completed_turn`：等 Provider 正常完成后再 interrupt，断言请求返回 `NoActiveTurn`，该 Turn 的 daemon events 中只有一个终态，且为 `turn.completed`；
+- 既有 provider 取消、approval cancel/reject、恢复 fail-closed 测试共同覆盖 Worker/approval/Store 的交界处。
+
+### 24.3 验证结果
+
+- `cargo fmt --all`：通过；
+- `cargo test --workspace --quiet`：通过；
+- `cargo clippy --workspace --all-targets -- -D warnings`：通过；
+- `git diff --check`：通过。
+
+### 24.4 4.5 完成判定
+
+4.5 的最小工具闭环已完成：Provider tool call 经 Actor 校验、顺序执行、审批、持久化、Prompt 重建和 Provider 回环后可以生成最终回答；取消、超时、重启和迟到事件不会重复执行外部操作，也不会改写已经持久化的终态。下一阶段可开始将稳定的事件和 approval DTO 接入 RPC，再由 TUI 消费。

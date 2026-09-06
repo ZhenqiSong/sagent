@@ -1,6 +1,6 @@
 //! 多会话 Supervisor：为每个 SessionId 启动并托管唯一的 SessionActor。
 //!
-//! 步骤 4 的职责：
+//! Supervisor 的职责：
 //! - 维护 `SessionId -> ManagedSession` 映射，同一 Session 只有一个 actor；
 //! - 用固定容量（32）的有界 mailbox 串行化每个 Session 的命令；
 //! - actor 退出后清理 stale 条目，旧 handle 返回 `ActorStopped`；
@@ -24,12 +24,14 @@ use crate::actor::{SessionActor, WorkerFactory, utc_now};
 use crate::event::{RuntimeEvent, RuntimeEventSubscription};
 use crate::input::{ActorInput, CommandReply};
 use crate::tool_dispatch::ToolDispatcher;
+use crate::tool_worker::ToolWorker;
 
 /// 每个 Session 的 mailbox 容量；满时命令立即返回 `MailboxFull`。
 const MAILBOX_CAPACITY: usize = 32;
 /// 每个 Session 运行时事件广播容量。
 const EVENT_CAPACITY: usize = 64;
 const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
+const DEFAULT_MAX_TOOL_ROUNDS: u32 = 8;
 
 /// 为单个新 actor 打开独占 Store 的工厂。
 ///
@@ -57,13 +59,15 @@ pub struct SessionSupervisor {
     profile_revision: String,
     approval_timeout: Duration,
     tool_dispatcher: Option<ToolDispatcher>,
+    tool_worker: Option<ToolWorker>,
+    max_tool_rounds: u32,
 }
 
 impl SessionSupervisor {
     /// 用 store 工厂创建 Supervisor。
     ///
     /// store 工厂在每个 Session 首次启动时被调用一次，返回该 actor 独占的
-    /// 读写 Store。调用方负责解析 DB 路径（后续由 RPC/config 层注入）。
+    /// 读写 Store。调用方负责解析 DB 路径，并在 RPC/config 层注入此工厂。
     pub fn new<F>(store_factory: F) -> Self
     where
         F: Fn() -> Result<Store, String> + Send + Sync + 'static,
@@ -77,6 +81,8 @@ impl SessionSupervisor {
             profile_revision: "runtime-v1".into(),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             tool_dispatcher: None,
+            tool_worker: None,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
         }
     }
 
@@ -125,7 +131,7 @@ impl SessionSupervisor {
         Ok(())
     }
 
-    /// 测试/后续 Provider 注入 worker 工厂（步骤 4 只在测试中使用）。
+    /// 为测试注入受控 worker 工厂；生产路径使用 `with_provider`。
     #[cfg(test)]
     fn with_worker_factory(mut self, worker_factory: WorkerFactory) -> Self {
         self.worker_factory = Some(worker_factory);
@@ -157,6 +163,18 @@ impl SessionSupervisor {
         self
     }
 
+    /// 配置具体工具执行器；实际工具仍由每个 SessionActor 监管。
+    pub fn with_tool_worker(mut self, worker: ToolWorker) -> Self {
+        self.tool_worker = Some(worker);
+        self
+    }
+
+    /// 配置单个 Turn 最多可完成多少批工具调用。
+    pub fn with_max_tool_rounds(mut self, limit: u32) -> Self {
+        self.max_tool_rounds = limit.max(1);
+        self
+    }
+
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, ManagedSession>> {
         self.sessions
             .lock()
@@ -168,6 +186,8 @@ impl SessionSupervisor {
         &self,
         session_id: &SessionId,
     ) -> Result<(ManagedSession, SessionHandle), RuntimeError> {
+        // Supervisor 的配置在 actor 启动时复制为快照。之后即使调用方更换 Provider
+        // 或工具 registry，也不会改变这个活跃会话的 generation/工具语义。
         let store = (self.store_factory)().map_err(RuntimeError::Persistence)?;
         let (command_tx, command_rx) = mpsc::channel(MAILBOX_CAPACITY);
         let (event_tx, _) = broadcast::channel(EVENT_CAPACITY);
@@ -184,6 +204,7 @@ impl SessionSupervisor {
             None => actor,
         };
         let actor = actor.with_approval_timeout(self.approval_timeout);
+        let actor = actor.with_max_tool_rounds(self.max_tool_rounds);
         let actor = match &self.provider {
             Some(provider) => actor.with_provider(
                 provider.clone(),
@@ -194,6 +215,10 @@ impl SessionSupervisor {
         };
         let actor = match &self.tool_dispatcher {
             Some(dispatcher) => actor.with_tool_dispatcher(dispatcher.clone()),
+            None => actor,
+        };
+        let actor = match &self.tool_worker {
+            Some(worker) => actor.with_tool_worker(worker.clone()),
             None => actor,
         };
         let join = tokio::spawn(actor.run());
@@ -259,7 +284,7 @@ impl SessionHandle {
         }
     }
 
-    /// 请求中断当前回合；actor 侧的取消语义由步骤 5 实现。
+    /// 请求中断当前回合；Actor 会传播 CancellationToken、收口 worker 并持久化终态。
     pub async fn interrupt(&self, request_id: RequestId) -> Result<(), RuntimeError> {
         let reply = self.dispatch(SessionCommand::Interrupt { request_id })?;
         match reply.await.map_err(|_| RuntimeError::ActorStopped)?? {
@@ -322,7 +347,7 @@ impl SessionHandle {
         }
     }
 
-    /// 订阅本会话的运行时事件（后续步骤用于 TUI/RPC 推送）。
+    /// 订阅本会话的运行时事件；慢订阅者可用持久化事件游标补读事实。
     pub fn subscribe(&self) -> RuntimeEventSubscription {
         RuntimeEventSubscription::new(self.session_id.clone(), self.events.subscribe())
     }

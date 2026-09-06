@@ -28,7 +28,7 @@ pub use migration::SCHEMA_VERSION;
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
 pub use session::SessionListQuery;
-pub use turn::{NewGeneration, StartTurn, StoredGeneration};
+pub use turn::{NewGeneration, StartTurn, StoredGeneration, StoredRunningTurn};
 pub use write::{
     NewMessage, NewSession, RestoreResult, RetryCheckpoint, RewindCheckpoint, RewindResult,
 };

@@ -1,7 +1,8 @@
 //! Prompt 快照与消息不变量。
 
-use sagent_types::{SessionId, ToolCallId, TurnId};
+use sagent_types::{SessionId, TurnId};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -15,6 +16,15 @@ pub enum PromptRole {
     Tool,
 }
 
+/// assistant 消息中可重放的完整工具调用。
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PromptToolCall {
+    /// 保留 Provider 分配的原始 ID，tool message 使用同一字符串关联结果。
+    pub call_id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
 /// 一条发送给 Provider 的消息。
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PromptMessage {
@@ -22,8 +32,8 @@ pub struct PromptMessage {
     pub content: String,
     /// tool 消息必须带有对应的调用 ID。
     pub tool_call_id: Option<String>,
-    /// assistant 消息发起的工具调用；支持一次发起多个调用。
-    pub tool_calls: Vec<ToolCallId>,
+    /// assistant 消息发起的完整工具调用；支持一次发起多个调用。
+    pub tool_calls: Vec<PromptToolCall>,
 }
 
 impl PromptMessage {
@@ -95,6 +105,8 @@ pub enum PromptError {
     ConsecutiveSameRole { index: usize },
     #[error("tool 消息缺少 tool_call_id（位置 {index}）")]
     ToolMessageMissingCallId { index: usize },
+    #[error("assistant tool call 缺少 id、name 或 object arguments（位置 {index}）")]
+    InvalidAssistantToolCall { index: usize },
 }
 
 /// 某一 Turn 实际发送给模型的不可变 Prompt 快照。
@@ -107,6 +119,10 @@ pub struct PromptSnapshot {
 }
 
 impl PromptSnapshot {
+    /// 校验消息交替不变量并冻结本轮系统提示词的 fingerprint。
+    ///
+    /// hash 只覆盖 system parts：同一个 generation 内新增 user/tool 消息是正常的，
+    /// 但系统提示词或工具集变化必须由 Runtime 切换 generation，而不是混入本轮。
     pub fn new(
         session_id: SessionId,
         turn_id: TurnId,
@@ -154,6 +170,17 @@ fn validate_messages(messages: &[PromptMessage]) -> Result<(), PromptError> {
         if message.role == PromptRole::Tool && message.tool_call_id.is_none() {
             return Err(PromptError::ToolMessageMissingCallId { index });
         }
+        if message.role == PromptRole::Assistant
+            && message.tool_calls.iter().any(|call| {
+                call.call_id.trim().is_empty()
+                    || call.name.trim().is_empty()
+                    || !call.arguments.is_object()
+            })
+        {
+            return Err(PromptError::InvalidAssistantToolCall { index });
+        }
+        // 同一 assistant 可能同时请求多个工具，结果会连续抵达，因此 tool 是唯一
+        // 允许相邻出现的角色；其他相邻同角色会破坏 Provider 的角色交替语义。
         if index > 0 && messages[index - 1].role == message.role && message.role != PromptRole::Tool
         {
             return Err(PromptError::ConsecutiveSameRole { index });
@@ -164,7 +191,9 @@ fn validate_messages(messages: &[PromptMessage]) -> Result<(), PromptError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PromptError, PromptMessage, PromptRole, PromptSnapshot, SystemPromptParts};
+    use super::{
+        PromptError, PromptMessage, PromptRole, PromptSnapshot, PromptToolCall, SystemPromptParts,
+    };
     use sagent_types::{SessionId, TurnId};
 
     fn system() -> SystemPromptParts {
@@ -206,7 +235,11 @@ mod tests {
     #[test]
     fn snapshot_hash_changes_when_tool_calls_change() {
         let mut first_messages = messages();
-        let tool = sagent_types::ToolCallId::new();
+        let tool = PromptToolCall {
+            call_id: "call-1".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "notes.txt"}),
+        };
         first_messages[2].tool_calls = vec![tool];
         let first = PromptSnapshot::new(
             SessionId::new("s"),
@@ -217,7 +250,11 @@ mod tests {
         .unwrap();
 
         let mut second_messages = messages();
-        second_messages[2].tool_calls = vec![sagent_types::ToolCallId::new()];
+        second_messages[2].tool_calls = vec![PromptToolCall {
+            call_id: "call-2".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "notes.txt"}),
+        }];
         let second = PromptSnapshot::new(
             SessionId::new("s"),
             TurnId::new(),

@@ -1,9 +1,26 @@
 //! `session.*` 方法的协议类型。
 
+use sagent_types::{EventSequence, SessionId, TurnId};
 use serde::{Deserialize, Serialize};
+
+/// `session.create` 参数。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionCreateParams {
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// `session.create` 的结果。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionCreateResult {
+    pub session_id: SessionId,
+    pub session: SessionSummaryDto,
+}
 
 /// `session.list` 的分页和归档过滤参数。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionListParams {
     /// 是否包含已归档会话；默认不包含。
     #[serde(default)]
@@ -54,6 +71,7 @@ pub struct SessionListResult {
 
 /// `session.resume` 的参数。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionResumeParams {
     /// 当前 Profile 中要读取的会话标识。
     pub session_id: String,
@@ -115,11 +133,61 @@ pub struct SessionResumeResult {
     pub message_offset: u32,
 }
 
+/// `session.interrupt` 参数。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionInterruptParams {
+    pub session_id: SessionId,
+}
+
+/// `session.interrupt` 的立即响应状态。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionInterruptStatus {
+    Interrupted,
+}
+
+/// `session.interrupt` 的立即响应；最终状态由 event 宣布。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInterruptResult {
+    pub status: SessionInterruptStatus,
+}
+
+/// `session.events.since` 参数。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionEventsSinceParams {
+    pub session_id: SessionId,
+    #[serde(default)]
+    pub after_sequence: EventSequence,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// 一条可重放的持久化领域事件。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionEventDto {
+    pub sequence: EventSequence,
+    pub session_id: SessionId,
+    pub turn_id: Option<TurnId>,
+    pub event_type: String,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
+/// `session.events.since` 的结果。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionEventsSinceResult {
+    pub events: Vec<SessionEventDto>,
+    pub has_more: bool,
+    pub latest_sequence: EventSequence,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{SessionListParams, SessionResumeParams};
+    use super::{SessionEventsSinceParams, SessionListParams, SessionResumeParams};
 
     #[test]
     fn optional_pagination_parameters_default_without_losing_archived_filter() {
@@ -138,5 +206,18 @@ mod tests {
         assert_eq!(params.session_id, "session-1");
         assert_eq!(params.message_limit, None);
         assert_eq!(params.message_offset, 0);
+    }
+
+    #[test]
+    fn event_replay_defaults_to_the_start_and_rejects_unknown_fields() {
+        let params: SessionEventsSinceParams =
+            serde_json::from_value(json!({"session_id": "session-1"})).unwrap();
+        assert_eq!(params.after_sequence.get(), 0);
+        assert!(
+            serde_json::from_value::<SessionEventsSinceParams>(json!({
+                "session_id": "session-1", "profile": "must-not-cross-the-boundary"
+            }))
+            .is_err()
+        );
     }
 }

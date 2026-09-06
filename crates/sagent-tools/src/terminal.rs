@@ -96,6 +96,31 @@ impl TerminalExecutor {
         request: TerminalRequest,
         cancellation: CancellationToken,
     ) -> ToolResult {
+        self.execute_with_approval(tool_call_id, request, cancellation, false)
+            .await
+    }
+
+    /// 执行已经由 Runtime 审批策略许可的命令。
+    ///
+    /// 该入口只能由 Runtime 的 SessionActor 在 `Allow` 或已完成用户审批后调用；
+    /// 普通调用者应使用 [`Self::execute`]，它会拒绝仍需审批的危险命令。
+    pub async fn execute_authorized(
+        &self,
+        tool_call_id: ToolCallId,
+        request: TerminalRequest,
+        cancellation: CancellationToken,
+    ) -> ToolResult {
+        self.execute_with_approval(tool_call_id, request, cancellation, true)
+            .await
+    }
+
+    async fn execute_with_approval(
+        &self,
+        tool_call_id: ToolCallId,
+        request: TerminalRequest,
+        cancellation: CancellationToken,
+        approval_granted: bool,
+    ) -> ToolResult {
         if request.command.trim().is_empty() {
             return failure(
                 tool_call_id,
@@ -140,9 +165,11 @@ impl TerminalExecutor {
             Ok(cwd) => cwd,
             Err(error) => return self.workspace_failure(tool_call_id, error, &request),
         };
+        // 风险分类必须发生在创建 shell 之前；`execute_authorized` 只跳过
+        // RequireApproval，不会绕过命令黑名单或 workspace 边界。
         match classify_command(&request.command) {
             CommandRisk::Safe => {}
-            CommandRisk::RequireApproval { summary, .. } => {
+            CommandRisk::RequireApproval { summary, .. } if !approval_granted => {
                 return failure(
                     tool_call_id,
                     "approval_required",
@@ -151,6 +178,7 @@ impl TerminalExecutor {
                     None,
                 );
             }
+            CommandRisk::RequireApproval { .. } => {}
             CommandRisk::Deny { reason } => {
                 return failure(tool_call_id, "command_denied", &reason, &self.limits, None);
             }
@@ -187,6 +215,8 @@ impl TerminalExecutor {
         let timeout_duration = Duration::from_millis(request.timeout_ms);
         let output_future = drain_output(stdout, stderr, request.output_limit);
         tokio::pin!(output_future);
+        // 三个分支共同拥有 child：超时和取消分支先终止整个进程树，再等待输出，
+        // 防止 shell 的子进程在父进程退出后仍持有 stdout/stderr 管道。
         let (status, terminal_error) = tokio::select! {
             result = child.wait() => (result.ok(), None),
             _ = sleep(timeout_duration) => {
@@ -201,6 +231,8 @@ impl TerminalExecutor {
         let (out, err) = match tokio::time::timeout(Duration::from_secs(2), output_future).await {
             Ok(output) => output,
             Err(_) => {
+                // 即使 wait 已返回，遗留后代仍可能让管道永不 EOF。二次按 PID
+                // 清理并返回截断结果，比无限阻塞 Actor 的 shutdown 更安全。
                 terminate_pid_tree(process_id).await;
                 (
                     BoundedOutput {
@@ -296,6 +328,8 @@ fn failure_with_output(
     request: &TerminalRequest,
 ) -> ToolResult {
     let output = combine_output(stdout.content, stderr.content);
+    // 有输出时优先返回输出：例如超时前已打印的诊断往往比通用错误文案更可用；
+    // error_kind 仍保留超时/取消的机器可读分类。
     let mut result = ToolResult::failure(
         tool_call_id,
         TOOL_NAME,

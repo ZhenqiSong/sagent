@@ -68,6 +68,8 @@ impl ToolCallAccumulator {
         }
         let arguments_delta = arguments_delta.into();
         let entry = if let Some(index) = self.index.get(&call_id).copied() {
+            // HashMap 只用于按 ID 找到未完成调用；真实输出顺序由 calls 保留，
+            // 因为 Provider 可能交错发送多个 tool call 的参数分片。
             let _ = index;
             self.partial
                 .get_mut(&call_id)
@@ -103,6 +105,8 @@ impl ToolCallAccumulator {
             .map(|call_id| {
                 let partial = self.partial.get(&call_id).expect("索引和 partial 必须一致");
                 let name = partial.name.clone().ok_or(ToolCallError::MissingName)?;
+                // 某些兼容 Provider 会省略空参数的 arguments；把它规范为对象，
+                // 使下游 registry 始终面对 JSON object，而不会有特殊的空字符串分支。
                 let arguments = if partial.arguments.trim().is_empty() {
                     Value::Object(Default::default())
                 } else {

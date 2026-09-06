@@ -2,6 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+// 直接依赖 registry 模块，避免 gateway -> crate 根重导出 -> method -> gateway
+// 的模块初始化环；根级重导出仍保留给外部调用者。
+use crate::method::registry::registered_features;
+
 /// 当前 JSON-RPC 协议版本。
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -15,6 +19,14 @@ pub struct ProtocolFeatures {
 }
 
 impl ProtocolFeatures {
+    /// 返回当前 binary 实际注册、可调用的方法。
+    pub fn available() -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            features: registered_features(),
+        }
+    }
+
     /// 返回第三阶段服务启动后宣告的固定能力集合。
     pub fn phase_three() -> Self {
         Self {
@@ -50,17 +62,22 @@ mod tests {
 
     #[test]
     fn ready_features_advertise_the_first_read_only_methods() {
-        let features = ProtocolFeatures::phase_three();
+        let features = ProtocolFeatures::available();
         assert_eq!(features.protocol_version, PROTOCOL_VERSION);
         assert_eq!(
             features.features,
-            vec!["gateway.ping", "session.list", "session.resume"]
+            vec![
+                "gateway.ping",
+                "session.list",
+                "session.resume",
+                "client.hello",
+            ]
         );
         assert_eq!(
             serde_json::to_value(features).expect("能力集合应能序列化"),
             json!({
                 "protocol_version": 1,
-                "features": ["gateway.ping", "session.list", "session.resume"]
+                "features": ["gateway.ping", "session.list", "session.resume", "client.hello"]
             })
         );
     }

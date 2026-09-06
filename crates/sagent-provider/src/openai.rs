@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::{Client, StatusCode, Url, header};
 use serde::Serialize;
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 /// OpenAI-compatible Chat Completions Provider。
@@ -71,6 +72,8 @@ struct OpenAiRequest<'a> {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "<[Value]>::is_empty")]
+    tools: &'a [Value],
 }
 
 #[derive(Debug, Serialize)]
@@ -79,6 +82,22 @@ struct OpenAiMessage<'a> {
     content: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OpenAiToolCall<'a>>>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiToolCall<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: OpenAiFunctionCall<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiFunctionCall<'a> {
+    name: &'a str,
+    arguments: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,6 +105,10 @@ struct StreamOptions {
     include_usage: bool,
 }
 
+/// 借用领域请求构造 HTTP DTO，避免在真正序列化前复制大段 Prompt 内容。
+///
+/// 返回值显式携带 `'_` 生命周期，因为其中的 `&str` 和 tools 切片都借自
+/// `ProviderRequest`；`reqwest::json` 会在 `.send()` 前立即把它序列化。
 fn build_request(request: &ProviderRequest) -> OpenAiRequest<'_> {
     OpenAiRequest {
         model: &request.model,
@@ -96,6 +119,21 @@ fn build_request(request: &ProviderRequest) -> OpenAiRequest<'_> {
                 role: role_name(message.role),
                 content: &message.content,
                 tool_call_id: message.tool_call_id.as_deref(),
+                tool_calls: (!message.tool_calls.is_empty()).then(|| {
+                    message
+                        .tool_calls
+                        .iter()
+                        .map(|call| OpenAiToolCall {
+                            id: &call.id,
+                            kind: "function",
+                            function: OpenAiFunctionCall {
+                                name: &call.name,
+                                arguments: serde_json::to_string(&call.arguments)
+                                    .expect("ProviderToolCall arguments must serialize"),
+                            },
+                        })
+                        .collect()
+                }),
             })
             .collect(),
         stream: request.stream,
@@ -103,6 +141,7 @@ fn build_request(request: &ProviderRequest) -> OpenAiRequest<'_> {
         stream_options: request.stream.then_some(StreamOptions {
             include_usage: true,
         }),
+        tools: &request.tools,
     }
 }
 
@@ -151,6 +190,8 @@ fn observe_event(
     reason: &mut Option<StopReason>,
     usage: &mut Option<TokenUsage>,
 ) {
+    // 这里只读取 event，把最终统计收集到独立变量；event 随后仍原样传给 sink，
+    // 因而 UI/Runtime 观察到的流事件不会被 adapter 改写。
     match event {
         ProviderEvent::Finished { reason: value } => *reason = Some(*value),
         ProviderEvent::Usage { usage: value } => *usage = Some(*value),
@@ -213,6 +254,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
             .get("x-request-id")
             .and_then(|value| value.to_str().ok())
             .map(ToOwned::to_owned);
+        // HTTP chunk 与 SSE event 没有一一对应关系。parser 跨 chunk 保留半行和
+        // 半个 JSON，直到空行或流结束后才产生完整 ProviderEvent。
         let mut stream = response.bytes_stream();
         let mut parser = OpenAiStreamParser::new();
         let mut reason = None;
@@ -229,6 +272,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
             emit_events(events, sink, &mut reason, &mut usage).await?;
         }
 
+        // 末尾可能没有换行；finish 负责处理这段尾数据，不能只依赖循环内的 push。
         let events = parser.finish()?;
         emit_events(events, sink, &mut reason, &mut usage).await?;
         Ok(ProviderFinish {
@@ -242,7 +286,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
 #[cfg(test)]
 mod tests {
     use super::{OpenAiCompatibleProvider, build_request, role_name};
-    use crate::{ProviderMessage, ProviderRequest, ProviderRole};
+    use crate::{ProviderMessage, ProviderRequest, ProviderRole, ProviderToolCall};
     use sagent_types::{SessionId, TurnId};
 
     #[test]
@@ -256,7 +300,9 @@ mod tests {
                 role: ProviderRole::Tool,
                 content: "ok".into(),
                 tool_call_id: Some("call-1".into()),
+                tool_calls: vec![],
             }],
+            tools: vec![],
             temperature: Some(0.2),
             stream: true,
         };
@@ -265,6 +311,39 @@ mod tests {
         assert_eq!(json["messages"][0]["tool_call_id"], "call-1");
         assert_eq!(json["stream_options"]["include_usage"], true);
         assert!(!serde_json::to_string(&json).unwrap().contains("api_key"));
+    }
+
+    #[test]
+    fn serializes_assistant_tool_calls_and_schema() {
+        let request = ProviderRequest {
+            session_id: SessionId::new("s"),
+            turn_id: TurnId::new(),
+            request_id: "r".into(),
+            model: "gpt-test".into(),
+            messages: vec![ProviderMessage {
+                role: ProviderRole::Assistant,
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: vec![ProviderToolCall {
+                    id: "call-read-1".into(),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({"path": "notes.txt"}),
+                }],
+            }],
+            tools: vec![serde_json::json!({
+                "type": "function",
+                "function": {"name": "read_file"}
+            })],
+            temperature: None,
+            stream: true,
+        };
+        let json = serde_json::to_value(build_request(&request)).unwrap();
+        assert_eq!(json["tools"][0]["function"]["name"], "read_file");
+        assert_eq!(json["messages"][0]["tool_calls"][0]["id"], "call-read-1");
+        assert_eq!(
+            json["messages"][0]["tool_calls"][0]["function"]["arguments"],
+            r#"{"path":"notes.txt"}"#
+        );
     }
 
     #[test]

@@ -7,9 +7,9 @@ use std::{
 use sagent_agent::{RequestId, UserInput};
 use sagent_provider::mock::{MockAction, MockProvider, MockSseChunk, MockSseServer};
 use sagent_provider::{OpenAiCompatibleProvider, ProviderError, StopReason};
-use sagent_runtime::{RuntimeEventKind, SessionSupervisor};
+use sagent_runtime::{RuntimeError, RuntimeEventKind, SessionSupervisor};
 use sagent_store::{MessageQuery, NewSession, Store};
-use sagent_types::SessionId;
+use sagent_types::{EventSequence, SessionId};
 
 fn test_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
@@ -298,6 +298,53 @@ async fn cancellation_during_provider_worker_does_not_create_assistant_message()
             .len(),
         1
     );
+    let _ = fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn late_interrupt_cannot_overwrite_a_completed_turn() {
+    let path = test_path("late-interrupt");
+    let _ = fs::remove_file(&path);
+    let session_id = SessionId::new("provider-late-interrupt-session");
+    create_session(&path, &session_id);
+    let provider = Arc::new(MockProvider::new([MockAction::Finish(StopReason::Stop)]));
+    let factory_path = path.clone();
+    let supervisor = SessionSupervisor::new(move || {
+        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+    })
+    .with_provider(provider, "test-model", "profile-v1");
+    let handle = supervisor.get_or_start(session_id.clone()).await.unwrap();
+    let mut events = handle.subscribe();
+    let receipt = handle
+        .submit(RequestId::new(), UserInput::new("立即完成").unwrap())
+        .await
+        .unwrap();
+
+    loop {
+        let event = events.recv().await.unwrap();
+        if matches!(event.kind, RuntimeEventKind::TurnCompleted) {
+            break;
+        }
+    }
+    assert!(matches!(
+        handle.interrupt(RequestId::new()).await,
+        Err(RuntimeError::NoActiveTurn)
+    ));
+
+    let store = Store::open_readonly(&path).unwrap();
+    let terminal_events = store
+        .events_for_turn(&receipt.turn_id, EventSequence::default())
+        .unwrap()
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.event_type.as_str(),
+                "turn.completed" | "turn.failed" | "turn.interrupted"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(terminal_events.len(), 1);
+    assert_eq!(terminal_events[0].event_type, "turn.completed");
     let _ = fs::remove_file(path);
 }
 

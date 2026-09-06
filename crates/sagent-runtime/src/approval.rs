@@ -115,6 +115,8 @@ impl ApprovalWaiter {
         cancellation: CancellationToken,
     ) -> ApprovalOutcome {
         let mut receiver = self.receiver;
+        // 不在这里删除 Manager 中的 pending 记录：Actor 需要先收到 outcome，
+        // 才能以同一串行顺序持久化 timeout/cancel 的终态事实。
         tokio::select! {
             result = &mut receiver => result.unwrap_or(ApprovalOutcome::Cancelled),
             _ = cancellation.cancelled() => ApprovalOutcome::Cancelled,
@@ -189,6 +191,8 @@ impl ApprovalManager {
         approval_id: ApprovalId,
         decision: ApprovalDecision,
     ) -> Result<(), ApprovalError> {
+        // 先临时移出 map，令同一 approval 不能被重复 resolve；若归属校验失败
+        // 再原样插回，避免错误客户端把真正等待者的请求消费掉。
         let Some(pending) = self.pending.remove(&approval_id) else {
             return Err(self
                 .finished
@@ -220,6 +224,8 @@ impl ApprovalManager {
                 ApprovalOutcome::Approved(ApprovalDecision::Session)
             }
             ApprovalDecision::Always => {
+                // Always 的作用域是当前 Runtime 进程；持久化为用户偏好要经过
+                // 单独的配置/审计流程，不能由一次 RPC 决定直接写入长期配置。
                 self.permanent_rules
                     .insert(pending.request.policy_key.clone());
                 ApprovalOutcome::Approved(ApprovalDecision::Always)

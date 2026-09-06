@@ -41,7 +41,9 @@ fn request(endpoint: String) -> ProviderRequest {
             role: ProviderRole::User,
             content: "你好".into(),
             tool_call_id: None,
+            tool_calls: vec![],
         }],
+        tools: vec![],
         temperature: Some(0.2),
         stream: true,
     }

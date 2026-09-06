@@ -147,6 +147,49 @@ fn stdio_protocol_reads_sessions_without_writing_database() {
 }
 
 #[test]
+fn stdio_protocol_negotiates_client_hello_before_read_only_requests() {
+    let home = test_home("client-hello");
+    remove(&home);
+    create_fixture(&home);
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.hello\",\"params\":{",
+        "\"protocol_version\":1,",
+        "\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",",
+        "\"surface\":\"tui\",",
+        "\"capabilities\":{\"interactive_approval\":true,\"supports_stream_edits\":false}",
+        "}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session.list\",\"params\":{}}\n"
+    );
+
+    let output = run_rpc(&home, None, input);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let frames = output_frames(&output.stdout);
+
+    assert_eq!(frames.len(), 3);
+    assert_eq!(frames[0]["params"]["type"], "gateway.ready");
+    assert_eq!(frames[1]["result"]["protocol_version"], 1);
+    assert_eq!(
+        frames[1]["result"]["features"],
+        json!([
+            "gateway.ping",
+            "session.list",
+            "session.resume",
+            "client.hello"
+        ])
+    );
+    assert_eq!(
+        frames[1]["result"]["capabilities"]["interactive_approval"],
+        true
+    );
+    assert_eq!(frames[2]["result"]["sessions"][0]["id"], "visible-session");
+    remove(&home);
+}
+
+#[test]
 fn missing_database_fails_without_creating_state_file() {
     let home = test_home("missing-db");
     remove(&home);

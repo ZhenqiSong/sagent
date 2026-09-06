@@ -6,9 +6,10 @@ use async_trait::async_trait;
 use sagent_agent::{PromptRole, PromptSnapshot, RequestId};
 use sagent_provider::{
     ModelProvider, ProviderError, ProviderEvent, ProviderEventSink, ProviderMessage,
-    ProviderRequest, StopReason,
+    ProviderRequest, ProviderToolCall, StopReason,
 };
 use sagent_types::TurnId;
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -22,12 +23,15 @@ pub(crate) fn spawn_provider_worker(
     snapshot: PromptSnapshot,
     model: String,
     request_id: RequestId,
+    tools: Vec<Value>,
     command_tx: mpsc::Sender<ActorInput>,
     cancellation: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let turn_id = snapshot.turn_id;
-        let request = provider_request(&snapshot, &model, request_id);
+        // PromptSnapshot 在 Actor 中构造完成后才交给 Provider。worker 只做格式转换，
+        // 这样流式回调无论何时到达，都不会看到被并发改写的会话上下文。
+        let request = provider_request(&snapshot, &model, request_id, tools);
         let mut sink = RuntimeProviderSink::new(command_tx.clone(), turn_id);
 
         match provider.stream(request, &mut sink, cancellation).await {
@@ -80,7 +84,10 @@ fn provider_request(
     snapshot: &PromptSnapshot,
     model: &str,
     request_id: RequestId,
+    tools: Vec<Value>,
 ) -> ProviderRequest {
+    // 这里刻意逐字段复制而不是把 PromptMessage 暴露给 provider crate：
+    // agent 层定义“模型应该看到什么”，provider 层只负责“怎样发给某家 API”。
     ProviderRequest {
         session_id: snapshot.session_id.clone(),
         turn_id: snapshot.turn_id,
@@ -98,8 +105,18 @@ fn provider_request(
                 },
                 content: message.content.clone(),
                 tool_call_id: message.tool_call_id.clone(),
+                tool_calls: message
+                    .tool_calls
+                    .iter()
+                    .map(|call| ProviderToolCall {
+                        id: call.call_id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    })
+                    .collect(),
             })
             .collect(),
+        tools,
         temperature: None,
         stream: true,
     }
@@ -109,6 +126,8 @@ async fn send_worker_event(
     command_tx: &mpsc::Sender<ActorInput>,
     event: WorkerEvent,
 ) -> Result<(), ProviderError> {
+    // mailbox 关闭意味着 Actor 已进入终态；把它映射成统一错误，使 Provider 的
+    // 流循环能停止，而不是在已无人消费的通道上继续工作。
     command_tx
         .send(ActorInput::Worker(event))
         .await
@@ -145,6 +164,8 @@ impl RuntimeProviderSink {
             }
             return Ok((text, None));
         }
+        // ToolCallAccumulator 在流结束时才验证 JSON：单个 delta 往往只是半段
+        // 参数，过早解析会把合法的分片协议误判为错误。
         let calls = tool_calls
             .finish()
             .map_err(|error: ToolCallError| error.to_string())?;
@@ -217,7 +238,7 @@ mod tests {
         )
         .expect("snapshot 应有效");
 
-        let request = provider_request(&snapshot, "test-model", RequestId::new());
+        let request = provider_request(&snapshot, "test-model", RequestId::new(), vec![]);
         assert_eq!(request.session_id, session_id);
         assert_eq!(request.turn_id, turn_id);
         assert_eq!(request.model, "test-model");

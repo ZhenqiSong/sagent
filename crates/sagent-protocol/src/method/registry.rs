@@ -46,12 +46,16 @@ const REGISTERED_METHODS: &[MethodSpec] = &[
         name: "client.hello",
         access: MethodAccess::Public,
     },
+    MethodSpec {
+        name: "session.create",
+        access: MethodAccess::HelloRequired,
+    },
 ];
 
 /// 未来交互方法的访问规则先固定；它们在注册前绝不进入 feature list。
 pub fn planned_method_access(method: &str) -> Option<MethodAccess> {
     match method {
-        "session.create" | "prompt.submit" | "session.interrupt" | "session.events.since" => {
+        "prompt.submit" | "session.interrupt" | "session.events.since" => {
             Some(MethodAccess::HelloRequired)
         }
         "approval.respond" => Some(MethodAccess::InteractiveApprovalRequired),
@@ -150,7 +154,8 @@ mod tests {
                 "gateway.ping",
                 "session.list",
                 "session.resume",
-                "client.hello"
+                "client.hello",
+                "session.create"
             ]
         );
     }

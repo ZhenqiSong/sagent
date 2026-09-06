@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionCreateParams {
+    /// 可选显示标题；提供时必须是非空白文本。
     #[serde(default)]
     pub title: Option<String>,
 }
@@ -14,7 +15,9 @@ pub struct SessionCreateParams {
 /// `session.create` 的结果。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCreateResult {
+    /// 新创建且只属于当前 Profile 的会话标识。
     pub session_id: SessionId,
+    /// 刚持久化的空会话摘要；消息数在创建时恒为零。
     pub session: SessionSummaryDto,
 }
 

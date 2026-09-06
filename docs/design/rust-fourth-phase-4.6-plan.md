@@ -205,6 +205,8 @@ notification、超大帧和多响应顺序测试已迁移到异步 transport 并
 
 ### 步骤 3：RuntimeBootstrap 与 session.create
 
+状态：已完成；未配置 workspace 时工具保持关闭，Provider 缺失仅影响后续 prompt.submit。
+
 **位置**：新增 `runtime_bootstrap.rs`、`service/runtime.rs`，调整 `args.rs`/`main.rs`。
 
 1. 启动时仅一次解析 `--home`/`--profile`，固定 `SagentPaths`；
@@ -215,6 +217,15 @@ notification、超大帧和多响应顺序测试已迁移到异步 transport 并
 6. `session.create` 写 `NewSession`，source 为 `rpc`，创建空会话时不启动 Actor。
 
 **验收**：临时 Profile + Mock SSE 可启动 binary；stdout/stderr 均不泄露 API key；Profile 之间不共享 DB。
+
+完成记录：新增 `runtime_bootstrap.rs` 与 `service/runtime.rs`。启动时固定
+`SagentPaths`，初始化当前 Profile 的可写 state.db，并为每个未来 SessionActor 注入独占
+`Store::open_readwrite` factory；Provider resolver 成功时配置 `SessionSupervisor`，失败时保留
+只读浏览和空会话创建，供步骤 4 返回稳定 `runtime_unavailable`。`session.create` 已加入真实
+feature 注册表和状态化 dispatch，必须先 hello；它以 `source = "rpc"`、当前模型和 RFC 3339
+时间写入空 sessions 行，但不会创建 Generation、Turn、消息、事件或 Actor。由于 workspace
+runtime 配置尚未定义，bootstrap 不会猜测当前目录，read_file/terminal 保持关闭。真实子进程
+测试覆盖首次 state.db 初始化、握手 gate 和空会话持久化/无消息契约。
 
 ### 步骤 4：prompt.submit 与 event bridge
 

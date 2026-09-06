@@ -1050,12 +1050,15 @@ dependencies = [
  "clap",
  "sagent-config",
  "sagent-protocol",
+ "sagent-provider",
+ "sagent-runtime",
  "sagent-store",
  "sagent-types",
  "serde",
  "serde_json",
  "tokio",
  "tokio-util",
+ "uuid",
 ]
 
 [[package]]

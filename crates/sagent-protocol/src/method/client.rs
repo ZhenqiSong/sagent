@@ -134,6 +134,7 @@ mod tests {
                 "session.list",
                 "session.resume",
                 "client.hello",
+                "session.create",
             ]
         );
         assert!(result.capabilities.interactive_approval);

@@ -31,4 +31,6 @@ pub use method::{
     SessionMessageDto, SessionPolicy, SessionResumeParams, SessionResumeResult, SessionSummaryDto,
     negotiate_hello, planned_method_access, registered_features, registered_method,
 };
-pub use service::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, SessionReadService, SessionService};
+pub use service::{
+    DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, SessionCreateService, SessionReadService, SessionService,
+};

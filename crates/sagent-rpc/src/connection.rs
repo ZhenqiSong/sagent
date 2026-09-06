@@ -43,8 +43,9 @@ impl ConnectionState {
 #[cfg(test)]
 mod tests {
     use sagent_protocol::{
-        GatewayPingResult, JsonRpcRequest, RequestId, SessionListParams, SessionListResult,
-        SessionReadService, SessionResumeParams, SessionResumeResult,
+        GatewayPingResult, JsonRpcRequest, RequestId, SessionCreateParams, SessionCreateResult,
+        SessionCreateService, SessionListParams, SessionListResult, SessionReadService,
+        SessionResumeParams, SessionResumeResult,
     };
     use sagent_types::{ClientId, ClientSurface};
     use serde_json::json;
@@ -80,6 +81,17 @@ mod tests {
         ) -> Result<SessionResumeResult, sagent_protocol::ProtocolError> {
             Err(sagent_protocol::ProtocolError::SessionNotFound(
                 "missing".to_owned(),
+            ))
+        }
+    }
+
+    impl SessionCreateService for FakeService {
+        fn create_session(
+            &self,
+            _: &SessionCreateParams,
+        ) -> Result<SessionCreateResult, sagent_protocol::ProtocolError> {
+            Err(sagent_protocol::ProtocolError::Internal(
+                "create is not used by this fake".to_owned(),
             ))
         }
     }
@@ -171,6 +183,19 @@ mod tests {
             .expect("只读 ping 应返回响应");
 
         assert_eq!(response.result.expect("应有结果")["ok"], json!(true));
+    }
+
+    #[test]
+    fn session_create_requires_a_successful_hello() {
+        let mut state = ConnectionState::new();
+        let response = state
+            .dispatch(request(1, "session.create", json!({})), &FakeService)
+            .expect("带 id 的交互请求应返回错误响应");
+
+        assert_eq!(
+            response.error.expect("应有握手错误").code,
+            sagent_protocol::HANDSHAKE_REQUIRED
+        );
     }
 
     #[test]

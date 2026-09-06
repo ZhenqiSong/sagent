@@ -178,7 +178,8 @@ fn stdio_protocol_negotiates_client_hello_before_read_only_requests() {
             "gateway.ping",
             "session.list",
             "session.resume",
-            "client.hello"
+            "client.hello",
+            "session.create"
         ])
     );
     assert_eq!(
@@ -190,16 +191,25 @@ fn stdio_protocol_negotiates_client_hello_before_read_only_requests() {
 }
 
 #[test]
-fn missing_database_fails_without_creating_state_file() {
+fn missing_database_is_initialized_for_the_runtime_daemon() {
     let home = test_home("missing-db");
     remove(&home);
     fs::create_dir_all(&home).expect("应能创建空 home");
 
-    let output = run_rpc(&home, None, "");
-    assert!(!output.status.success(), "缺失数据库必须令进程失败");
-    assert!(output.stdout.is_empty(), "启动失败时 stdout 不能产生协议帧");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("state.db"));
-    assert!(!home.join("state.db").exists(), "只读 RPC 不能创建数据库");
+    let output = run_rpc(
+        &home,
+        None,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.list\",\"params\":{}}\n",
+    );
+    assert!(
+        output.status.success(),
+        "首次运行应初始化 Sagent 自有数据库，stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let frames = output_frames(&output.stdout);
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[1]["result"]["sessions"], json!([]));
+    assert!(home.join("state.db").is_file(), "bootstrap 应创建 state.db");
     remove(&home);
 }
 
@@ -253,5 +263,47 @@ fn interactive_methods_are_gated_by_connection_hello_and_capability() {
     assert_eq!(frames[3]["error"]["code"], json!(-32006));
     assert_eq!(frames[4]["result"]["protocol_version"], json!(1));
     assert_eq!(frames[5]["error"]["code"], json!(-32008));
+    remove(&home);
+}
+
+#[test]
+fn hello_then_session_create_persists_an_empty_rpc_session() {
+    let home = test_home("session-create");
+    remove(&home);
+    fs::create_dir_all(&home).expect("应能创建临时 home");
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.hello\",\"params\":{\"protocol_version\":1,\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"surface\":\"tui\",\"capabilities\":{\"interactive_approval\":false,\"supports_stream_edits\":false}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session.create\",\"params\":{\"title\":\"RPC 空会话\"}}\n",
+    );
+
+    // 先执行 hello/create，随后由同一 Profile 的 Store 验证没有因创建空会话启动 Actor。
+    let output = run_rpc(&home, None, input);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let frames = output_frames(&output.stdout);
+    assert_eq!(frames.len(), 3);
+    let session_id = frames[2]["result"]["session_id"]
+        .as_str()
+        .expect("create 应返回 session id");
+    assert_eq!(frames[2]["result"]["session"]["source"], json!("rpc"));
+    assert_eq!(frames[2]["result"]["session"]["title"], json!("RPC 空会话"));
+
+    let store = Store::open_readonly(&home.join("state.db")).expect("应能重新只读打开数据库");
+    let session = store
+        .get_session(&SessionId::new(session_id))
+        .expect("应能读取刚创建的会话")
+        .expect("会话应存在");
+    assert_eq!(session.source.as_deref(), Some("rpc"));
+    assert_eq!(session.message_count, 0, "创建空会话不能写入 user message");
+    assert!(
+        store
+            .get_messages_for_display(&SessionId::new(session_id), &Default::default())
+            .expect("应能读取空会话消息")
+            .is_empty(),
+        "创建空会话不能启动 Actor 或生成消息"
+    );
     remove(&home);
 }

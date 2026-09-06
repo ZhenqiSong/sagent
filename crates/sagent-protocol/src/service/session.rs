@@ -4,8 +4,9 @@ use sagent_store::{MessageQuery, SessionListQuery, Store};
 use sagent_types::{SessionId, SessionSummary, StoredMessage};
 
 use crate::{
-    ProtocolError, SessionDetailDto, SessionListParams, SessionListResult, SessionMessageDto,
-    SessionResumeParams, SessionResumeResult, SessionSummaryDto,
+    ProtocolError, SessionCreateParams, SessionCreateResult, SessionDetailDto, SessionListParams,
+    SessionListResult, SessionMessageDto, SessionResumeParams, SessionResumeResult,
+    SessionSummaryDto,
 };
 
 /// 会话列表与快照读取的默认分页大小。
@@ -24,6 +25,18 @@ pub trait SessionReadService {
         &self,
         params: &SessionResumeParams,
     ) -> Result<SessionResumeResult, ProtocolError>;
+}
+
+/// 可由 JSON-RPC 创建空会话的服务接口。
+///
+/// 创建只写入 `sessions` 表，不能顺带启动 Actor、创建 Turn 或请求 Provider；这样空
+/// 会话不会占用运行时资源，后续 `prompt.submit` 才是启动 SessionActor 的唯一入口。
+pub trait SessionCreateService {
+    /// 创建一个属于当前 Profile 的空会话。
+    fn create_session(
+        &self,
+        params: &SessionCreateParams,
+    ) -> Result<SessionCreateResult, ProtocolError>;
 }
 
 /// 绑定一个只读 Store 的会话服务。

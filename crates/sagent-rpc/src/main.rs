@@ -2,43 +2,13 @@
 
 mod args;
 mod connection;
+mod runtime_bootstrap;
+mod service;
 mod stdio;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use sagent_config::{resolve_active_paths, resolve_paths};
-use sagent_protocol::{GatewayPingResult, GatewayService, SessionReadService, SessionService};
-use sagent_store::Store;
-
-/// 将只读协议服务适配到 Store；transport 不直接接触数据库。
-struct RpcService {
-    sessions: SessionService,
-}
-
-impl GatewayService for RpcService {
-    fn ping(&self) -> GatewayPingResult {
-        GatewayPingResult {
-            ok: true,
-            protocol_version: sagent_protocol::PROTOCOL_VERSION,
-        }
-    }
-}
-
-impl SessionReadService for RpcService {
-    fn list_sessions(
-        &self,
-        params: &sagent_protocol::SessionListParams,
-    ) -> Result<sagent_protocol::SessionListResult, sagent_protocol::ProtocolError> {
-        self.sessions.list_sessions(params)
-    }
-
-    fn resume_session(
-        &self,
-        params: &sagent_protocol::SessionResumeParams,
-    ) -> Result<sagent_protocol::SessionResumeResult, sagent_protocol::ProtocolError> {
-        self.sessions.resume_session(params)
-    }
-}
 
 /// 进程入口只负责把启动错误写到 stderr，避免污染 stdout 协议流。
 #[tokio::main(flavor = "multi_thread")]
@@ -49,21 +19,14 @@ async fn main() {
     }
 }
 
-/// 解析作用域、以只读模式打开数据库，并启动 NDJSON 请求循环。
+/// 解析作用域、构造 Profile 隔离的 Runtime，并启动 NDJSON 请求循环。
 async fn run() -> Result<()> {
     let args = args::RpcArgs::parse();
     let paths = match args.profile.as_ref() {
         Some(profile) => resolve_paths(args.home.as_deref(), Some(profile))?,
         None => resolve_active_paths(args.home.as_deref(), None)?,
     };
-    let store = Store::open_readonly(&paths.state_db)
-        .with_context(|| format!("无法打开 RPC 只读数据库：{}", paths.state_db.display()))?;
-    store
-        .verify_connection()
-        .context("RPC 数据库连接检查失败")?;
-    let service = RpcService {
-        sessions: SessionService::new(store),
-    };
+    let service = runtime_bootstrap::RuntimeBootstrap::from_paths(paths)?.into_service();
     let reader = tokio::io::BufReader::new(tokio::io::stdin());
     let writer = tokio::io::BufWriter::new(tokio::io::stdout());
     let connection = connection::ConnectionState::new();

@@ -5,4 +5,6 @@
 
 mod session;
 
-pub use session::{DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, SessionReadService, SessionService};
+pub use session::{
+    DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, SessionCreateService, SessionReadService, SessionService,
+};

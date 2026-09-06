@@ -17,8 +17,11 @@ serde_json.workspace = true
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 sagent-config = { path = "../sagent-config" }
+sagent-provider = { path = "../sagent-provider" }
 sagent-protocol = { path = "../sagent-protocol" }
+sagent-runtime = { path = "../sagent-runtime" }
 sagent-store = { path = "../sagent-store" }
 sagent-types = { path = "../sagent-types" }
+uuid.workspace = true
 
 [dev-dependencies]

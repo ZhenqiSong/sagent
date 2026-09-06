@@ -8,8 +8,9 @@ use serde_json::Value;
 
 use crate::{
     ClientHelloParams, ConnectionAccess, GatewayPingParams, GatewayPingResult, JsonRpcRequest,
-    JsonRpcResponse, ProtocolError, RequestId, SessionListParams, SessionReadService,
-    SessionResumeParams, negotiate_hello, planned_method_access,
+    JsonRpcResponse, ProtocolError, RequestId, SessionCreateParams, SessionCreateService,
+    SessionListParams, SessionReadService, SessionResumeParams, negotiate_hello,
+    planned_method_access,
 };
 
 /// 网关基础能力的最小服务接口。
@@ -18,10 +19,13 @@ pub trait GatewayService {
     fn ping(&self) -> GatewayPingResult;
 }
 
-/// 可被 JSON-RPC 入口直接分派的完整只读服务能力。
-pub trait DispatchService: GatewayService + SessionReadService {}
+/// 可被 JSON-RPC 入口直接分派的服务能力。
+///
+/// 第三阶段的只读方法仍由同一 trait 提供；第四阶段仅额外加入不会启动 Actor 的
+/// `session.create`，避免 transport 为单个写方法引入第二套分发入口。
+pub trait DispatchService: GatewayService + SessionReadService + SessionCreateService {}
 
-impl<T> DispatchService for T where T: GatewayService + SessionReadService {}
+impl<T> DispatchService for T where T: GatewayService + SessionReadService + SessionCreateService {}
 
 /// 校验并分派一个请求。
 ///
@@ -139,6 +143,11 @@ fn dispatch_session<S: DispatchService>(
     service: &S,
 ) -> Result<Value, ProtocolError> {
     match action {
+        "create" => {
+            let params: SessionCreateParams = parse_params(params)?;
+            serde_json::to_value(service.create_session(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
         "list" => {
             let params: SessionListParams = parse_params(params)?;
             serde_json::to_value(service.list_sessions(&params)?)
@@ -185,8 +194,9 @@ mod tests {
     use sagent_types::{ClientId, ClientSurface};
 
     use crate::{
-        GatewayPingResult, JsonRpcRequest, RequestId, SessionListParams, SessionListResult,
-        SessionReadService, SessionResumeParams, SessionResumeResult,
+        GatewayPingResult, JsonRpcRequest, RequestId, SessionCreateParams, SessionCreateResult,
+        SessionCreateService, SessionListParams, SessionListResult, SessionReadService,
+        SessionResumeParams, SessionResumeResult,
         error::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND},
         registered_features,
     };
@@ -219,6 +229,17 @@ mod tests {
             _params: &SessionResumeParams,
         ) -> Result<SessionResumeResult, crate::ProtocolError> {
             Err(crate::ProtocolError::SessionNotFound("missing".to_owned()))
+        }
+    }
+
+    impl SessionCreateService for FakeGateway {
+        fn create_session(
+            &self,
+            _: &SessionCreateParams,
+        ) -> Result<SessionCreateResult, crate::ProtocolError> {
+            Err(crate::ProtocolError::Internal(
+                "create is not used by this fake".to_owned(),
+            ))
         }
     }
 
@@ -333,7 +354,8 @@ mod tests {
                 "gateway.ping",
                 "session.list",
                 "session.resume",
-                "client.hello"
+                "client.hello",
+                "session.create"
             ])
         );
         assert_eq!(result["capabilities"]["interactive_approval"], true);
@@ -345,7 +367,7 @@ mod tests {
         for method in registered_features() {
             let mut request = request_with_number_id(9, method.clone());
             request.params = Some(match method.as_str() {
-                "gateway.ping" | "session.list" => json!({}),
+                "gateway.ping" | "session.list" | "session.create" => json!({}),
                 "session.resume" => json!({"session_id": "missing"}),
                 "client.hello" => json!({
                     "protocol_version": 1,

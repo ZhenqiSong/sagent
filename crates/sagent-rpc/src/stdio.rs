@@ -317,8 +317,9 @@ mod tests {
     };
 
     use sagent_protocol::{
-        GatewayPingResult, SessionListParams, SessionListResult, SessionReadService,
-        SessionResumeParams, SessionResumeResult,
+        GatewayPingResult, SessionCreateParams, SessionCreateResult, SessionCreateService,
+        SessionListParams, SessionListResult, SessionReadService, SessionResumeParams,
+        SessionResumeResult,
     };
     use tokio::io::AsyncWrite;
 
@@ -376,6 +377,17 @@ mod tests {
         ) -> Result<SessionResumeResult, sagent_protocol::ProtocolError> {
             Err(sagent_protocol::ProtocolError::SessionNotFound(
                 "not-used".to_owned(),
+            ))
+        }
+    }
+
+    impl SessionCreateService for FakeService {
+        fn create_session(
+            &self,
+            _: &SessionCreateParams,
+        ) -> Result<SessionCreateResult, sagent_protocol::ProtocolError> {
+            Err(sagent_protocol::ProtocolError::Internal(
+                "create is not used by this fake".to_owned(),
             ))
         }
     }

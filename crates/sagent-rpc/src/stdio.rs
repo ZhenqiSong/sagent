@@ -4,10 +4,12 @@ use std::io::{self, BufRead, Write};
 
 use sagent_protocol::{
     DispatchService, EventParams, JsonRpcError, JsonRpcEvent, JsonRpcRequest, JsonRpcResponse,
-    ProtocolError, ProtocolFeatures, RequestId, dispatch,
+    ProtocolError, ProtocolFeatures, RequestId,
 };
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::connection::ConnectionState;
 
 /// 单行请求最大字节数，防止 transport 无界读取。
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
@@ -42,6 +44,7 @@ pub fn run<R: BufRead, W: Write, S: DispatchService>(
     reader: &mut R,
     writer: &mut W,
     service: &S,
+    connection: &mut ConnectionState,
 ) -> io::Result<()> {
     // ready 必须先于任何请求响应发送，让客户端即使还没有发 hello，也能发现
     // 此 binary 当前真正注册的方法集合。
@@ -83,7 +86,7 @@ pub fn run<R: BufRead, W: Write, S: DispatchService>(
             }
         };
 
-        if let Some(response) = dispatch(request, service) {
+        if let Some(response) = connection.dispatch(request, service) {
             // dispatch 对 notification 返回 None；这里不补空行或 ACK，严格遵守
             // JSON-RPC 的“通知没有响应”语义。
             write_frame(writer, &response)?;
@@ -108,6 +111,7 @@ mod tests {
     };
 
     use super::{MAX_FRAME_BYTES, run};
+    use crate::connection::ConnectionState;
 
     struct FakeService;
     impl sagent_protocol::GatewayService for FakeService {
@@ -143,7 +147,14 @@ mod tests {
     fn emits_ready_then_ping_and_ignores_notification_response() {
         let input = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"gateway.ping\"}\n{\"jsonrpc\":\"2.0\",\"method\":\"gateway.ping\"}\n";
         let mut output = Vec::new();
-        run(&mut Cursor::new(input), &mut output, &FakeService).expect("stdio 应成功");
+        let mut connection = ConnectionState::new();
+        run(
+            &mut Cursor::new(input),
+            &mut output,
+            &FakeService,
+            &mut connection,
+        )
+        .expect("stdio 应成功");
         let text = String::from_utf8(output).expect("输出应为 UTF-8");
         let lines: Vec<_> = text.lines().collect();
         assert_eq!(lines.len(), 2);
@@ -154,7 +165,14 @@ mod tests {
     #[test]
     fn malformed_json_returns_parse_error() {
         let mut output = Vec::new();
-        run(&mut Cursor::new(b"not-json\n"), &mut output, &FakeService).expect("stdio 应成功");
+        let mut connection = ConnectionState::new();
+        run(
+            &mut Cursor::new(b"not-json\n"),
+            &mut output,
+            &FakeService,
+            &mut connection,
+        )
+        .expect("stdio 应成功");
         let text = String::from_utf8(output).expect("输出应为 UTF-8");
         assert!(text.contains("parse error"));
     }
@@ -171,8 +189,15 @@ mod tests {
             "x".repeat(MAX_FRAME_BYTES)
         );
         let mut output = Vec::new();
+        let mut connection = ConnectionState::new();
 
-        run(&mut Cursor::new(input), &mut output, &FakeService).expect("stdio 应继续运行");
+        run(
+            &mut Cursor::new(input),
+            &mut output,
+            &FakeService,
+            &mut connection,
+        )
+        .expect("stdio 应继续运行");
         let frames: Vec<serde_json::Value> = String::from_utf8(output)
             .expect("输出应为 UTF-8")
             .lines()

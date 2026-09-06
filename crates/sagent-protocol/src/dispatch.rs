@@ -7,9 +7,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ClientHelloParams, GatewayPingParams, GatewayPingResult, JsonRpcRequest, JsonRpcResponse,
-    ProtocolError, RequestId, SessionListParams, SessionReadService, SessionResumeParams,
-    negotiate_hello,
+    ClientHelloParams, ConnectionAccess, GatewayPingParams, GatewayPingResult, JsonRpcRequest,
+    JsonRpcResponse, ProtocolError, RequestId, SessionListParams, SessionReadService,
+    SessionResumeParams, negotiate_hello, planned_method_access,
 };
 
 /// 网关基础能力的最小服务接口。
@@ -31,8 +31,29 @@ pub fn dispatch<S: DispatchService>(
     request: JsonRpcRequest,
     service: &S,
 ) -> Option<JsonRpcResponse<Value>> {
+    dispatch_response(request, service, None)
+}
+
+/// 使用一条连接的 capability 状态分派请求。
+///
+/// 与无状态的 [`dispatch`] 保持分离，避免破坏第三阶段只读调用方；RPC transport
+/// 应为每条输入连接创建一个 `ConnectionAccess`，并在整个 NDJSON 循环中复用它。
+/// 这样 `client.hello` 的结果只影响当前连接，不会泄漏到其他连接。
+pub fn dispatch_with_access<S: DispatchService>(
+    request: JsonRpcRequest,
+    service: &S,
+    access: &mut ConnectionAccess,
+) -> Option<JsonRpcResponse<Value>> {
+    dispatch_response(request, service, Some(access))
+}
+
+fn dispatch_response<S: DispatchService>(
+    request: JsonRpcRequest,
+    service: &S,
+    access: Option<&mut ConnectionAccess>,
+) -> Option<JsonRpcResponse<Value>> {
     let id = request.id.clone();
-    let result = dispatch_request(request, service);
+    let result = dispatch_request_with_access(request, service, access);
 
     id.map(|request_id| match result {
         Ok(result) => JsonRpcResponse::success(request_id, result),
@@ -40,12 +61,24 @@ pub fn dispatch<S: DispatchService>(
     })
 }
 
-fn dispatch_request<S: DispatchService>(
+fn dispatch_request_with_access<S: DispatchService>(
     request: JsonRpcRequest,
     service: &S,
+    access: Option<&mut ConnectionAccess>,
 ) -> Result<Value, ProtocolError> {
     if request.jsonrpc != "2.0" || request.method.trim().is_empty() {
         return Err(ProtocolError::InvalidRequest);
+    }
+
+    // 只对已注册或已规划的方法做 capability gate；未知方法仍应返回稳定的
+    // `method not found`，不能因为未握手而掩盖客户端拼写错误。
+    if request.method != "client.hello"
+        && let Some(method_access) = crate::registered_method(&request.method)
+            .map(|spec| spec.access)
+            .or_else(|| planned_method_access(&request.method))
+        && let Some(connection_access) = access.as_ref()
+    {
+        connection_access.require(&request.method, method_access)?;
     }
 
     let (namespace, action) = request
@@ -54,7 +87,7 @@ fn dispatch_request<S: DispatchService>(
         .ok_or_else(|| ProtocolError::MethodNotFound(request.method.clone()))?;
 
     match namespace {
-        "client" => dispatch_client(action, request.params),
+        "client" => dispatch_client(action, request.params, access),
         "gateway" => dispatch_gateway(action, request.params, service),
         "session" => dispatch_session(action, request.params, service),
         _ => Err(ProtocolError::MethodNotFound(request.method)),
@@ -63,14 +96,21 @@ fn dispatch_request<S: DispatchService>(
 
 /// `client.*` 方法的二级分发入口。
 ///
-/// hello 本身是纯协商，不读取 Store；连接对象将在下一步保存协商后的 capability，
-/// 并以该快照拦截后续交互请求。
-fn dispatch_client(action: &str, params: Option<Value>) -> Result<Value, ProtocolError> {
+/// hello 本身是纯协商，不读取 Store；通过带状态的入口调用时，只有协商成功的
+/// capability 才会保存到当前连接。
+fn dispatch_client(
+    action: &str,
+    params: Option<Value>,
+    access: Option<&mut ConnectionAccess>,
+) -> Result<Value, ProtocolError> {
     match action {
         "hello" => {
             let params: ClientHelloParams = parse_params(params)?;
-            serde_json::to_value(negotiate_hello(&params)?)
-                .map_err(|error| ProtocolError::Internal(error.to_string()))
+            let result = negotiate_hello(&params)?;
+            if let Some(access) = access {
+                access.set_client(params.client_capabilities());
+            }
+            serde_json::to_value(result).map_err(|error| ProtocolError::Internal(error.to_string()))
         }
         _ => Err(ProtocolError::MethodNotFound(format!("client.{action}"))),
     }

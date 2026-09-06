@@ -161,6 +161,8 @@ DTO 全部 `#[serde(deny_unknown_fields)]`，params 只能是 JSON object，ID �
 
 ### 步骤 1：连接状态和状态化分发
 
+状态：连接状态、握手保存和 capability gate 已完成；Runtime capability 注入留待步骤 3。
+
 **位置**：新增 `sagent-rpc/src/connection.rs`；兼容保留 protocol 的只读 `dispatch()`。
 
 1. 创建 `ConnectionState { client: Option<ClientCapabilities> }`；
@@ -170,6 +172,14 @@ DTO 全部 `#[serde(deny_unknown_fields)]`，params 只能是 JSON object，ID �
 5. 测试 hello 前/后、两个连接隔离、非交互 client 的 approval 拒绝、三阶段只读兼容。
 
 **验收**：连接 A 的 capability 永不授权连接 B；业务 params 不能伪造 capability。
+
+完成记录：新增 `sagent-rpc/src/connection.rs`，由每条 stdio 连接独占
+`ConnectionState`；`client.hello` 仅在版本协商成功后保存 `ClientCapabilities`，
+`prompt.submit`、`session.create`、`session.interrupt`、`session.events.since` 和
+`approval.respond` 在状态化分发入口统一执行握手/capability 检查。保留 protocol 的无状态
+`dispatch()` 以兼容第三阶段只读调用方，并增加真实 `sagent-rpc` 子进程测试覆盖错误 hello、
+连接隔离、只读兼容和审批拒绝。由于当前 RPC 尚未接入 Runtime，`SessionHandle::resume`
+的 capability 传递将在步骤 3 的 RuntimeBootstrap 中完成。
 
 ### 步骤 2：异步 stdio 和唯一 writer
 

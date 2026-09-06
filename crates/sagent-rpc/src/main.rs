@@ -1,6 +1,7 @@
 //! `sagent-rpc` 本地只读 JSON-RPC 进程入口。
 
 mod args;
+mod connection;
 mod stdio;
 
 use std::io::{self, BufReader};
@@ -67,6 +68,8 @@ fn run() -> Result<()> {
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let mut stdout = io::BufWriter::new(io::stdout().lock());
-    stdio::run(&mut reader, &mut stdout, &service).context("stdio RPC 循环失败")?;
+    let mut connection = connection::ConnectionState::new();
+    stdio::run(&mut reader, &mut stdout, &service, &mut connection)
+        .context("stdio RPC 循环失败")?;
     Ok(())
 }

@@ -222,3 +222,36 @@ fn named_profile_reads_its_own_database() {
     assert_eq!(frames[1]["result"]["sessions"][0]["id"], "visible-session");
     remove(&root);
 }
+
+#[test]
+fn interactive_methods_are_gated_by_connection_hello_and_capability() {
+    let home = test_home("connection-gate");
+    remove(&home);
+    create_fixture(&home);
+    let input = concat!(
+        // 尚未握手时，交互方法必须在解析业务参数前被拒绝。
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"prompt.submit\",\"params\":{}}\n",
+        // 错误版本不能建立连接状态；后续请求仍然需要 hello。
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"client.hello\",\"params\":{\"protocol_version\":999,\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"surface\":\"tui\",\"capabilities\":{\"interactive_approval\":true,\"supports_stream_edits\":false}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"prompt.submit\",\"params\":{}}\n",
+        // hello 成功但未声明审批能力时，错误应从 handshake 升级为 capability denied。
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"client.hello\",\"params\":{\"protocol_version\":1,\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"surface\":\"tui\",\"capabilities\":{\"interactive_approval\":false,\"supports_stream_edits\":false}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"approval.respond\",\"params\":{}}\n",
+    );
+
+    let output = run_rpc(&home, None, input);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let frames = output_frames(&output.stdout);
+
+    assert_eq!(frames.len(), 6, "ready 加五个带 id 的请求应返回六帧");
+    assert_eq!(frames[1]["error"]["code"], json!(-32006));
+    assert_eq!(frames[2]["error"]["code"], json!(-32007));
+    assert_eq!(frames[3]["error"]["code"], json!(-32006));
+    assert_eq!(frames[4]["result"]["protocol_version"], json!(1));
+    assert_eq!(frames[5]["error"]["code"], json!(-32008));
+    remove(&home);
+}

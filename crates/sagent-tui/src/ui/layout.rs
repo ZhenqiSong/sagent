@@ -101,7 +101,7 @@ pub fn draw(frame: &mut Frame, state: &AppState) {
 
     let composer = Paragraph::new(if state.composer.text.is_empty() {
         if mode.show_key_help {
-            "输入消息；Ctrl-Enter 提交".to_owned()
+            "输入消息；F2 提交（Ctrl-Enter 兼容）".to_owned()
         } else {
             "输入".to_owned()
         }

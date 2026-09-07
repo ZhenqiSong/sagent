@@ -137,12 +137,15 @@ fn key_action(event: Event, state: &AppState) -> Option<AppAction> {
     }
     if matches!(state.overlay, crate::app::Overlay::None) {
         return match event.code {
-            // 某些 Windows terminal 将 Ctrl-Enter 规范化为 Ctrl-J；两种编码都表示提交。
+            // VS Code 的集成终端常把 Ctrl-Enter 降级为普通 Enter，无法与换行可靠区分；
+            // Ctrl-S 也可能被工作台“保存”快捷键或终端流控截获。F2 有独立的终端键码，
+            // 因而作为跨终端稳定的提交键；Ctrl-Enter/Ctrl-J 仍保留为兼容映射。
             KeyCode::Enter | KeyCode::Char('j')
                 if event.modifiers.contains(event::KeyModifiers::CONTROL) =>
             {
                 Some(AppAction::SubmitPromptRequested)
             }
+            KeyCode::F(2) => Some(AppAction::SubmitPromptRequested),
             KeyCode::Enter => Some(AppAction::ComposerInsert("\n".to_owned())),
             KeyCode::Backspace => Some(AppAction::ComposerBackspace),
             KeyCode::Delete => Some(AppAction::ComposerDelete),
@@ -250,6 +253,24 @@ mod tests {
                 &crate::app::AppState::default()
             ),
             None
+        );
+    }
+
+    #[test]
+    fn f2_submits_while_plain_enter_keeps_multiline_composer() {
+        // F2 有独立 VT 键码，不会像 Ctrl-Enter/Ctrl-S 一样在 VS Code 终端链路中被
+        // 规范化或截获；普通 Enter 仍然保留为多行输入，避免改变编辑语义。
+        let submit = KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE);
+        let newline = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let state = crate::app::AppState::default();
+
+        assert_eq!(
+            key_action(crossterm::event::Event::Key(submit), &state),
+            Some(AppAction::SubmitPromptRequested)
+        );
+        assert_eq!(
+            key_action(crossterm::event::Event::Key(newline), &state),
+            Some(AppAction::ComposerInsert("\n".to_owned()))
         );
     }
 

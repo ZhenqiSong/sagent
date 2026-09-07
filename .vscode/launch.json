@@ -1,89 +1,65 @@
 {
-    // 使用 IntelliSense 了解相关属性。 
-    // 悬停以查看现有属性的描述。
-    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
-    "version": "0.2.0",
-    "configurations": [
-
-        {
-            "name": "Debug unit tests in library 'sagent_cli'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--package=sagent-cli"
-                ]
-            }
-        },
-        {
-            "name": "Debug executable 'sagent'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "run",
-                    "--bin=sagent",
-                    "--package=sagent-cli",
-                ]
-            },
-            "args": []
-        },
-        {
-            "name": "Debug unit tests in executable 'sagent'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--bin=sagent",
-                    "--package=sagent-cli"
-                ]
-            }
-        },
-        {
-            "name": "Debug unit tests in library 'sagent_common'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--package=sagent-common"
-                ]
-            }
-        },
-        {
-            "name": "Debug unit tests in library 'sagent_core'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--package=sagent-core"
-                ]
-            }
-        },
-        {
-            "name": "Debug unit tests in library 'sagent_gateway'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--package=sagent-gateway"
-                ]
-            }
-        },
-        {
-            "name": "Debug unit tests in library 'sagent_plugin'",
-            "type": "lldb",
-            "request": "launch",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--package=sagent-plugin"
-                ]
-            }
-        }
-    ]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "调试 TUI（D:\\sagent-smoke）",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--package=sagent-tui", "--bin=sagent-tui"]
+      },
+      "preLaunchTask": "构建 sagent-rpc",
+      "args": [
+        "--home",
+        "D:\\sagent-smoke",
+        "--rpc-bin",
+        "${workspaceFolder}\\target\\debug\\sagent-rpc.exe"
+      ],
+      "cwd": "${workspaceFolder}",
+      "terminal": "integrated",
+      "env": { "RUST_BACKTRACE": "1" }
+    },
+    {
+      "name": "调试 RPC 服务端（D:\\sagent-smoke）",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--package=sagent-rpc", "--bin=sagent-rpc"]
+      },
+      "args": ["--home", "D:\\sagent-smoke"],
+      "cwd": "${workspaceFolder}",
+      "terminal": "integrated",
+      "env": { "RUST_BACKTRACE": "1" }
+    },
+    {
+      "name": "附加到 TUI 创建的 sagent-rpc",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}\\target\\debug\\sagent-rpc.exe",
+      "pid": "${command:pickMyProcess}",
+      "stopOnEntry": false
+    },
+    {
+      "name": "调试 sagent-tui 测试",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["test", "--package=sagent-tui", "--no-run"]
+      },
+      "args": ["--nocapture", "--test-threads=1"],
+      "cwd": "${workspaceFolder}",
+      "env": { "RUST_BACKTRACE": "1" }
+    },
+    {
+      "name": "调试 sagent-rpc 测试",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["test", "--package=sagent-rpc", "--no-run"]
+      },
+      "args": ["--nocapture", "--test-threads=1"],
+      "cwd": "${workspaceFolder}",
+      "env": { "RUST_BACKTRACE": "1" }
+    }
+  ]
 }

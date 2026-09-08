@@ -191,7 +191,7 @@ RPC 使用 stdin/stdout 传输逐行 JSON（NDJSON）；诊断信息写入 stder
 仓库提供 macOS 调试配置：
 
 1. 打开项目根目录。
-2. 在 Run and Debug 中选择“调试 TUI（/tmp/sagent-smoke）”。
+2. 在 Run and Debug 中选择“调试 TUI（${workspaceFolder}/tmp）”。
 3. VS Code 会通过 `tasks.json` 先构建 `sagent-rpc`，再启动 TUI。
 
 也可以选择“调试 RPC 服务端”或对应的测试配置。

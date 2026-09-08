@@ -32,3 +32,4 @@ temp/
 
 migrations/
 .codebuddy/rules/*
+.vscode/launch.json

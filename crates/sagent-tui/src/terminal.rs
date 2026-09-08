@@ -137,16 +137,15 @@ fn key_action(event: Event, state: &AppState) -> Option<AppAction> {
     }
     if matches!(state.overlay, crate::app::Overlay::None) {
         return match event.code {
-            // VS Code 的集成终端常把 Ctrl-Enter 降级为普通 Enter，无法与换行可靠区分；
-            // Ctrl-S 也可能被工作台“保存”快捷键或终端流控截获。F2 有独立的终端键码，
-            // 因而作为跨终端稳定的提交键；Ctrl-Enter/Ctrl-J 仍保留为兼容映射。
+            // 普通 Enter 提交消息，Ctrl-Enter 插入换行；Ctrl-J 是部分 macOS 终端对
+            // Ctrl-Enter 的等价编码，因此也按换行处理。F2 保留为备用提交键。
             KeyCode::Enter | KeyCode::Char('j')
                 if event.modifiers.contains(event::KeyModifiers::CONTROL) =>
             {
-                Some(AppAction::SubmitPromptRequested)
+                Some(AppAction::ComposerInsert("\n".to_owned()))
             }
             KeyCode::F(2) => Some(AppAction::SubmitPromptRequested),
-            KeyCode::Enter => Some(AppAction::ComposerInsert("\n".to_owned())),
+            KeyCode::Enter => Some(AppAction::SubmitPromptRequested),
             KeyCode::Backspace => Some(AppAction::ComposerBackspace),
             KeyCode::Delete => Some(AppAction::ComposerDelete),
             KeyCode::Left => Some(AppAction::ComposerMoveLeft),
@@ -257,11 +256,13 @@ mod tests {
     }
 
     #[test]
-    fn f2_submits_while_plain_enter_keeps_multiline_composer() {
-        // F2 有独立 VT 键码，不会像 Ctrl-Enter/Ctrl-S 一样在 VS Code 终端链路中被
-        // 规范化或截获；普通 Enter 仍然保留为多行输入，避免改变编辑语义。
+    fn enter_submits_while_ctrl_enter_inserts_newline() {
+        // 普通 Enter 是最常用的提交动作；Ctrl-Enter/Ctrl-J 负责多行输入，避免
+        // macOS 终端将 Ctrl-Enter 编码为 Ctrl-J 时改变用户预期。
         let submit = KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE);
-        let newline = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let ctrl_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL);
+        let ctrl_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
         let state = crate::app::AppState::default();
 
         assert_eq!(
@@ -269,7 +270,15 @@ mod tests {
             Some(AppAction::SubmitPromptRequested)
         );
         assert_eq!(
-            key_action(crossterm::event::Event::Key(newline), &state),
+            key_action(crossterm::event::Event::Key(enter), &state),
+            Some(AppAction::SubmitPromptRequested)
+        );
+        assert_eq!(
+            key_action(crossterm::event::Event::Key(ctrl_enter), &state),
+            Some(AppAction::ComposerInsert("\n".to_owned()))
+        );
+        assert_eq!(
+            key_action(crossterm::event::Event::Key(ctrl_j), &state),
             Some(AppAction::ComposerInsert("\n".to_owned()))
         );
     }

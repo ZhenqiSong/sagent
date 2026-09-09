@@ -1186,26 +1186,44 @@ impl SessionActor {
         self.interrupt_active_for_turn(turn_id, reason).await
     }
 
+    /// 将指定的活跃 Turn 收口为 interrupted，并保证终态只在持久化成功后对外可见。
+    ///
+    /// 此函数先把 `active` 暂时移出 Actor，阻止 worker、审批回调与其它命令在收口期间
+    /// 重复处理同一 Turn；随后依次取消执行链、停止受监管任务、原子写入 Store，最后才
+    /// 发布 `TurnInterrupted`。若持久化失败，必须恢复 `active`，使调用方得到错误而不把
+    /// 内存状态伪装成已结束；成功时不再放回它，Actor 因而回到可接受下一轮提交的空闲状态。
+    ///
+    /// 不会写入虚构的 assistant 消息。`reason` 会持久化为该 Turn 的中断原因，并用于区分
+    /// 用户主动取消与会话关闭等终止来源。
     async fn interrupt_active_for_turn(
         &mut self,
         turn_id: TurnId,
         reason: &str,
     ) -> Result<CommandReply, RuntimeError> {
+        // 先从 Actor 状态中摘下 active：收口期间迟到的 worker/审批事件将无法再匹配
+        // 该 Turn，从而不会与中断路径竞争并重复写入终态。
         let Some(mut active) = self.take_active(turn_id) else {
             return Err(RuntimeError::NoActiveTurn);
         };
         if active.terminal {
+            // 理论上已终态的 Turn 不应仍在 active 中；保留原状态以免错误路径改变它。
             self.active = Some(active);
             return Err(RuntimeError::NoActiveTurn);
         }
+        // 先传播取消并撤销审批，再等待/终止受监管任务，确保没有后台工作在持久化
+        // interrupted 后继续产出结果或启动外部进程。
         active.cancellation.cancel();
         self.approvals.cancel_for_turn(&turn_id);
         Self::stop_worker(&mut active).await;
         let timestamp = (self.clock)();
         if let Err(error) = self.store.interrupt_turn(&turn_id, reason, &timestamp) {
+            // 数据库仍是终态事实的唯一来源；写入失败时恢复 active，让调用方显式处理
+            // 持久化错误，而不是把内存会话静默变成空闲。
             self.active = Some(active);
             return Err(RuntimeError::Persistence(error.to_string()));
         }
+        // 只有 Store 成功提交后才发布终态事件。成功路径不放回 active，释放该 Actor
+        // 以接受后续 Turn。
         active.terminal = true;
         self.publish(RuntimeEvent {
             session_id: self.session_id.clone(),

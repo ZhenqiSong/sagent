@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1500" viewBox="0 0 1800 1500" role="img" aria-labelledby="title desc">
+  <title id="title">sagent-rpc 会话终止时序图</title>
+  <desc id="desc">展示公开 session.interrupt、stdin EOF 断连与 Runtime 内部 Close 三条会话终止相关路径。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#243447"/></marker>
+    <marker id="arrow-dashed" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#5c6b7a"/></marker>
+    <style>
+      text { font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #18212b; }
+      .title { font-size: 34px; font-weight: 700; }
+      .subtitle { font-size: 17px; fill: #52606d; }
+      .actor { font-size: 18px; font-weight: 700; }
+      .label { font-size: 16px; }
+      .small { font-size: 14px; fill: #405261; }
+      .note { font-size: 15px; fill: #3d4b5a; }
+      .lane { stroke: #b6c2cf; stroke-width: 1.5; stroke-dasharray: 7 7; }
+      .msg { stroke: #243447; stroke-width: 2.2; marker-end: url(#arrow); }
+      .reply { stroke: #5c6b7a; stroke-width: 1.8; stroke-dasharray: 6 5; marker-end: url(#arrow-dashed); }
+      .section { font-size: 20px; font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1500" fill="#f8fafc"/>
+  <text x="70" y="64" class="title">sagent-rpc：会话终止相关时序</text>
+  <text x="70" y="94" class="subtitle">公开 API 终止的是当前 Turn；关闭 stdin 只断开 RPC 连接。时间自上而下。</text>
+
+  <!-- actors -->
+  <g>
+    <rect x="75" y="125" width="175" height="58" rx="8" fill="#dceeff" stroke="#3b82c4" stroke-width="2"/>
+    <text x="162" y="151" text-anchor="middle" class="actor">客户端</text><text x="162" y="173" text-anchor="middle" class="small">TUI / RPC client</text>
+    <rect x="390" y="125" width="190" height="58" rx="8" fill="#e4f4e9" stroke="#479c63" stroke-width="2"/>
+    <text x="485" y="151" text-anchor="middle" class="actor">sagent-rpc</text><text x="485" y="173" text-anchor="middle" class="small">stdio dispatcher</text>
+    <rect x="710" y="125" width="180" height="58" rx="8" fill="#fff1d6" stroke="#d58a19" stroke-width="2"/>
+    <text x="800" y="151" text-anchor="middle" class="actor">Supervisor</text><text x="800" y="173" text-anchor="middle" class="small">SessionHandle</text>
+    <rect x="1010" y="125" width="180" height="58" rx="8" fill="#f7e5f7" stroke="#a856a8" stroke-width="2"/>
+    <text x="1100" y="151" text-anchor="middle" class="actor">SessionActor</text><text x="1100" y="173" text-anchor="middle" class="small">单会话 mailbox</text>
+    <rect x="1310" y="125" width="180" height="58" rx="8" fill="#ffe9e3" stroke="#cf684d" stroke-width="2"/>
+    <text x="1400" y="151" text-anchor="middle" class="actor">Worker</text><text x="1400" y="173" text-anchor="middle" class="small">Provider / Tool</text>
+    <rect x="1600" y="125" width="135" height="58" rx="8" fill="#e9edf2" stroke="#687889" stroke-width="2"/>
+    <text x="1667" y="151" text-anchor="middle" class="actor">Store</text><text x="1667" y="173" text-anchor="middle" class="small">SQLite</text>
+    <line x1="162" y1="183" x2="162" y2="1430" class="lane"/><line x1="485" y1="183" x2="485" y2="1430" class="lane"/>
+    <line x1="800" y1="183" x2="800" y2="1430" class="lane"/><line x1="1100" y1="183" x2="1100" y2="1430" class="lane"/>
+    <line x1="1400" y1="183" x2="1400" y2="1430" class="lane"/><line x1="1667" y1="183" x2="1667" y2="1430" class="lane"/>
+  </g>
+
+  <!-- section 1 -->
+  <rect x="70" y="218" width="1660" height="560" rx="12" fill="#ffffff" stroke="#bcd3e6" stroke-width="2"/>
+  <rect x="70" y="218" width="1660" height="45" rx="12" fill="#dceeff"/>
+  <text x="94" y="248" class="section">① 公开路径：session.interrupt 终止当前 Turn</text>
+  <line x1="162" y1="300" x2="485" y2="300" class="msg"/><text x="323" y="289" text-anchor="middle" class="label">session.interrupt { session_id }</text>
+  <rect x="405" y="318" width="160" height="51" rx="6" fill="#effaf2" stroke="#85b994"/><text x="485" y="340" text-anchor="middle" class="small">验证 hello、参数，</text><text x="485" y="359" text-anchor="middle" class="small">且 Actor 必须运行中</text>
+  <line x1="485" y1="397" x2="800" y2="397" class="msg"/><text x="642" y="386" text-anchor="middle" class="label">get_running(session_id)</text>
+  <line x1="800" y1="427" x2="485" y2="427" class="reply"/><text x="642" y="449" text-anchor="middle" class="small">SessionHandle</text>
+  <line x1="485" y1="480" x2="1100" y2="480" class="msg"/><text x="793" y="469" text-anchor="middle" class="label">SessionCommand::Interrupt</text>
+  <rect x="1015" y="503" width="170" height="75" rx="6" fill="#fcf2fc" stroke="#c894c8"/>
+  <text x="1100" y="527" text-anchor="middle" class="small">取出 active Turn；</text><text x="1100" y="547" text-anchor="middle" class="small">取消 token 与审批</text><text x="1100" y="567" text-anchor="middle" class="small">防止重复收口</text>
+  <line x1="1100" y1="610" x2="1400" y2="610" class="msg"/><text x="1250" y="599" text-anchor="middle" class="label">等待工具最多 3 秒，随后 abort</text>
+  <line x1="1100" y1="652" x2="1667" y2="652" class="msg"/><text x="1384" y="641" text-anchor="middle" class="label">interrupt_turn(turn_id, &quot;user interrupt&quot;)</text>
+  <line x1="1667" y1="682" x2="1100" y2="682" class="reply"/><text x="1384" y="704" text-anchor="middle" class="small">原子提交 TurnInterrupted 与领域事件</text>
+  <line x1="1100" y1="730" x2="485" y2="730" class="reply"/><text x="793" y="719" text-anchor="middle" class="label">CommandReply::Interrupted</text>
+  <line x1="485" y1="757" x2="162" y2="757" class="reply"/><text x="323" y="746" text-anchor="middle" class="label">response: { status: &quot;interrupted&quot; }</text>
+  <text x="1120" y="757" class="note">同时：EventBridge 转发 event: turn.interrupted，随后结束本次订阅</text>
+
+  <!-- section 2 -->
+  <rect x="70" y="810" width="1660" height="305" rx="12" fill="#ffffff" stroke="#ead39d" stroke-width="2"/>
+  <rect x="70" y="810" width="1660" height="45" rx="12" fill="#fff1d6"/>
+  <text x="94" y="840" class="section">② 连接路径：客户端关闭 stdin / 退出</text>
+  <line x1="162" y1="887" x2="485" y2="887" class="msg"/><text x="323" y="876" text-anchor="middle" class="label">EOF（stdin 关闭）</text>
+  <rect x="370" y="910" width="230" height="64" rx="6" fill="#fff9ec" stroke="#ddb765"/>
+  <text x="485" y="934" text-anchor="middle" class="small">reader 结束，dispatcher 排空</text><text x="485" y="955" text-anchor="middle" class="small">已接收的请求</text>
+  <line x1="485" y1="1003" x2="1100" y2="1003" class="reply"/><text x="793" y="992" text-anchor="middle" class="label">取消 connection scope（仅停止 event bridge）</text>
+  <line x1="485" y1="1040" x2="162" y2="1040" class="reply"/><text x="323" y="1029" text-anchor="middle" class="label">writer 排空 stdout 后退出</text>
+  <rect x="780" y="1062" width="660" height="35" rx="6" fill="#fff3f0" stroke="#d79786"/>
+  <text x="1110" y="1085" text-anchor="middle" class="note">不会发送 SessionCommand::Interrupt；运行中的 Turn 不会因 EOF 被中断。</text>
+
+  <!-- section 3 -->
+  <rect x="70" y="1148" width="1660" height="247" rx="12" fill="#ffffff" stroke="#d9bdd9" stroke-width="2"/>
+  <rect x="70" y="1148" width="1660" height="45" rx="12" fill="#f7e5f7"/>
+  <text x="94" y="1178" class="section">③ Runtime 内部路径：SessionCommand::Close（当前未公开为 RPC 方法）</text>
+  <line x1="800" y1="1228" x2="1100" y2="1228" class="msg"/><text x="950" y="1217" text-anchor="middle" class="label">SessionCommand::Close</text>
+  <text x="1100" y="1260" text-anchor="middle" class="small">若存在 active Turn：interrupt_active(&quot;session closing&quot;)</text>
+  <line x1="1100" y1="1295" x2="1400" y2="1295" class="msg"/><text x="1250" y="1284" text-anchor="middle" class="small">取消 worker / 审批</text>
+  <line x1="1100" y1="1330" x2="1667" y2="1330" class="msg"/><text x="1384" y="1319" text-anchor="middle" class="small">持久化 TurnInterrupted</text>
+  <line x1="1100" y1="1360" x2="800" y2="1360" class="reply"/><text x="950" y="1382" text-anchor="middle" class="label">CommandReply::Closed；Actor task 退出</text>
+  <text x="70" y="1450" class="subtitle">来源：crates/sagent-rpc/src/stdio.rs、event_bridge.rs；crates/sagent-runtime/src/actor.rs、supervisor.rs</text>
+</svg>

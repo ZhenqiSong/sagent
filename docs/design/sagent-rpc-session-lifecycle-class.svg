@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180" role="img" aria-labelledby="title desc">
+  <title id="title">sagent-rpc Session 生命周期相关类图</title>
+  <desc id="desc">展示 SessionSupervisor、ManagedSession、SessionHandle、SessionActor、JoinHandle 与 reap_stale 的关系。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="#394b5b"/></marker>
+    <marker id="diamond" markerWidth="12" markerHeight="10" refX="3" refY="5" orient="auto"><path d="M12,0 L0,5 L12,10 Z" fill="#394b5b"/></marker>
+    <style>
+      text { font-family: "Microsoft YaHei", "Noto Sans CJK SC", sans-serif; fill: #1f2933; }
+      .title { font-size: 34px; font-weight: 700; }
+      .subtitle { font-size: 17px; fill: #52606d; }
+      .class-name { font-size: 21px; font-weight: 700; }
+      .field { font-size: 15px; }
+      .method { font-size: 15px; fill: #245a84; }
+      .stereo { font-size: 14px; fill: #6b7280; font-style: italic; }
+      .edge-label { font-size: 15px; fill: #405261; }
+      .edge { stroke: #394b5b; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .compose { stroke: #394b5b; stroke-width: 2; fill: none; marker-start: url(#diamond); }
+      .dependency { stroke: #596f82; stroke-width: 1.8; stroke-dasharray: 7 5; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1800" height="1180" fill="#f8fafc"/>
+  <text x="70" y="64" class="title">sagent-rpc：Session 生命周期相关类图</text>
+  <text x="70" y="94" class="subtitle">聚焦 Supervisor 的会话表、Actor task 的 JoinHandle，以及 reap_stale 的非阻塞回收。</text>
+
+  <!-- SessionSupervisor -->
+  <g transform="translate(70,155)">
+    <rect width="455" height="330" rx="9" fill="#e4f4e9" stroke="#479c63" stroke-width="2"/>
+    <line x1="0" y1="55" x2="455" y2="55" stroke="#479c63" stroke-width="2"/>
+    <line x1="0" y1="155" x2="455" y2="155" stroke="#479c63" stroke-width="2"/>
+    <text x="227" y="35" text-anchor="middle" class="class-name">SessionSupervisor</text>
+    <text x="18" y="82" class="field">- sessions: Mutex&lt;HashMap&lt;SessionId, ManagedSession&gt;&gt;</text>
+    <text x="18" y="110" class="field">- store_factory: StoreFactory</text>
+    <text x="18" y="138" class="field">- provider / tool_worker / model …</text>
+    <text x="18" y="185" class="method">+ get_or_start(session_id): SessionHandle</text>
+    <text x="18" y="215" class="method">+ get_running(session_id): SessionHandle</text>
+    <text x="18" y="245" class="method">+ remove(session_id)</text>
+    <text x="18" y="275" class="method">- start_locked(session_id)</text>
+    <text x="18" y="305" class="method">- lock_sessions()</text>
+  </g>
+
+  <!-- ManagedSession -->
+  <g transform="translate(680,155)">
+    <rect width="390" height="215" rx="9" fill="#fff1d6" stroke="#d58a19" stroke-width="2"/>
+    <line x1="0" y1="55" x2="390" y2="55" stroke="#d58a19" stroke-width="2"/>
+    <text x="195" y="35" text-anchor="middle" class="class-name">ManagedSession</text>
+    <text x="18" y="87" class="field">- command_tx: mpsc::Sender&lt;ActorInput&gt;</text>
+    <text x="18" y="121" class="field">- events: broadcast::Sender&lt;RuntimeEvent&gt;</text>
+    <text x="18" y="155" class="field">- join: JoinHandle&lt;()&gt;</text>
+    <text x="18" y="192" class="stereo">Supervisor 私有的托管记录</text>
+  </g>
+
+  <!-- JoinHandle -->
+  <g transform="translate(1280,155)">
+    <rect width="300" height="156" rx="9" fill="#e9edf2" stroke="#687889" stroke-width="2"/>
+    <line x1="0" y1="55" x2="300" y2="55" stroke="#687889" stroke-width="2"/>
+    <text x="150" y="35" text-anchor="middle" class="class-name">JoinHandle&lt;()&gt;</text>
+    <text x="18" y="88" class="method">+ is_finished(): bool</text>
+    <text x="18" y="120" class="method">+ await</text>
+  </g>
+
+  <!-- SessionHandle -->
+  <g transform="translate(70,650)">
+    <rect width="455" height="315" rx="9" fill="#dceeff" stroke="#3b82c4" stroke-width="2"/>
+    <line x1="0" y1="55" x2="455" y2="55" stroke="#3b82c4" stroke-width="2"/>
+    <line x1="0" y1="149" x2="455" y2="149" stroke="#3b82c4" stroke-width="2"/>
+    <text x="227" y="35" text-anchor="middle" class="class-name">SessionHandle</text>
+    <text x="18" y="83" class="field">- session_id: SessionId</text>
+    <text x="18" y="113" class="field">- command_tx: mpsc::Sender&lt;ActorInput&gt;</text>
+    <text x="18" y="140" class="field">- events: broadcast::Sender&lt;RuntimeEvent&gt;</text>
+    <text x="18" y="180" class="method">+ submit()</text><text x="18" y="208" class="method">+ interrupt()</text>
+    <text x="18" y="236" class="method">+ close()</text><text x="18" y="264" class="method">+ subscribe()</text>
+    <text x="18" y="294" class="method">- dispatch(command)</text>
+  </g>
+
+  <!-- SessionActor -->
+  <g transform="translate(680,590)">
+    <rect width="450" height="390" rx="9" fill="#f7e5f7" stroke="#a856a8" stroke-width="2"/>
+    <line x1="0" y1="55" x2="450" y2="55" stroke="#a856a8" stroke-width="2"/>
+    <line x1="0" y1="222" x2="450" y2="222" stroke="#a856a8" stroke-width="2"/>
+    <text x="225" y="35" text-anchor="middle" class="class-name">SessionActor</text>
+    <text x="18" y="83" class="field">- session_id: SessionId</text>
+    <text x="18" y="111" class="field">- store: Store</text>
+    <text x="18" y="139" class="field">- command_rx: mpsc::Receiver&lt;ActorInput&gt;</text>
+    <text x="18" y="167" class="field">- event_tx: broadcast::Sender&lt;RuntimeEvent&gt;</text>
+    <text x="18" y="195" class="field">- active: Option&lt;ActiveTurn&gt;</text>
+    <text x="18" y="253" class="method">+ run()</text>
+    <text x="18" y="282" class="method">- handle_input()</text>
+    <text x="18" y="311" class="method">- handle_command()</text>
+    <text x="18" y="340" class="method">- interrupt_active()</text>
+    <text x="18" y="370" class="method">- stop_worker()</text>
+  </g>
+
+  <!-- Store and ActiveTurn -->
+  <g transform="translate(1370,620)">
+    <rect width="250" height="115" rx="9" fill="#ffe9e3" stroke="#cf684d" stroke-width="2"/>
+    <text x="125" y="37" text-anchor="middle" class="stereo">«SQLite writer»</text>
+    <text x="125" y="75" text-anchor="middle" class="class-name">Store</text>
+  </g>
+  <g transform="translate(1370,850)">
+    <rect width="300" height="135" rx="9" fill="#f4edf9" stroke="#8767b3" stroke-width="2"/>
+    <text x="150" y="35" text-anchor="middle" class="class-name">ActiveTurn</text>
+    <line x1="0" y1="55" x2="300" y2="55" stroke="#8767b3" stroke-width="2"/>
+    <text x="18" y="84" class="field">- cancellation: CancellationToken</text>
+    <text x="18" y="112" class="field">- worker / tool_task / approval_waiter</text>
+  </g>
+
+  <!-- Reaper -->
+  <g transform="translate(1250,395)">
+    <rect width="410" height="130" rx="9" fill="#fff9dc" stroke="#c4a436" stroke-width="2" stroke-dasharray="7 4"/>
+    <text x="205" y="34" text-anchor="middle" class="stereo">«function»</text>
+    <text x="205" y="66" text-anchor="middle" class="class-name">reap_stale</text>
+    <text x="205" y="101" text-anchor="middle" class="method">sessions.retain(|_, managed|</text>
+    <text x="205" y="122" text-anchor="middle" class="method">!managed.join.is_finished())</text>
+  </g>
+
+  <!-- relationships -->
+  <path d="M525 320 H680" class="compose"/><text x="548" y="300" class="edge-label">1　sessions　0..*</text>
+  <path d="M1070 263 H1280" class="compose"/><text x="1100" y="244" class="edge-label">1　join　1</text>
+  <path d="M1430 311 V590 H1100" class="dependency"/><text x="1308" y="500" class="edge-label">tokio::spawn(actor.run())</text>
+
+  <path d="M296 485 V650" class="dependency"/><text x="314" y="579" class="edge-label">get_or_start / get_running 返回</text>
+  <path d="M525 735 H680" class="dependency"/><text x="538" y="714" class="edge-label">克隆 command_tx / events</text>
+  <path d="M525 825 H680" class="edge"/><text x="545" y="853" class="edge-label">ActorInput → command_rx</text>
+  <path d="M680 875 H525" class="edge"/><text x="545" y="902" class="edge-label">event_tx → subscribe()</text>
+  <path d="M1130 677 H1370" class="compose"/><text x="1174" y="657" class="edge-label">独占写入</text>
+  <path d="M1130 903 H1370" class="compose"/><text x="1170" y="883" class="edge-label">当前回合（可选）</text>
+  <path d="M1070 350 L1250 432" class="dependency"/><text x="1067" y="414" class="edge-label">检查 join.is_finished()</text>
+  <path d="M1250 478 L525 390" class="dependency"/><text x="765" y="450" class="edge-label">get_or_start / get_running / remove 前调用；移除已结束条目</text>
+
+  <rect x="70" y="1035" width="1660" height="85" rx="10" fill="#eef5fb" stroke="#9ebbd5" stroke-width="1.5"/>
+  <text x="95" y="1070" class="edge-label">关键语义：</text>
+  <text x="195" y="1070" class="edge-label">JoinHandle 表示 Actor 的运行任务。reap_stale 只移除 join 已完成的 ManagedSession，不会取消或 await Actor。</text>
+  <text x="95" y="1100" class="edge-label">因此下一次 get_or_start 可重建 Actor；旧 SessionHandle 仍指向已关闭 mailbox，发送命令会得到 ActorStopped。</text>
+
+  <text x="70" y="1155" class="subtitle">来源：crates/sagent-runtime/src/supervisor.rs、actor.rs</text>
+</svg>

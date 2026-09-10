@@ -13,6 +13,7 @@ members = [
     "crates/sagent-tools",
     "crates/sagent-tui",
     "crates/sagent-contracts",
+    "crates/sagent-benchmarks",
 ]
 
 [workspace.package]

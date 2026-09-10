@@ -80,6 +80,8 @@ schema/hash、危险命令审批分类、Profile 名称规范化以及新建 Sto
 
 ### P0.2 建立故障与性能基线
 
+状态：已完成（离线 harness、初始 baseline 与故障矩阵；10k/100k 批量查询基准移交 P1.3）。
+
 **目的：** 留下可比较的性能和故障证据，但不在普通 CI 中用脆弱的绝对时间断言。
 
 **交付物：**
@@ -92,6 +94,14 @@ schema/hash、危险命令审批分类、Profile 名称规范化以及新建 Sto
 
 **验收：** benchmark 可离线、可重复运行；常规 CI 只验证 benchmark/fixture 能运行和关键
 指标没有明显退化，发布前再人工比较数值。
+
+**完成记录：** 新增 `sagent-benchmarks` binary，默认在临时 SQLite fixture 上测量
+RPC hello、PromptSnapshot、Store open、session list 与 FTS search，并输出版本、OS、
+架构、Rust 版本、fixture 大小及 min/median/p95/max。默认只输出 JSON；只有
+`--write-baseline` 才更新 `benchmarks/baseline.json`。初始基线使用 100 条消息、7 次
+迭代；runner 支持 `--messages 10000`，但 10k/100k 的批量 fixture 构造与 query-plan
+退化阈值属于 P1.3，不能把逐条数据准备耗时算入查询基准。`fault-matrix.json` 记录已覆盖
+与待 P2.3 补齐的故障场景。
 
 ## 4. Phase 1：基础服务收尾
 

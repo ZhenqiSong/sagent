@@ -1,0 +1,67 @@
+{
+  "benchmark_version": 1,
+  "environment": {
+    "os": "windows",
+    "arch": "x86_64",
+    "logical_cpus": 16,
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+  },
+  "fixture": {
+    "messages": 10000,
+    "iterations": 7,
+    "provider": "none (offline)",
+    "data_source": "temporary SQLite fixture"
+  },
+  "metrics": [
+    {
+      "name": "rpc_hello",
+      "unit": "microseconds",
+      "samples": {
+        "min": 0,
+        "median": 0,
+        "p95": 25,
+        "max": 25
+      }
+    },
+    {
+      "name": "prompt_snapshot",
+      "unit": "microseconds",
+      "samples": {
+        "min": 1,
+        "median": 2,
+        "p95": 33,
+        "max": 33
+      }
+    },
+    {
+      "name": "store_open",
+      "unit": "microseconds",
+      "samples": {
+        "min": 63,
+        "median": 80,
+        "p95": 301,
+        "max": 301
+      }
+    },
+    {
+      "name": "session_list",
+      "unit": "microseconds",
+      "samples": {
+        "min": 1633,
+        "median": 1662,
+        "p95": 2008,
+        "max": 2008
+      }
+    },
+    {
+      "name": "fts_search",
+      "unit": "microseconds",
+      "samples": {
+        "min": 14316,
+        "median": 14394,
+        "p95": 14841,
+        "max": 14841
+      }
+    }
+  ]
+}

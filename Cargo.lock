@@ -1858,6 +1858,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sagent-benchmarks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sagent-agent",
+ "sagent-protocol",
+ "sagent-store",
+ "sagent-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sagent-cli"
 version = "0.1.0"
 dependencies = [

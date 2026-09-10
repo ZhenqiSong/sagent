@@ -1,0 +1,14 @@
+{
+  "matrix_version": 1,
+  "policy": "All rows use local fixtures or temporary resources; no row requires a live credential.",
+  "rows": [
+    {"fault": "provider EOF", "coverage": "crates/sagent-provider/tests/sse_parser.rs", "status": "covered"},
+    {"fault": "provider 429 and 5xx", "coverage": "crates/sagent-provider/tests/mock_provider.rs", "status": "covered"},
+    {"fault": "SQLite corrupt or busy", "coverage": "crates/sagent-store/src/schema.rs", "status": "covered"},
+    {"fault": "RPC EOF or oversized frame", "coverage": "crates/sagent-rpc/tests/stdio_integration.rs", "status": "covered"},
+    {"fault": "terminal spawn failure", "coverage": "crates/sagent-tools/tests/terminal.rs", "status": "covered"},
+    {"fault": "late tool/provider result after cancellation", "coverage": "crates/sagent-runtime/tests/tool_actor.rs", "status": "covered"},
+    {"fault": "slow first token", "coverage": "local Mock SSE fixture", "status": "planned"},
+    {"fault": "approval timeout end-to-end RPC", "coverage": "local Mock SSE fixture", "status": "planned"}
+  ]
+}

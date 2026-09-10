@@ -1,10 +1,16 @@
 //! `sagent-rpc` 本地只读 JSON-RPC 进程入口。
 
 mod args;
+// transport 实现放在同一目录，避免 stdio/WebSocket 扩展时把连接状态、输出桥接和
+// 启动装配混在入口根目录；模块名保持稳定，调用方无需感知物理重组。
+#[path = "transport/connection.rs"]
 mod connection;
+#[path = "transport/event_bridge.rs"]
 mod event_bridge;
+#[path = "bootstrap/runtime.rs"]
 mod runtime_bootstrap;
 mod service;
+#[path = "transport/stdio.rs"]
 mod stdio;
 
 use anyhow::{Context, Result};

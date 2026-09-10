@@ -8,19 +8,28 @@
 //! 本 crate 还负责监管 Provider 流、工具/审批回环、CancellationToken 传播与
 //! 重启后的 fail-closed 恢复；TUI/RPC 仅通过事件订阅与 SessionHandle 接入。
 
+// Actor 的状态、输入与重启恢复共同定义 mailbox 生命周期；物理目录集中它们，
+// 但保持 crate 内模块名不变，避免把纯目录整理变成调用方的行为变更。
+#[path = "actor_support/active_turn.rs"]
 #[allow(dead_code)]
 mod active_turn;
 mod actor;
 mod approval;
 mod error;
 mod event;
+#[path = "actor_support/input.rs"]
 #[allow(dead_code)]
 mod input;
+#[path = "worker/provider.rs"]
 mod provider_worker;
+#[path = "actor_support/recovery.rs"]
 mod recovery;
 mod supervisor;
+#[path = "tooling/call.rs"]
 mod tool_call;
+#[path = "tooling/dispatch.rs"]
 mod tool_dispatch;
+#[path = "worker/tool.rs"]
 mod tool_worker;
 
 #[cfg(test)]

@@ -2,19 +2,31 @@
 //!
 //! 作者：SongZQ
 
-use std::{
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{path::Path, time::SystemTime};
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use sagent_config::{SagentPaths, normalize_profile_name, resolve_active_paths};
-use sagent_store::{MessageQuery, MessageSearchQuery, NewSession, SessionListQuery, Store};
-use sagent_types::{MessageId, SearchHit, SessionDetail, SessionId, SessionSummary};
-use uuid::Uuid;
+use sagent_store::Store;
+use sagent_types::MessageId;
 
 use crate::{commands::CommandContext, output::print_output};
+
+// 只读查询与创建各自拥有不同的 I/O 生命周期；物理拆分避免参数分发文件同时承载
+// SQL 查询、日期换算和输出格式，但仍由本模块统一维护 `session` 命令的公开边界。
+mod creation;
+mod lifecycle;
+mod query;
+
+use creation::rfc3339_now;
+#[cfg(test)]
+use creation::session_id_from_clock;
+#[allow(unused_imports)]
+pub use creation::{create, create_with_id};
+use lifecycle::{
+    handle_archive, handle_finish, handle_rename, handle_restore, handle_rewind, handle_unarchive,
+};
+pub use query::{list, render_list, render_search, render_show, search, show};
 
 /// `session` 分组下的命令参数与处理器。
 #[derive(Debug, Subcommand)]
@@ -183,118 +195,6 @@ fn handle_list(
     print_output(context.format, &sessions, render_list(&sessions))
 }
 
-/// 修改会话标题。
-fn handle_rename(context: &CommandContext, session_id: &str, title: &str) -> Result<()> {
-    let title = validate_title(title)?;
-    let updated_at = now_rfc3339()?;
-    let changed = with_writable_store(context, |store| {
-        store.update_session_title(&SessionId::new(session_id), Some(title), &updated_at)
-    })?;
-    let value = serde_json::json!({
-        "operation": "rename",
-        "session_id": session_id,
-        "title": title,
-        "changed": changed,
-        "updated_at": updated_at,
-    });
-    print_output(
-        context.format,
-        &value,
-        vec![format!("已重命名会话: {session_id}")],
-    )
-}
-
-/// 归档会话，使其从默认列表中隐藏。
-fn handle_archive(context: &CommandContext, session_id: &str) -> Result<()> {
-    handle_archive_state(context, session_id, true)
-}
-
-/// 取消会话归档，使其重新出现在默认列表中。
-fn handle_unarchive(context: &CommandContext, session_id: &str) -> Result<()> {
-    handle_archive_state(context, session_id, false)
-}
-
-/// 归档与取消归档共享的 Store 写入和输出逻辑。
-fn handle_archive_state(context: &CommandContext, session_id: &str, archived: bool) -> Result<()> {
-    let updated_at = now_rfc3339()?;
-    let changed = with_writable_store(context, |store| {
-        store.set_session_archived(&SessionId::new(session_id), archived, &updated_at)
-    })?;
-    let operation = if archived { "archive" } else { "unarchive" };
-    print_lifecycle_result(context, operation, session_id, changed, &updated_at)
-}
-
-/// 结束会话并记录调用方提供的原因。
-fn handle_finish(context: &CommandContext, session_id: &str, reason: &str) -> Result<()> {
-    let reason = validate_reason(reason)?;
-    let updated_at = now_rfc3339()?;
-    let changed = with_writable_store(context, |store| {
-        store.finish_session(&SessionId::new(session_id), reason, &updated_at)
-    })?;
-    let value = serde_json::json!({
-        "operation": "finish",
-        "session_id": session_id,
-        "reason": reason,
-        "changed": changed,
-        "updated_at": updated_at,
-    });
-    print_output(
-        context.format,
-        &value,
-        vec![format!("已结束会话: {session_id}")],
-    )
-}
-
-/// 回退到一条 user 消息，将该消息及之后的活动消息软删除以保留审计历史。
-fn handle_rewind(context: &CommandContext, session_id: &str, message_id: &str) -> Result<()> {
-    let message_id = parse_message_id(message_id)?;
-    let updated_at = now_rfc3339()?;
-    let result = with_writable_store(context, |store| {
-        store.rewind_to_message(&SessionId::new(session_id), message_id, &updated_at)
-    })?;
-    let value = serde_json::json!({
-        "operation": "rewind",
-        "session_id": session_id,
-        "target_message_id": result.target_message.id.get(),
-        "rewound_count": result.rewound_count,
-        "new_head_id": result.new_head_id.as_ref().map(MessageId::get),
-        "updated_at": updated_at,
-    });
-    print_output(
-        context.format,
-        &value,
-        vec![format!(
-            "已回退会话: {session_id}（{} 条消息）",
-            result.rewound_count
-        )],
-    )
-}
-
-/// 恢复由指定回退起点隐藏的消息；若已有新活动分支则拒绝合并。
-fn handle_restore(context: &CommandContext, session_id: &str, message_id: &str) -> Result<()> {
-    let message_id = parse_message_id(message_id)?;
-    let updated_at = now_rfc3339()?;
-    let result = with_writable_store(context, |store| {
-        store.restore_rewound_from(&SessionId::new(session_id), message_id.clone(), &updated_at)
-    })?;
-    let value = serde_json::json!({
-        "operation": "restore",
-        "session_id": session_id,
-        "target_message_id": message_id.get(),
-        "restored_count": result.restored_count,
-        "new_head_id": result.new_head_id.as_ref().map(MessageId::get),
-        "updated_at": updated_at,
-    });
-    print_output(
-        context.format,
-        &value,
-        vec![format!(
-            "已恢复会话分支: {session_id}（{} 条消息）",
-            result.restored_count
-        )],
-    )
-}
-
 /// 解析当前命令实际访问的 profile 路径。
 fn current_paths(home: Option<&Path>, profile_override: Option<&str>) -> Result<SagentPaths> {
     let profile = profile_override.map(normalize_profile_name).transpose()?;
@@ -370,218 +270,6 @@ fn print_lifecycle_result(
         &value,
         vec![format!("{action}会话: {session_id}")],
     )
-}
-
-/// 从当前 profile 读取会话列表，供文本和 JSON 输出共用。
-pub fn list(
-    home: Option<&Path>,
-    profile_override: Option<&str>,
-    limit: u32,
-    offset: u32,
-    include_archived: bool,
-) -> Result<Vec<SessionSummary>> {
-    let paths = current_paths(home, profile_override)?;
-    let store = Store::open_readonly(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
-    store.list_sessions_with(&SessionListQuery {
-        include_archived,
-        limit,
-        offset,
-        ..SessionListQuery::default()
-    })
-}
-
-/// 将已经读取的会话列表渲染为稳定文本行。
-pub fn render_list(sessions: &[SessionSummary]) -> Vec<String> {
-    sessions
-        .iter()
-        .map(|session| {
-            format!(
-                "{}\t{}\t{}\t{}",
-                session.id.as_str(),
-                session.title.as_deref().unwrap_or("-"),
-                session.message_count,
-                session.last_active.as_deref().unwrap_or("-")
-            )
-        })
-        .collect()
-}
-
-/// 从当前 profile 加载会话详情及其用户可见消息。
-pub fn show(
-    home: Option<&Path>,
-    profile_override: Option<&str>,
-    session_id: &str,
-    limit: u32,
-    offset: u32,
-) -> Result<SessionDetail> {
-    let paths = current_paths(home, profile_override)?;
-    let store = Store::open_readonly(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
-    let session_id = SessionId::new(session_id);
-    let session = store
-        .get_session(&session_id)?
-        .with_context(|| format!("会话不存在：{}", session_id.as_str()))?;
-    let messages = store.get_messages_for_display(
-        &session_id,
-        &MessageQuery {
-            limit: Some(limit),
-            offset,
-            latest: true,
-            ..MessageQuery::default()
-        },
-    )?;
-    Ok(SessionDetail { session, messages })
-}
-
-/// 将会话详情渲染为稳定文本行。
-pub fn render_show(detail: &SessionDetail) -> Vec<String> {
-    let mut lines = vec![
-        format!("ID: {}", detail.session.id.as_str()),
-        format!("标题: {}", detail.session.title.as_deref().unwrap_or("-")),
-        format!("来源: {}", detail.session.source.as_deref().unwrap_or("-")),
-        format!("模型: {}", detail.session.model.as_deref().unwrap_or("-")),
-        format!(
-            "开始时间: {}",
-            detail.session.started_at.as_deref().unwrap_or("-")
-        ),
-        format!(
-            "结束时间: {}",
-            detail.session.ended_at.as_deref().unwrap_or("-")
-        ),
-        format!("消息数: {}", detail.session.message_count),
-        "消息:".to_owned(),
-    ];
-    lines.extend(
-        detail
-            .messages
-            .iter()
-            .map(|message| format!("[{}] {}", message.role, message.content)),
-    );
-    lines
-}
-
-/// 在当前 profile 搜索消息。
-///
-/// 默认搜索活动消息和压缩归档消息，过滤用户已经回退的普通非活动分支。
-pub fn search(
-    home: Option<&Path>,
-    profile_override: Option<&str>,
-    query: &str,
-    limit: u32,
-    session_id: Option<&str>,
-) -> Result<Vec<SearchHit>> {
-    let paths = current_paths(home, profile_override)?;
-    let store = Store::open_readonly(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
-    let mut search = MessageSearchQuery::new(query);
-    search.limit = limit;
-    search.session_id = session_id.map(SessionId::new);
-    store.search_messages(&search)
-}
-
-/// 将已经读取的搜索命中渲染为稳定文本行。
-pub fn render_search(hits: &[SearchHit]) -> Vec<String> {
-    hits.iter()
-        .map(|hit| {
-            format!(
-                "{}\t{}\t{:.6}\t{}",
-                hit.session_id.as_str(),
-                hit.message_id
-                    .as_ref()
-                    .expect("消息搜索命中必须包含消息 ID")
-                    .get(),
-                hit.rank.unwrap_or_default(),
-                hit.snippet
-            )
-        })
-        .collect()
-}
-
-/// 创建会话并返回写入数据库的 ID。
-pub fn create(
-    home: Option<&Path>,
-    profile_override: Option<&str>,
-    title: Option<String>,
-    model: Option<String>,
-) -> Result<SessionId> {
-    let now = SystemTime::now();
-    let session_id = session_id_from_clock(now)?;
-    let started_at = rfc3339_now(now)?;
-    create_with_id(home, profile_override, session_id, title, model, started_at)
-}
-
-/// 使用调用方指定的 ID 与时间创建会话，供生产编排和确定性测试复用。
-pub fn create_with_id(
-    home: Option<&Path>,
-    profile_override: Option<&str>,
-    session_id: SessionId,
-    title: Option<String>,
-    model: Option<String>,
-    started_at: String,
-) -> Result<SessionId> {
-    let paths = current_paths(home, profile_override)?;
-    let mut store = Store::open_readwrite(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
-    store.create_session(&NewSession {
-        id: session_id.clone(),
-        source: Some("cli".to_owned()),
-        model,
-        title,
-        started_at,
-    })?;
-    Ok(session_id)
-}
-
-/// 生成与 Python Hermes 兼容的时间前缀，并使用完整 UUID v4 防止碰撞。
-fn session_id_from_clock(now: SystemTime) -> Result<SessionId> {
-    let timestamp = rfc3339_now(now)?;
-    let (date, time_with_zone) = timestamp
-        .split_once('T')
-        .context("无法生成会话 ID 时间前缀")?;
-    let time = time_with_zone
-        .get(..8)
-        .context("无法读取会话 ID 的时间部分")?;
-    let prefix = format!("{}_{}", date.replace('-', ""), time.replace(':', ""));
-    Ok(SessionId::new(format!(
-        "{}_{}",
-        prefix,
-        Uuid::new_v4().simple()
-    )))
-}
-
-/// 生成当前 UTC 的 RFC 3339 毫秒时间戳。
-fn rfc3339_now(now: SystemTime) -> Result<String> {
-    let duration = now
-        .duration_since(UNIX_EPOCH)
-        .context("系统时间早于 Unix epoch，无法创建会话")?;
-    let seconds = i64::try_from(duration.as_secs()).context("系统时间超出可表示范围")?;
-    let days = seconds.div_euclid(86_400);
-    let seconds_in_day = seconds.rem_euclid(86_400);
-    let (year, month, day) = utc_date_from_days(days);
-    let hour = seconds_in_day / 3_600;
-    let minute = seconds_in_day % 3_600 / 60;
-    let second = seconds_in_day % 60;
-    Ok(format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
-        duration.subsec_millis()
-    ))
-}
-
-/// 把 Unix 秒数转换为 UTC 公历日期。
-fn utc_date_from_days(days_since_unix_epoch: i64) -> (i64, u32, u32) {
-    let days = days_since_unix_epoch + 719_468;
-    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    let year = year + i64::from(month <= 2);
-    (year, month as u32, day as u32)
 }
 
 #[cfg(test)]

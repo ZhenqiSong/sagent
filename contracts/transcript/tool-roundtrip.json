@@ -1,0 +1,17 @@
+{
+  "contract_version": 1,
+  "kind": "transcript",
+  "input": [
+    {"op": "user", "content": "read the note"},
+    {"op": "assistant", "content": "I will read it", "tool_calls": [{"call_id": "call-1", "name": "read_file", "arguments": {"path": "note.txt"}}]},
+    {"op": "tool", "tool_call_id": "call-1", "content": "note contents"},
+    {"op": "assistant", "content": "summary", "tool_calls": []}
+  ],
+  "expected": [
+    {"role": "user", "content": "read the note", "tool_call_id": null, "tool_calls": []},
+    {"role": "assistant", "content": "I will read it", "tool_call_id": null, "tool_calls": [{"call_id": "call-1", "name": "read_file", "arguments": {"path": "note.txt"}}]},
+    {"role": "tool", "content": "note contents", "tool_call_id": "call-1", "tool_calls": []},
+    {"role": "assistant", "content": "summary", "tool_call_id": null, "tool_calls": []}
+  ]
+}
+

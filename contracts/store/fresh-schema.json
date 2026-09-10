@@ -1,0 +1,6 @@
+{
+  "contract_version": 1,
+  "kind": "store_schema",
+  "input": {"fresh": true},
+  "expected": {"schema_version": 3, "has_fts5": true}
+}

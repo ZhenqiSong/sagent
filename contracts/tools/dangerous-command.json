@@ -1,0 +1,6 @@
+{
+  "contract_version": 1,
+  "kind": "command_policy",
+  "input": {"command": "rm -rf /tmp/demo"},
+  "expected": {"risk": "approval_required", "policy_key": "terminal:recursive_delete", "summary": "该 terminal 命令需要用户审批"}
+}

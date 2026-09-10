@@ -1,0 +1,6 @@
+{
+  "contract_version": 1,
+  "kind": "profile_name",
+  "input": {"value": "  Coder-01  "},
+  "expected": {"normalized": "coder-01"}
+}

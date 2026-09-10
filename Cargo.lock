@@ -1883,6 +1883,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sagent-contracts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sagent-agent",
+ "sagent-config",
+ "sagent-protocol",
+ "sagent-store",
+ "sagent-tools",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "sagent-protocol"
 version = "0.1.0"
 dependencies = [

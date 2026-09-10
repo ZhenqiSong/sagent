@@ -9,8 +9,8 @@ rust-version.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
 sagent-agent = { path = "../sagent-agent" }
 sagent-protocol = { path = "../sagent-protocol" }
 sagent-store = { path = "../sagent-store" }
 sagent-types = { path = "../sagent-types" }
-

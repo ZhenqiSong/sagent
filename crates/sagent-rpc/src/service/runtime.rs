@@ -7,10 +7,11 @@ use std::{
 };
 
 use sagent_protocol::{
-    GatewayPingResult, GatewayService, ProtocolError, SessionCreateParams, SessionCreateResult,
-    SessionCreateService, SessionEventDto, SessionEventsSinceParams, SessionEventsSinceResult,
-    SessionListParams, SessionListResult, SessionReadService, SessionResumeParams,
-    SessionResumeResult, SessionService, SessionSummaryDto,
+    ConfigReadParams, ConfigReadResult, ConfigReadService, GatewayPingResult, GatewayService,
+    ProtocolError, SessionCreateParams, SessionCreateResult, SessionCreateService, SessionEventDto,
+    SessionEventsSinceParams, SessionEventsSinceResult, SessionListParams, SessionListResult,
+    SessionReadService, SessionResumeParams, SessionResumeResult, SessionService,
+    SessionSummaryDto,
 };
 use sagent_runtime::SessionSupervisor;
 use sagent_store::{EventQuery, NewSession, Store};
@@ -27,6 +28,8 @@ pub struct RuntimeService {
     model: String,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
+    /// 启动时读取的非秘密配置快照；请求不能以参数切换其 Profile。
+    public_config: ConfigReadResult,
 }
 
 /// `prompt.submit` 所需的可跨 await 使用的运行时快照。
@@ -49,6 +52,7 @@ impl RuntimeService {
         model: String,
         supervisor: Arc<SessionSupervisor>,
         provider_ready: bool,
+        public_config: ConfigReadResult,
     ) -> Self {
         Self {
             sessions,
@@ -56,6 +60,7 @@ impl RuntimeService {
             model,
             supervisor,
             provider_ready,
+            public_config,
         }
     }
 
@@ -71,6 +76,13 @@ impl RuntimeService {
             supervisor: self.supervisor(),
             provider_ready: self.provider_ready,
         }
+    }
+}
+
+impl ConfigReadService for RuntimeService {
+    /// 直接克隆启动快照，避免 RPC handler 重新读取 YAML 或 `.env` 并造成配置漂移。
+    fn read_config(&self, _: &ConfigReadParams) -> Result<ConfigReadResult, ProtocolError> {
+        Ok(self.public_config.clone())
     }
 }
 

@@ -35,6 +35,10 @@ const REGISTERED_METHODS: &[MethodSpec] = &[
         access: MethodAccess::Public,
     },
     MethodSpec {
+        name: "config.read",
+        access: MethodAccess::Public,
+    },
+    MethodSpec {
         name: "session.list",
         access: MethodAccess::Public,
     },
@@ -164,6 +168,7 @@ mod tests {
             registered_features(),
             [
                 "gateway.ping",
+                "config.read",
                 "session.list",
                 "session.resume",
                 "client.hello",

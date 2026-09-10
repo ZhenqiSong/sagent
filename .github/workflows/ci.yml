@@ -49,6 +49,16 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      # 契约 fixture 保护跨 crate 的外部行为；它不依赖用户 home、网络或真实凭据，
+      # 因而必须与普通单元测试一起在每个原生 OS 上执行。
+      - name: Run behavior contracts
+        run: cargo run -p sagent-contracts
+
+      # 这一测试在 Windows 实际走 Job Object，在 macOS/Linux 实际走 process group。
+      # 不通过模拟 cfg 或交叉编译代替宿主进程树生命周期验证。
+      - name: Verify native terminal process supervision
+        run: cargo test -p sagent-tools --test terminal
+
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 

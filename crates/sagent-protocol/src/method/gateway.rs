@@ -68,6 +68,7 @@ mod tests {
             features.features,
             vec![
                 "gateway.ping",
+                "config.read",
                 "session.list",
                 "session.resume",
                 "client.hello",
@@ -82,7 +83,7 @@ mod tests {
             serde_json::to_value(features).expect("能力集合应能序列化"),
             json!({
                 "protocol_version": 1,
-                "features": ["gateway.ping", "session.list", "session.resume", "client.hello", "session.create", "prompt.submit", "session.interrupt", "approval.respond", "session.events.since"]
+                "features": ["gateway.ping", "config.read", "session.list", "session.resume", "client.hello", "session.create", "prompt.submit", "session.interrupt", "approval.respond", "session.events.since"]
             })
         );
     }

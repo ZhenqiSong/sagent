@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, env, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
 use sagent_provider::OpenAiCompatibleProvider;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::SagentPaths;
 
@@ -25,6 +25,24 @@ pub struct ProviderConfig {
     /// 与 Python `providers:` 配置保持兼容：每个 key 描述一个自定义 OpenAI endpoint。
     #[serde(default)]
     pub providers: BTreeMap<String, UserProviderConfig>,
+}
+
+/// 可经 RPC 返回的非秘密配置摘要。
+///
+/// 它刻意不包含 endpoint、`api_key_env` 或 `.env` 内容：这些值虽不一定是密钥，
+/// 但会暴露部署拓扑或凭据命名。客户端只需据此展示当前模型状态和未知字段警告。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PublicConfig {
+    /// 启动时固定的 Profile 名称；它帮助客户端标示数据隔离边界而不暴露本地路径。
+    pub profile: String,
+    /// 已配置的 Provider 名称；未设置时为 `null`。
+    pub provider: Option<String>,
+    /// 用户选择的模型显示名；复杂 model 设置会归一为 name/model 字段。
+    pub model: Option<String>,
+    /// 配置中声明的自定义 Provider 名称，按字典序排列。
+    pub provider_names: Vec<String>,
+    /// 不被当前版本识别的顶层 YAML 字段；读取不会删除它们。
+    pub unknown_fields: Vec<String>,
 }
 
 /// `model` 字段支持字符串和对象两种形态，便于兼容现有配置习惯。
@@ -46,6 +64,11 @@ impl ModelSetting {
                 detail.api_key_env.as_deref().or(detail.key_env.as_deref()),
             ),
         }
+    }
+
+    /// 返回可展示的模型名，不暴露 provider endpoint 或 credential 关联信息。
+    pub fn display_name(&self) -> Option<&str> {
+        self.values().0
     }
 }
 
@@ -130,6 +153,49 @@ pub fn read_provider_config(paths: &SagentPaths) -> Result<ProviderConfig> {
     }
     serde_yaml::from_str(&content)
         .with_context(|| format!("解析 Provider 配置失败：{}", paths.config_yaml.display()))
+}
+
+/// 读取并校验当前 Profile 的公开配置摘要。
+///
+/// 先复用严格的 Provider 反序列化，以免 RPC 对损坏 YAML 伪造成功；再单独检查原始
+/// 顶层键，保留未知字段的可见性而不在读取时修改用户配置。
+pub fn read_public_config(paths: &SagentPaths) -> Result<PublicConfig> {
+    let config = read_provider_config(paths)?;
+    let content = match fs::read_to_string(&paths.config_yaml) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("读取公开配置失败：{}", paths.config_yaml.display()));
+        }
+    };
+    let mut unknown_fields = Vec::new();
+    if !content.trim().is_empty() {
+        let document: serde_yaml::Value = serde_yaml::from_str(&content)
+            .with_context(|| format!("解析公开配置失败：{}", paths.config_yaml.display()))?;
+        if let Some(mapping) = document.as_mapping() {
+            for key in mapping.keys().filter_map(serde_yaml::Value::as_str) {
+                if !matches!(
+                    key,
+                    "provider" | "model" | "base_url" | "api_key_env" | "key_env" | "providers"
+                ) {
+                    unknown_fields.push(key.to_owned());
+                }
+            }
+        }
+    }
+    unknown_fields.sort();
+    Ok(PublicConfig {
+        profile: paths.profile.clone(),
+        provider: config.provider,
+        model: config
+            .model
+            .as_ref()
+            .and_then(ModelSetting::display_name)
+            .map(str::to_owned),
+        provider_names: config.providers.into_keys().collect(),
+        unknown_fields,
+    })
 }
 
 /// 只解析当前 Profile 的 `.env`，并让文件值优先于同名进程环境变量。
@@ -289,7 +355,7 @@ pub fn resolve_openai_provider(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_openai_provider, resolve_provider_config};
+    use super::{read_public_config, resolve_openai_provider, resolve_provider_config};
     use crate::{normalize_profile_name, resolve_paths};
     use std::{fs, path::PathBuf};
 
@@ -430,6 +496,34 @@ mod tests {
         assert_eq!(result.provider, "local");
         assert_eq!(result.base_url, "http://127.0.0.1:1/v1");
         assert_eq!(result.api_key, "local-key");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn public_config_exposes_model_state_without_endpoint_or_credential_metadata() {
+        // 配置读取是 GUI 的诊断接口，不得把本地部署地址、凭据变量名或 .env 内容
+        // 通过 JSON-RPC 反射给连接到 daemon 的客户端。
+        let root = test_root("public-summary");
+        fs::write(
+            root.join("config.yaml"),
+            "provider: local\nmodel:\n  name: local-model\nbase_url: http://private.example/v1\napi_key_env: PRIVATE_KEY\nproviders:\n  backup:\n    api: http://backup.example/v1\ndisplay_theme: dark\n",
+        )
+        .unwrap();
+        fs::write(root.join(".env"), "PRIVATE_KEY=must-not-leak\n").unwrap();
+        let profile = normalize_profile_name("default").unwrap();
+        let paths = resolve_paths(Some(&root), Some(&profile)).unwrap();
+
+        let public = read_public_config(&paths).expect("公开摘要应能读取有效 YAML");
+
+        assert_eq!(public.profile, "default");
+        assert_eq!(public.provider.as_deref(), Some("local"));
+        assert_eq!(public.model.as_deref(), Some("local-model"));
+        assert_eq!(public.provider_names, ["backup"]);
+        assert_eq!(public.unknown_fields, ["display_theme"]);
+        let encoded = serde_json::to_string(&public).unwrap();
+        assert!(!encoded.contains("private.example"));
+        assert!(!encoded.contains("PRIVATE_KEY"));
+        assert!(!encoded.contains("must-not-leak"));
         fs::remove_dir_all(root).unwrap();
     }
 }

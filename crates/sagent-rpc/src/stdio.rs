@@ -694,6 +694,22 @@ mod tests {
             }
         }
     }
+    // stdio 测试复用完整 dispatcher；固定公开快照保证新增 config.read 不改变
+    // 这些测试原本覆盖的 transport 行为。
+    impl sagent_protocol::ConfigReadService for FakeService {
+        fn read_config(
+            &self,
+            _: &sagent_protocol::ConfigReadParams,
+        ) -> Result<sagent_protocol::ConfigReadResult, sagent_protocol::ProtocolError> {
+            Ok(sagent_protocol::ConfigReadResult {
+                profile: "default".to_owned(),
+                provider: Some("fixture".to_owned()),
+                model: Some("fixture-model".to_owned()),
+                provider_names: vec![],
+                unknown_fields: vec![],
+            })
+        }
+    }
     impl SessionReadService for FakeService {
         fn list_sessions(
             &self,

@@ -69,9 +69,10 @@ impl ConnectionState {
 #[cfg(test)]
 mod tests {
     use sagent_protocol::{
-        GatewayPingResult, JsonRpcRequest, RequestId, SessionCreateParams, SessionCreateResult,
-        SessionCreateService, SessionListParams, SessionListResult, SessionReadService,
-        SessionResumeParams, SessionResumeResult,
+        ConfigReadParams, ConfigReadResult, ConfigReadService, GatewayPingResult, JsonRpcRequest,
+        RequestId, SessionCreateParams, SessionCreateResult, SessionCreateService,
+        SessionListParams, SessionListResult, SessionReadService, SessionResumeParams,
+        SessionResumeResult,
     };
     use sagent_types::{ClientId, ClientSurface};
     use serde_json::json;
@@ -86,6 +87,23 @@ mod tests {
                 ok: true,
                 protocol_version: sagent_protocol::PROTOCOL_VERSION,
             }
+        }
+    }
+
+    // 连接状态测试只关心握手 gate；仍提供公开配置快照，使 fake 与真实 dispatcher
+    // 的能力集合一致，避免新增只读方法意外绕过 trait 约束。
+    impl ConfigReadService for FakeService {
+        fn read_config(
+            &self,
+            _: &ConfigReadParams,
+        ) -> Result<ConfigReadResult, sagent_protocol::ProtocolError> {
+            Ok(ConfigReadResult {
+                profile: "default".to_owned(),
+                provider: Some("fixture".to_owned()),
+                model: Some("fixture-model".to_owned()),
+                provider_names: vec![],
+                unknown_fields: vec![],
+            })
         }
     }
 

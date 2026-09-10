@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use rusqlite::{Connection, OpenFlags};
 use sagent_agent::{PromptMessage, PromptRole, PromptSnapshot, SystemPromptParts};
 use sagent_protocol::{ClientHelloCapabilities, ClientHelloParams, negotiate_hello};
 use sagent_store::{MessageSearchQuery, NewMessage, NewSession, Store};
@@ -69,6 +70,8 @@ struct FixtureInfo {
     provider: &'static str,
     /// 明确数据来自临时库，而不是开发者 profile。
     data_source: &'static str,
+    /// `EXPLAIN QUERY PLAN` 已确认 FTS 搜索走 virtual-table 索引，而非普通表扫描。
+    fts_uses_virtual_table_index: bool,
 }
 
 /// 单一操作的单位和统计样本。
@@ -149,6 +152,7 @@ fn parse_positive(flag: &str, value: Option<String>) -> Result<usize> {
 fn run(arguments: &Arguments) -> Result<BenchmarkReport> {
     let database = temporary_database_path();
     let store = create_fixture_store(&database, arguments.messages)?;
+    let fts_uses_virtual_table_index = verify_fts_query_plan(&database)?;
     let session_id = SessionId::new("benchmark-session");
     let metrics = vec![
         metric("rpc_hello", arguments.iterations, benchmark_hello)?,
@@ -181,9 +185,47 @@ fn run(arguments: &Arguments) -> Result<BenchmarkReport> {
             iterations: arguments.iterations,
             provider: "none (offline)",
             data_source: "temporary SQLite fixture",
+            fts_uses_virtual_table_index,
         },
         metrics,
     })
+}
+
+/// 读取 SQLite 执行计划，确认 FTS 指标确实覆盖 FTS5 virtual-table 路径。
+///
+/// 这是结构性诊断而不是耗时阈值：不同 OS/SQLite 版本可改变耗时，但若计划不再出现
+/// virtual-table index，100k 搜索数值就不再代表预期实现，runner 应直接失败。
+fn verify_fts_query_plan(path: &Path) -> Result<bool> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("以只读方式检查 FTS query plan 失败：{}", path.display()))?;
+    let mut statement = connection
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT m.id
+             FROM messages_fts
+             INNER JOIN messages AS m ON m.id = messages_fts.rowid
+             WHERE messages_fts MATCH ?1 AND m.session_id = ?2
+             ORDER BY bm25(messages_fts), m.id DESC
+             LIMIT 20",
+        )
+        .context("准备 FTS query plan 失败")?;
+    let details = statement
+        .query_map(["benchmark", "benchmark-session"], |row| {
+            row.get::<_, String>(3)
+        })
+        .context("执行 FTS query plan 失败")?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("读取 FTS query plan 失败")?;
+    let uses_index = details
+        .iter()
+        .any(|detail| detail.contains("messages_fts") && detail.contains("VIRTUAL TABLE INDEX"));
+    if !uses_index {
+        anyhow::bail!("FTS query plan 未使用 messages_fts virtual-table index：{details:?}");
+    }
+    Ok(uses_index)
 }
 
 /// 将一个操作测量并包装为统一单位，保证 JSON 消费者无需推断统计口径。
@@ -284,14 +326,19 @@ fn create_fixture_store(path: &Path, messages: usize) -> Result<Store> {
         title: Some("benchmark fixture".into()),
         started_at: "2026-01-01T00:00:00Z".into(),
     })?;
-    for index in 0..messages {
-        store.append_message(&NewMessage::new(
-            session_id.clone(),
-            if index % 2 == 0 { "user" } else { "assistant" },
-            format!("benchmark message {index}"),
-            "2026-01-01T00:00:00Z",
-        ))?;
-    }
+    // 10k/100k fixture 必须以单事务初始化：逐条提交测试到的是 fsync 次数，
+    // 而不是 P1.3 要保护的分页与 FTS 查询路径。
+    let messages = (0..messages)
+        .map(|index| {
+            NewMessage::new(
+                session_id.clone(),
+                if index % 2 == 0 { "user" } else { "assistant" },
+                format!("benchmark message {index}"),
+                "2026-01-01T00:00:00Z",
+            )
+        })
+        .collect::<Vec<_>>();
+    store.append_messages(&messages)?;
     Ok(store)
 }
 
@@ -358,6 +405,10 @@ mod tests {
                 .metrics
                 .iter()
                 .all(|metric| metric.samples.max >= metric.samples.min)
+        );
+        assert!(
+            report.fixture.fts_uses_virtual_table_index,
+            "离线 fixture 的 FTS 查询必须使用 virtual-table 索引"
         );
     }
 }

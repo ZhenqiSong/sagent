@@ -13,6 +13,6 @@ pub use profile::{
     read_active_profile, set_active_profile,
 };
 pub use provider::{
-    ProviderConfig, ResolvedProvider, ResolvedProviderConfig, resolve_openai_provider,
-    resolve_provider_config,
+    ProviderConfig, PublicConfig, ResolvedProvider, ResolvedProviderConfig, read_public_config,
+    resolve_openai_provider, resolve_provider_config,
 };

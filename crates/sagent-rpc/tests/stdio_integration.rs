@@ -235,6 +235,7 @@ fn stdio_protocol_negotiates_client_hello_before_read_only_requests() {
         frames[1]["result"]["features"],
         json!([
             "gateway.ping",
+            "config.read",
             "session.list",
             "session.resume",
             "client.hello",
@@ -250,6 +251,42 @@ fn stdio_protocol_negotiates_client_hello_before_read_only_requests() {
         true
     );
     assert_eq!(frames[2]["result"]["sessions"][0]["id"], "visible-session");
+    remove(&home);
+}
+
+#[test]
+fn config_read_returns_profile_summary_without_credential_or_endpoint_fields() {
+    // 这里经过真实 daemon 进程验证启动期快照，确保 transport 既不会读取 .env 返回，
+    // 也不会把 endpoint 这类部署拓扑泄露到 GUI/RPC 客户端。
+    let home = test_home("config-read");
+    remove(&home);
+    create_fixture(&home);
+    fs::write(
+        home.join("config.yaml"),
+        "provider: local\nmodel: local-model\nbase_url: http://private.example/v1\napi_key_env: PRIVATE_KEY\nproviders:\n  backup:\n    api: http://backup.example/v1\nfuture_field: enabled\n",
+    )
+    .expect("应能写入 Profile 配置");
+    fs::write(home.join(".env"), "PRIVATE_KEY=must-not-leak\n").expect("应能写入测试凭据");
+
+    let output = run_rpc(
+        &home,
+        None,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"config.read\",\"params\":{}}\n",
+    );
+    assert!(output.status.success(), "daemon 应能读取公开配置摘要");
+    let frames = output_frames(&output.stdout);
+    assert_eq!(frames[1]["result"]["profile"], "default");
+    assert_eq!(frames[1]["result"]["provider"], "local");
+    assert_eq!(frames[1]["result"]["model"], "local-model");
+    assert_eq!(frames[1]["result"]["provider_names"], json!(["backup"]));
+    assert_eq!(
+        frames[1]["result"]["unknown_fields"],
+        json!(["future_field"])
+    );
+    let response = frames[1]["result"].to_string();
+    assert!(!response.contains("private.example"));
+    assert!(!response.contains("PRIVATE_KEY"));
+    assert!(!response.contains("must-not-leak"));
     remove(&home);
 }
 

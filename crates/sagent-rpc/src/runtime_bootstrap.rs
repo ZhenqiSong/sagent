@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use sagent_config::{SagentPaths, resolve_openai_provider};
+use sagent_config::{SagentPaths, read_public_config, resolve_openai_provider};
 use sagent_provider::ModelProvider;
 use sagent_runtime::SessionSupervisor;
 use sagent_store::Store;
@@ -31,6 +31,9 @@ impl RuntimeBootstrap {
         drop(initialization_store);
 
         let state_db = paths.state_db.clone();
+        // 公开配置在 bootstrap 时冻结；读取失败不能降级为“空配置”，否则客户端会把
+        // 损坏 YAML 误认为未配置。
+        let public_config = read_public_config(&paths).context("读取公开 Profile 配置失败")?;
         let store_factory_path = state_db.clone();
         let base_supervisor = SessionSupervisor::new(move || {
             Store::open_readwrite(&store_factory_path)
@@ -61,6 +64,13 @@ impl RuntimeBootstrap {
             model,
             Arc::new(supervisor),
             provider_ready,
+            sagent_protocol::ConfigReadResult {
+                profile: public_config.profile,
+                provider: public_config.provider,
+                model: public_config.model,
+                provider_names: public_config.provider_names,
+                unknown_fields: public_config.unknown_fields,
+            },
         );
         Ok(Self { service })
     }

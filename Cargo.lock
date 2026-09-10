@@ -1862,6 +1862,7 @@ name = "sagent-benchmarks"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rusqlite",
  "sagent-agent",
  "sagent-protocol",
  "sagent-store",
@@ -1892,6 +1893,7 @@ dependencies = [
  "sagent-provider",
  "sagent-types",
  "serde",
+ "serde_json",
  "serde_yaml",
 ]
 

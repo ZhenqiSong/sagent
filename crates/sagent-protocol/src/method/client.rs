@@ -131,6 +131,7 @@ mod tests {
             result.features,
             [
                 "gateway.ping",
+                "config.read",
                 "session.list",
                 "session.resume",
                 "client.hello",

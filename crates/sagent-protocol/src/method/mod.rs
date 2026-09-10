@@ -4,6 +4,7 @@
 
 pub mod approval;
 pub mod client;
+pub mod config;
 pub mod gateway;
 pub mod prompt;
 pub mod registry;
@@ -16,6 +17,7 @@ pub use client::{
     ClientHelloCapabilities, ClientHelloParams, ClientHelloResult, SessionBusyPolicy,
     SessionPolicy, negotiate_hello,
 };
+pub use config::{ConfigReadParams, ConfigReadResult};
 pub use gateway::{GatewayPingParams, GatewayPingResult, PROTOCOL_VERSION, ProtocolFeatures};
 pub use prompt::{PromptSubmitParams, PromptSubmitResult, PromptSubmitStatus};
 pub use registry::{

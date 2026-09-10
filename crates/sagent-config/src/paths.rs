@@ -17,6 +17,8 @@ use crate::{ProfileName, read_active_profile};
 /// 该结构只描述路径，不创建目录或文件，也不打开数据库。
 #[derive(Debug)]
 pub struct SagentPaths {
+    /// 已规范化的当前 Profile 名称；仅用于公开诊断，绝不作为路径重新解析输入。
+    pub profile: String,
     /// 当前 Profile 的根目录。
     pub sagent_home: PathBuf,
     /// 会话数据库路径；open 时才会决定是否创建文件。
@@ -45,6 +47,7 @@ pub fn resolve_paths(
         bail!("SAGENT_HOME 必须是绝对路径");
     }
 
+    let profile_name = profile.map_or("default", ProfileName::as_str).to_owned();
     let sagent_home = match profile {
         None => root,
         Some(profile) if profile.as_str() == "default" => profile_root(&root),
@@ -61,6 +64,7 @@ pub fn resolve_paths(
     };
 
     Ok(SagentPaths {
+        profile: profile_name,
         state_db: sagent_home.join("state.db"),
         config_yaml: sagent_home.join("config.yaml"),
         env_file: sagent_home.join(".env"),

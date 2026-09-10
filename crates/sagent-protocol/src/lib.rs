@@ -10,8 +10,8 @@ pub mod method;
 pub mod service;
 
 pub use dispatch::{
-    DispatchService, GatewayService, PromptService, SessionControlService, dispatch,
-    dispatch_with_access, request_with_number_id,
+    ConfigReadService, DispatchService, GatewayService, PromptService, SessionControlService,
+    dispatch, dispatch_with_access, request_with_number_id,
 };
 pub use envelope::{
     EventParams, JsonRpcError, JsonRpcEvent, JsonRpcRequest, JsonRpcResponse, RequestId,
@@ -23,14 +23,15 @@ pub use error::{
 };
 pub use method::{
     ApprovalDecisionDto, ApprovalRespondParams, ApprovalRespondResult, ApprovalRespondStatus,
-    ClientHelloCapabilities, ClientHelloParams, ClientHelloResult, ConnectionAccess,
-    GatewayPingParams, GatewayPingResult, MethodAccess, MethodSpec, PROTOCOL_VERSION,
-    PromptSubmitParams, PromptSubmitResult, PromptSubmitStatus, ProtocolFeatures,
-    SessionBusyPolicy, SessionCreateParams, SessionCreateResult, SessionDetailDto, SessionEventDto,
-    SessionEventsSinceParams, SessionEventsSinceResult, SessionInterruptParams,
-    SessionInterruptResult, SessionInterruptStatus, SessionListParams, SessionListResult,
-    SessionMessageDto, SessionPolicy, SessionResumeParams, SessionResumeResult, SessionSummaryDto,
-    negotiate_hello, planned_method_access, registered_features, registered_method,
+    ClientHelloCapabilities, ClientHelloParams, ClientHelloResult, ConfigReadParams,
+    ConfigReadResult, ConnectionAccess, GatewayPingParams, GatewayPingResult, MethodAccess,
+    MethodSpec, PROTOCOL_VERSION, PromptSubmitParams, PromptSubmitResult, PromptSubmitStatus,
+    ProtocolFeatures, SessionBusyPolicy, SessionCreateParams, SessionCreateResult,
+    SessionDetailDto, SessionEventDto, SessionEventsSinceParams, SessionEventsSinceResult,
+    SessionInterruptParams, SessionInterruptResult, SessionInterruptStatus, SessionListParams,
+    SessionListResult, SessionMessageDto, SessionPolicy, SessionResumeParams, SessionResumeResult,
+    SessionSummaryDto, negotiate_hello, planned_method_access, registered_features,
+    registered_method,
 };
 pub use service::{
     DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, SessionCreateService, SessionReadService, SessionService,

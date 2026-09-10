@@ -217,6 +217,59 @@ impl Store {
         Ok(id)
     }
 
+    /// 在同一事务中按给定顺序追加同一会话的一批消息。
+    ///
+    /// 此入口用于导入和大规模 fixture：逐条调用 [`Self::append_message`] 会为每条消息
+    /// 提交一次事务，既放大 SQLite fsync 开销，也会让中途失败留下部分可见数据。调用方
+    /// 必须传入同一会话且按时间顺序排列的消息；空集合不触碰数据库。成功时计数和活跃
+    /// 时间只更新一次，失败时消息与会话元数据一并回滚。
+    pub fn append_messages(&mut self, messages: &[NewMessage]) -> Result<Vec<MessageId>> {
+        self.ensure_writable()?;
+        let Some(first) = messages.first() else {
+            return Ok(Vec::new());
+        };
+        if messages
+            .iter()
+            .any(|message| message.session_id != first.session_id)
+        {
+            anyhow::bail!("批量追加的消息必须属于同一会话");
+        }
+        // 已确认 first 存在，因此 last 也必须存在；仍转换为 Result，避免存储层用 panic
+        // 表达可恢复错误路径。
+        let last_timestamp = messages
+            .last()
+            .map(|message| &message.timestamp)
+            .context("非空批量消息缺少末尾时间戳")?;
+
+        let transaction = self
+            .connection
+            .transaction()
+            .context("开始批量消息追加事务失败")?;
+        let mut ids = Vec::with_capacity(messages.len());
+        for message in messages {
+            ids.push(insert_message(&transaction, message)?);
+        }
+        let changed = transaction
+            .execute(
+                "UPDATE sessions
+                 SET message_count = message_count + ?1,
+                     last_activity_at = ?2,
+                     updated_at = ?2
+                 WHERE id = ?3",
+                params![
+                    i64::try_from(messages.len()).context("批量消息数量超过 SQLite 整数范围")?,
+                    last_timestamp,
+                    first.session_id.as_str(),
+                ],
+            )
+            .context("更新批量消息计数失败")?;
+        if changed != 1 {
+            anyhow::bail!("消息所属会话不存在：{}", first.session_id.as_str());
+        }
+        transaction.commit().context("提交批量消息追加事务失败")?;
+        Ok(ids)
+    }
+
     /// 软归档当前活动消息，并原子写入一组新的活动消息。
     ///
     /// replacements 必须全部属于 session_id。空替换集是合法操作，表示清空活动

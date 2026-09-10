@@ -286,6 +286,76 @@ mod tests {
     }
 
     #[test]
+    fn batch_append_is_atomic_and_updates_the_session_once() {
+        // 批量导入承诺“全写入或全不写入”：该契约既让 10k/100k fixture 可行，也防止
+        // 未来导入器因为半批成功而留下与 message_count 不一致的会话。
+        let path = test_path("batch-append");
+        remove_if_exists(&path);
+        let session_id = SessionId::new("batch-session");
+        let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+        store
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: None,
+                model: None,
+                title: None,
+                started_at: "2026-08-30T10:00:00Z".to_owned(),
+            })
+            .expect("应能创建会话");
+
+        let ids = store
+            .append_messages(&[
+                NewMessage::new(
+                    session_id.clone(),
+                    "user",
+                    "first batch message",
+                    "2026-08-30T10:01:00Z",
+                ),
+                NewMessage::new(
+                    session_id.clone(),
+                    "assistant",
+                    "second batch message",
+                    "2026-08-30T10:02:00Z",
+                ),
+            ])
+            .expect("同一会话的整批消息应成功");
+        assert_eq!(ids.len(), 2);
+        let session = store
+            .get_session(&session_id)
+            .expect("应能读取会话")
+            .expect("会话仍应存在");
+        assert_eq!(session.message_count, 2);
+        assert_eq!(session.last_active.as_deref(), Some("2026-08-30T10:02:00Z"));
+
+        let error = store
+            .append_messages(&[
+                NewMessage::new(
+                    session_id.clone(),
+                    "user",
+                    "valid prefix must roll back",
+                    "2026-08-30T10:03:00Z",
+                ),
+                NewMessage::new(
+                    SessionId::new("other-session"),
+                    "assistant",
+                    "invalid batch member",
+                    "2026-08-30T10:04:00Z",
+                ),
+            ])
+            .expect_err("跨会话批量写入必须在开始事务前被拒绝");
+        assert!(error.to_string().contains("同一会话"));
+        assert_eq!(
+            store
+                .get_session(&session_id)
+                .unwrap()
+                .expect("原会话仍存在")
+                .message_count,
+            2
+        );
+        remove_if_exists(&path);
+    }
+
+    #[test]
     fn manages_session_lifecycle_and_list_visibility() {
         let path = test_path("lifecycle");
         remove_if_exists(&path);

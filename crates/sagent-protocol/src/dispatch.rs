@@ -7,18 +7,27 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    ApprovalRespondParams, ApprovalRespondResult, ClientHelloParams, ConnectionAccess,
-    GatewayPingParams, GatewayPingResult, JsonRpcRequest, JsonRpcResponse, PromptSubmitParams,
-    PromptSubmitResult, ProtocolError, RequestId, SessionCreateParams, SessionCreateService,
-    SessionEventsSinceParams, SessionEventsSinceResult, SessionInterruptParams,
-    SessionInterruptResult, SessionListParams, SessionReadService, SessionResumeParams,
-    negotiate_hello, planned_method_access,
+    ApprovalRespondParams, ApprovalRespondResult, ClientHelloParams, ConfigReadParams,
+    ConfigReadResult, ConnectionAccess, GatewayPingParams, GatewayPingResult, JsonRpcRequest,
+    JsonRpcResponse, PromptSubmitParams, PromptSubmitResult, ProtocolError, RequestId,
+    SessionCreateParams, SessionCreateService, SessionEventsSinceParams, SessionEventsSinceResult,
+    SessionInterruptParams, SessionInterruptResult, SessionListParams, SessionReadService,
+    SessionResumeParams, negotiate_hello, planned_method_access,
 };
 
 /// 网关基础能力的最小服务接口。
 pub trait GatewayService {
     /// 执行无副作用的连通性检查。
     fn ping(&self) -> GatewayPingResult;
+}
+
+/// 固定 Profile 的公开配置读取接口。
+///
+/// 返回值不能含路径、endpoint 或凭据；Profile 仅在 daemon 启动时决定，不能由 RPC
+/// 参数覆盖，因此此接口不接受 selector。
+pub trait ConfigReadService {
+    /// 返回已经在启动阶段固定的公开配置快照。
+    fn read_config(&self, _: &ConfigReadParams) -> Result<ConfigReadResult, ProtocolError>;
 }
 
 /// 同步协议入口的 prompt 兼容接口。
@@ -76,7 +85,12 @@ pub trait SessionControlService {
 /// 第三阶段的只读方法仍由同一 trait 提供；第四阶段仅额外加入不会启动 Actor 的
 /// `session.create`，避免 transport 为单个写方法引入第二套分发入口。
 pub trait DispatchService:
-    GatewayService + SessionReadService + SessionCreateService + PromptService + SessionControlService
+    GatewayService
+    + ConfigReadService
+    + SessionReadService
+    + SessionCreateService
+    + PromptService
+    + SessionControlService
 {
 }
 
@@ -88,6 +102,7 @@ impl<T> SessionControlService for T where
 
 impl<T> DispatchService for T where
     T: GatewayService
+        + ConfigReadService
         + SessionReadService
         + SessionCreateService
         + PromptService
@@ -160,11 +175,28 @@ fn dispatch_request_with_access<S: DispatchService>(
 
     match namespace {
         "client" => dispatch_client(action, request.params, access),
+        "config" => dispatch_config(action, request.params, service),
         "gateway" => dispatch_gateway(action, request.params, service),
         "session" => dispatch_session(action, request.params, service),
         "prompt" => dispatch_prompt(action, request.params, service),
         "approval" => dispatch_approval(action, request.params, service),
         _ => Err(ProtocolError::MethodNotFound(request.method)),
+    }
+}
+
+/// `config.*` 的二级分发；DTO 在 protocol crate 中保证 transport 不读取文件。
+fn dispatch_config<S: DispatchService>(
+    action: &str,
+    params: Option<Value>,
+    service: &S,
+) -> Result<Value, ProtocolError> {
+    match action {
+        "read" => {
+            let params: ConfigReadParams = parse_params(params)?;
+            serde_json::to_value(service.read_config(&params)?)
+                .map_err(|error| ProtocolError::Internal(error.to_string()))
+        }
+        _ => Err(ProtocolError::MethodNotFound(format!("config.{action}"))),
     }
 }
 
@@ -305,7 +337,7 @@ pub fn request_with_number_id(id: i64, method: impl Into<String>) -> JsonRpcRequ
 mod tests {
     use serde_json::{Value, json};
 
-    use super::{GatewayService, dispatch, request_with_number_id};
+    use super::{ConfigReadService, GatewayService, dispatch, request_with_number_id};
     use sagent_types::{ClientId, ClientSurface};
 
     use crate::{
@@ -324,6 +356,21 @@ mod tests {
                 ok: true,
                 protocol_version: 1,
             }
+        }
+    }
+
+    impl ConfigReadService for FakeGateway {
+        fn read_config(
+            &self,
+            _: &crate::ConfigReadParams,
+        ) -> Result<crate::ConfigReadResult, crate::ProtocolError> {
+            Ok(crate::ConfigReadResult {
+                profile: "default".to_owned(),
+                provider: Some("fixture".to_owned()),
+                model: Some("fixture-model".to_owned()),
+                provider_names: Vec::new(),
+                unknown_fields: Vec::new(),
+            })
         }
     }
 
@@ -377,6 +424,24 @@ mod tests {
             .expect("省略参数的 ping 应返回响应");
 
         assert!(response.result.is_some());
+    }
+
+    #[test]
+    fn config_read_returns_only_the_service_public_snapshot() {
+        // 协议层只转发启动时生成的 DTO；不能在 transport 中解析配置或扩大公开字段。
+        let response = dispatch(request_with_number_id(8, "config.read"), &FakeGateway)
+            .expect("带 id 的配置读取应返回响应");
+
+        assert_eq!(
+            response.result,
+            Some(json!({
+                "profile": "default",
+                "provider": "fixture",
+                "model": "fixture-model",
+                "provider_names": [],
+                "unknown_fields": []
+            }))
+        );
     }
 
     #[test]
@@ -467,6 +532,7 @@ mod tests {
             result["features"],
             json!([
                 "gateway.ping",
+                "config.read",
                 "session.list",
                 "session.resume",
                 "client.hello",
@@ -486,7 +552,7 @@ mod tests {
         for method in registered_features() {
             let mut request = request_with_number_id(9, method.clone());
             request.params = Some(match method.as_str() {
-                "gateway.ping" | "session.list" | "session.create" => json!({}),
+                "gateway.ping" | "config.read" | "session.list" | "session.create" => json!({}),
                 "prompt.submit" => json!({"session_id": "missing", "text": "hello"}),
                 "session.interrupt" => json!({"session_id": "missing"}),
                 "approval.respond" => json!({

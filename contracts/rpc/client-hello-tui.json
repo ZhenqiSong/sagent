@@ -9,7 +9,7 @@
   },
   "expected": {
     "protocol_version": 1,
-    "features": ["gateway.ping", "session.list", "session.resume", "client.hello", "session.create", "prompt.submit", "session.interrupt", "approval.respond", "session.events.since"],
+    "features": ["gateway.ping", "config.read", "session.list", "session.resume", "client.hello", "session.create", "prompt.submit", "session.interrupt", "approval.respond", "session.events.since"],
     "capabilities": {"interactive_approval": true, "supports_stream_edits": true},
     "session_policy": {"requires_hello_for_interactive": true, "busy_policy": "reject"}
   }

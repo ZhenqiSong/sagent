@@ -107,11 +107,19 @@ RPC hello、PromptSnapshot、Store open、session list 与 FTS search，并输�
 
 ### P1.1 三平台持续集成
 
+状态：已完成。
+
 **交付物：** GitHub Actions matrix（Windows、macOS、Linux），每个平台执行 format、test、
 clippy 与 contract runner。Windows 需实际覆盖 Job Object 进程树清理；POSIX 覆盖 process
 group 清理。
 
 **验收：** PR 的三平台结果可见；平台专属测试不通过伪造 OS 标识来运行。
+
+**完成记录：** 既有 `.github/workflows/ci.yml` 的 Windows、macOS、Linux matrix 现已在
+format、workspace test 和 clippy 之外，额外运行 `cargo run -p sagent-contracts`，并显式
+运行 `cargo test -p sagent-tools --test terminal`。后者在真实 Windows 上覆盖 Job Object，
+在真实 Unix 宿主上覆盖 process group；workflow 注释说明不能用 cross-check 或伪造平台
+条件替代该验证。
 
 ### P1.2 Transport-neutral RPC 与 WebSocket
 
@@ -130,6 +138,8 @@ group 清理。
 
 ### P1.3 完成只读管理面与 Store 规模验证
 
+状态：已完成。
+
 **交付物：**
 
 - `config.read` RPC，返回经验证的非秘密配置、Profile 信息和 unknown-field warnings；
@@ -139,6 +149,14 @@ group 清理。
 
 **验收：** 两个 Profile 并发访问不串配置/数据库；读取接口无写副作用；大库查询满足
 P0.2 的退化阈值。
+
+**完成记录：** `config.read` 在 daemon bootstrap 时冻结当前 Profile 的公开摘要，只返回
+Profile 名、Provider、模型、自定义 Provider 名与 unknown-field warnings；endpoint、凭据
+变量名和 `.env` 内容均不会进入 DTO。`session.*` 维持 protocol 已有的默认页大小、排序与
+上限校验，并由 Store/RPC 测试覆盖。新增同会话单事务 `Store::append_messages`，供离线
+fixture 避免逐条提交污染查询数据；benchmark 现可实际运行 10k 和 100k list/FTS search，
+并通过 `EXPLAIN QUERY PLAN` 验证使用 FTS5 virtual-table index。真实 stdio 集成测试验证
+公开配置不会泄露 endpoint 或凭据，既有命名 Profile 数据库隔离测试继续覆盖 Profile 边界。
 
 ## 5. Phase 2：最小 Agent 闭环收尾
 

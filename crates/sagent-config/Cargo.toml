@@ -11,3 +11,7 @@ sagent-provider={path="../sagent-provider"}
 anyhow.workspace=true
 serde.workspace=true
 serde_yaml.workspace=true
+
+[dev-dependencies]
+# 公开配置的安全边界最终由 JSON-RPC 序列化承载，测试需验证实际 JSON 不含敏感值。
+serde_json.workspace=true

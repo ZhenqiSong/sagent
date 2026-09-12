@@ -46,6 +46,11 @@ jobs:
       - name: Check compilation
         run: cargo check --workspace --all-targets
 
+      # 黑盒 TUI 会从 target/debug 启动真实的 TUI/RPC 可执行文件；cargo test 只构建
+      # 测试 harness，不保证 workspace 兄弟 binary 已落盘，因此这里显式构建运行时入口。
+      - name: Build runtime binaries for black-box tests
+        run: cargo build --workspace --bins
+
       - name: Run tests
         run: cargo test --workspace
 

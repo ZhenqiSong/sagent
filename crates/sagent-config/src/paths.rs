@@ -5,6 +5,7 @@
 
 use std::{
     env,
+    ffi::OsString,
     path::{Path, PathBuf},
 };
 
@@ -29,6 +30,11 @@ pub struct SagentPaths {
     pub env_file: PathBuf,
 }
 
+/// 将环境变量值转换为 home；CI 用空值清除宿主配置，因此空值必须视为未设置。
+fn configured_home(value: Option<OsString>) -> Option<PathBuf> {
+    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
 /// 根据显式 home、环境变量和 Profile 名称解析所有文件路径。
 pub fn resolve_paths(
     home_override: Option<&Path>,
@@ -37,9 +43,9 @@ pub fn resolve_paths(
     // 显式命令行参数优先，随后才是进程环境；这让测试和嵌入式调用无需修改环境变量。
     let root = match home_override {
         Some(path) => path.to_path_buf(),
-        None => std::env::var_os("SAGENT_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(platform_default_home),
+        None => {
+            configured_home(std::env::var_os("SAGENT_HOME")).unwrap_or_else(platform_default_home)
+        }
     };
 
     if !root.is_absolute() {
@@ -82,9 +88,9 @@ pub fn resolve_active_paths(
 ) -> Result<SagentPaths> {
     let root = match home_override {
         Some(path) => path.to_path_buf(),
-        None => std::env::var_os("SAGENT_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(platform_default_home),
+        None => {
+            configured_home(std::env::var_os("SAGENT_HOME")).unwrap_or_else(platform_default_home)
+        }
     };
     if !root.is_absolute() {
         bail!("SAGENT_HOME 必须是绝对路径");
@@ -151,9 +157,11 @@ pub fn profile_root(home: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::{ffi::OsString, fs, path::Path};
 
-    use super::{platform_default_home, profile_root, resolve_active_paths, resolve_paths};
+    use super::{
+        configured_home, platform_default_home, profile_root, resolve_active_paths, resolve_paths,
+    };
     use crate::{normalize_profile_name, set_active_profile};
 
     #[test]
@@ -175,6 +183,15 @@ mod tests {
     #[test]
     fn shallow_path_is_unchanged() {
         assert_eq!(profile_root(Path::new("sagent")), Path::new("sagent"));
+    }
+
+    #[test]
+    fn empty_environment_home_is_treated_as_unset() {
+        assert_eq!(configured_home(Some(OsString::new())), None);
+        assert_eq!(
+            configured_home(Some(OsString::from("/tmp/sagent"))),
+            Some(Path::new("/tmp/sagent").to_path_buf())
+        );
     }
 
     #[test]

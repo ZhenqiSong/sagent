@@ -22,7 +22,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -30,7 +30,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -65,20 +65,26 @@ jobs:
       - name: Verify workspace metadata
         run: cargo metadata --no-deps --format-version 1
 
-  # ── 跨平台基础编译检查 ──
+  # ── 各宿主平台目标编译检查 ──
   cross-check:
     name: Cross Check (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    # bundled SQLite、ring 等依赖需要宿主 C 工具链；在 Ubuntu 上交叉链接 Apple/MSVC
+    # 目标并不能证明可编译，反而会因缺少对应 linker 产生误报。每个目标在原生 runner 上
+    # 检查，真正的跨平台行为仍由 quality matrix 的原生测试覆盖。
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - x86_64-apple-darwin
-          - x86_64-pc-windows-msvc
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -86,7 +92,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -104,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -115,7 +121,8 @@ jobs:
           tool: cargo-deny
 
       - name: Run cargo-deny
-        run: cargo deny check
+        # 仅审计发布图；dev-dependencies（如真实 PTY 测试工具）不随产品分发。
+        run: cargo deny --exclude-dev check
 
   # ── 安全审计（cargo-audit） ──
   audit:
@@ -123,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run cargo-audit
         uses: rustsec/audit-check@v2.0.0

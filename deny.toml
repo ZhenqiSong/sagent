@@ -1,0 +1,42 @@
+# cargo-deny 的图只覆盖实际发布/CI 支持的平台，避免把无关目标的可选依赖带入审计。
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+
+[advisories]
+# 安全公告由 cargo-audit 单独检查；这里保留 cargo-deny 的公告检查并拒绝已撤回版本。
+ignore = []
+yanked = "deny"
+
+[licenses]
+# 这些是当前运行时依赖树声明的 SPDX 许可证；CDLA 许可证来自 rustls 的根证书包。
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+# 工作区 crate 使用 MIT，但私有 crate 也必须显式声明许可证，防止遗漏。
+ignore = false
+
+[bans]
+# 重复版本暂时只告警；依赖升级时再集中收敛版本，避免审计配置阻塞正常构建。
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -67,7 +67,12 @@ const INITIAL_CONFIG_YAML: &str = "# Sagent profile configuration.\n{}\n";
 pub fn root(home: Option<&Path>) -> Result<PathBuf> {
     let home = home
         .map(Path::to_path_buf)
-        .or_else(|| std::env::var_os("SAGENT_HOME").map(PathBuf::from))
+        .or_else(|| {
+            // CI 以空 SAGENT_HOME 隔离宿主配置；空值应回退平台默认目录，而不是被当作相对路径。
+            std::env::var_os("SAGENT_HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
         .unwrap_or_else(platform_default_home);
     if !home.is_absolute() {
         anyhow::bail!("--home 必须是绝对路径");

@@ -50,28 +50,7 @@ jobs:
 
       - name: Run workspace tests except TUI black-box
         # 先完成其他 crate，避免 workspace 测试编排影响 TUI 黑盒依赖的兄弟 binary。
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo test --workspace --exclude sagent-tui -- --test-threads=1 2>&1 | tee "$RUNNER_TEMP/sagent-workspace-tests.log"
-
-      - name: Report workspace test failure
-        if: failure()
-        shell: bash
-        run: |
-          # 把非交互 runner 上通常不可见的 Cargo 尾部输出写入摘要和 annotations，
-          # 便于无需打开受限 job 日志也能定位具体失败测试。
-          log="$RUNNER_TEMP/sagent-workspace-tests.log"
-          if [[ -f "$log" ]]; then
-            echo "### workspace test failure" >> "$GITHUB_STEP_SUMMARY"
-            tail -n 120 "$log" >> "$GITHUB_STEP_SUMMARY"
-            while IFS= read -r line; do
-              line=${line//'%'/'%25'}
-              line=${line//$'\r'/'%0D'}
-              line=${line//$'\n'/'%0A'}
-              echo "::error title=workspace test::$line"
-            done < <(grep -nE 'FAILED|panicked|assertion|failures:|error:|left:|right:|SIG[A-Z]+' "$log" | tail -n 120)
-          fi
+        run: cargo test --workspace --exclude sagent-tui -- --test-threads=1
 
       - name: Run TUI unit tests
         run: cargo test -p sagent-tui --bin sagent-tui -- --test-threads=1

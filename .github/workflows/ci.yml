@@ -48,14 +48,21 @@ jobs:
       - name: Check compilation
         run: cargo check --workspace --all-targets
 
-      # 黑盒 TUI 会从 target/debug 启动真实的 TUI/RPC 可执行文件；cargo test 只构建
-      # 测试 harness，不保证 workspace 兄弟 binary 已落盘，因此这里显式构建运行时入口。
+      - name: Run workspace tests except TUI black-box
+        # 先完成其他 crate，避免 workspace 测试编排影响 TUI 黑盒依赖的兄弟 binary。
+        run: cargo test --workspace -- --test-threads=1
+
+      - name: Run TUI unit tests
+        run: cargo test -p sagent-tui --bin sagent-tui -- --test-threads=1
+
+      # 黑盒 TUI 会从 target/debug 启动真实的 TUI/RPC 可执行文件；最后重新构建，
+      # 确保 cargo test 的测试编排不会覆盖 sagent-rpc 运行时入口。
       - name: Build runtime binaries for black-box tests
         run: cargo build --workspace --bins
 
-      - name: Run tests
+      - name: Run TUI black-box tests
         # 将 PTY 黑盒串行化，避免三个真实终端同时竞争 runner 的伪终端资源。
-        run: cargo test --workspace -- --test-threads=1
+        run: cargo test -p sagent-tui --test blackbox_e2e -- --test-threads=1
 
       # 契约 fixture 保护跨 crate 的外部行为；它不依赖用户 home、网络或真实凭据，
       # 因而必须与普通单元测试一起在每个原生 OS 上执行。

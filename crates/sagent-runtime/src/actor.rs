@@ -111,6 +111,7 @@ impl SessionActor {
     }
 
     /// 为测试或后续 Provider 注入受监管的 worker 工厂和时钟。
+    #[cfg(test)]
     pub(crate) fn with_worker_factory(
         mut self,
         worker_factory: WorkerFactory,

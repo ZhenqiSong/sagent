@@ -413,8 +413,7 @@ async fn tool_timeout_is_replayed_once_and_does_not_repeat_execution() {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "fault-v1")
-    .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
-    .with_tool_worker(worker);
+    .with_tools(ToolDispatcher::new(tool_registry()), worker);
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())

@@ -61,9 +61,7 @@ impl RuntimeBootstrap {
                         TerminalLimits::default(),
                     )
                     .with_session_search(state_db.clone());
-                    dependencies
-                        .with_tool_dispatcher(dispatcher)
-                        .with_tool_worker(worker)
+                    dependencies.with_tools(dispatcher, worker)
                 }
                 Err(_) => dependencies,
             },

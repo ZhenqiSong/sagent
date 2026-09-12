@@ -13,7 +13,9 @@ use sagent_types::SessionId;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::RuntimeError;
-use crate::actor::{SessionActor, WorkerFactory, utc_now};
+use crate::actor::SessionActor;
+#[cfg(test)]
+use crate::actor::{WorkerFactory, utc_now};
 use crate::event::RuntimeEvent;
 use crate::input::ActorInput;
 use crate::tool_dispatch::ToolDispatcher;
@@ -54,23 +56,28 @@ pub(crate) struct ModelDependencies {
     pub(crate) profile_revision: String,
 }
 
-/// 工具定义与执行边界的依赖集合。
-///
-/// 两项仍可分别为空：工具配置损坏或 workspace 不可用时，运行时允许退化为不带
-/// 工具的只读/空会话，这一降级语义由 bootstrap 决定而不是由此对象偷偷补齐。
-pub(crate) struct ToolDependencies {
-    pub(crate) dispatcher: Option<ToolDispatcher>,
-    pub(crate) worker: Option<ToolWorker>,
+/// 模型调用的已验证运行模式。
+pub(crate) enum ModelRuntime {
+    /// Provider 尚未配置；只允许启动空会话，提交时由 Actor 返回稳定错误。
+    Unconfigured,
+    /// 使用真实 Provider 处理模型回合。
+    Provider(ModelDependencies),
+    /// 测试专用的受控 worker，不与真实 Provider 同时存在。
+    #[cfg(test)]
+    Test(WorkerFactory),
 }
 
-impl ToolDependencies {
-    /// 创建未配置工具的依赖集合。
-    fn empty() -> Self {
-        Self {
-            dispatcher: None,
-            worker: None,
-        }
-    }
+/// 工具调用的已验证运行模式。
+pub(crate) enum ToolRuntime {
+    /// 当前 Profile 未启用工具能力。
+    Disabled,
+    /// dispatcher 与 worker 必须成对出现，保证 schema 验证和执行边界一致。
+    Enabled {
+        /// 负责工具定义、schema 和风险校验。
+        dispatcher: ToolDispatcher,
+        /// 负责执行已通过 dispatcher 校验的调用。
+        worker: Box<ToolWorker>,
+    },
 }
 
 /// SessionActor 使用的运行时策略值。
@@ -94,9 +101,8 @@ impl Default for RuntimePolicy {
 /// 从而避免活跃 Session 在 Turn 中途更换 Provider、工具集合或审批策略。
 pub struct RuntimeDependencies {
     storage: StorageDependencies,
-    worker_factory: Option<WorkerFactory>,
-    model: Option<ModelDependencies>,
-    tools: ToolDependencies,
+    model: ModelRuntime,
+    tools: ToolRuntime,
     policy: RuntimePolicy,
 }
 
@@ -111,9 +117,8 @@ impl RuntimeDependencies {
     {
         Self {
             storage: StorageDependencies::new(store_factory),
-            worker_factory: None,
-            model: None,
-            tools: ToolDependencies::empty(),
+            model: ModelRuntime::Unconfigured,
+            tools: ToolRuntime::Disabled,
             policy: RuntimePolicy::default(),
         }
     }
@@ -125,7 +130,7 @@ impl RuntimeDependencies {
         model: impl Into<String>,
         profile_revision: impl Into<String>,
     ) -> Self {
-        self.model = Some(ModelDependencies {
+        self.model = ModelRuntime::Provider(ModelDependencies {
             provider,
             model: model.into(),
             profile_revision: profile_revision.into(),
@@ -139,15 +144,12 @@ impl RuntimeDependencies {
         self
     }
 
-    /// 注入已固定的工具定义和风险策略。
-    pub fn with_tool_dispatcher(mut self, dispatcher: ToolDispatcher) -> Self {
-        self.tools.dispatcher = Some(dispatcher);
-        self
-    }
-
-    /// 注入实际执行已验证工具调用的 worker。
-    pub fn with_tool_worker(mut self, worker: ToolWorker) -> Self {
-        self.tools.worker = Some(worker);
+    /// 一次性启用工具定义与执行能力，避免只配置其中一侧。
+    pub fn with_tools(mut self, dispatcher: ToolDispatcher, worker: ToolWorker) -> Self {
+        self.tools = ToolRuntime::Enabled {
+            dispatcher,
+            worker: Box::new(worker),
+        };
         self
     }
 
@@ -160,7 +162,7 @@ impl RuntimeDependencies {
     /// 为单元测试注入受控 worker，生产路径应使用 `with_provider`。
     #[cfg(test)]
     pub(crate) fn with_worker_factory(mut self, worker_factory: WorkerFactory) -> Self {
-        self.worker_factory = Some(worker_factory);
+        self.model = ModelRuntime::Test(worker_factory);
         self
     }
 
@@ -168,7 +170,6 @@ impl RuntimeDependencies {
     pub(crate) fn into_actor_factory(self) -> SessionActorFactory {
         SessionActorFactory {
             storage: self.storage,
-            worker_factory: self.worker_factory,
             model: self.model,
             tools: self.tools,
             policy: self.policy,
@@ -182,9 +183,8 @@ impl RuntimeDependencies {
 /// 不完整依赖；它只处理 actor 构造，不拥有 actor 的启动、停止或映射关系。
 pub(crate) struct SessionActorFactory {
     storage: StorageDependencies,
-    worker_factory: Option<WorkerFactory>,
-    model: Option<ModelDependencies>,
-    tools: ToolDependencies,
+    model: ModelRuntime,
+    tools: ToolRuntime,
     policy: RuntimePolicy,
 }
 
@@ -199,27 +199,23 @@ impl SessionActorFactory {
     ) -> Result<SessionActor, RuntimeError> {
         let store = self.storage.open_store()?;
         let actor = SessionActor::new(session_id, store, command_rx, command_tx, event_tx);
-        let actor = match &self.worker_factory {
-            Some(factory) => actor.with_worker_factory(factory.clone(), utc_now),
-            None => actor,
-        };
         let actor = actor.with_approval_timeout(self.policy.approval_timeout);
         let actor = actor.with_max_tool_rounds(self.policy.max_tool_rounds);
         let actor = match &self.model {
-            Some(model) => actor.with_provider(
+            ModelRuntime::Unconfigured => actor,
+            ModelRuntime::Provider(model) => actor.with_provider(
                 model.provider.clone(),
                 model.model.clone(),
                 model.profile_revision.clone(),
             ),
-            None => actor,
+            #[cfg(test)]
+            ModelRuntime::Test(factory) => actor.with_worker_factory(factory.clone(), utc_now),
         };
-        let actor = match &self.tools.dispatcher {
-            Some(dispatcher) => actor.with_tool_dispatcher(dispatcher.clone()),
-            None => actor,
-        };
-        Ok(match &self.tools.worker {
-            Some(worker) => actor.with_tool_worker(worker.clone()),
-            None => actor,
+        Ok(match &self.tools {
+            ToolRuntime::Disabled => actor,
+            ToolRuntime::Enabled { dispatcher, worker } => actor
+                .with_tool_dispatcher(dispatcher.clone())
+                .with_tool_worker(worker.as_ref().clone()),
         })
     }
 }

@@ -379,8 +379,7 @@ async fn tool_results_are_replayed_to_the_next_provider_round_before_final_text(
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "mock", "profile-v1")
-    .with_tool_dispatcher(dispatcher)
-    .with_tool_worker(worker);
+    .with_tools(dispatcher, worker);
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -472,8 +471,7 @@ async fn tool_loop_stops_before_persisting_a_call_beyond_the_configured_limit() 
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "profile-v1")
-    .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
-    .with_tool_worker(worker)
+    .with_tools(ToolDispatcher::new(tool_registry()), worker)
     .with_max_tool_rounds(2);
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
@@ -549,8 +547,7 @@ async fn approval_once_resumes_the_paused_terminal_call_and_replays_its_result()
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "profile-v1")
-    .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
-    .with_tool_worker(worker);
+    .with_tools(ToolDispatcher::new(tool_registry()), worker);
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -650,8 +647,7 @@ async fn approval_denial_persists_a_tool_error_without_starting_terminal() {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "profile-v1")
-    .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
-    .with_tool_worker(worker);
+    .with_tools(ToolDispatcher::new(tool_registry()), worker);
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -746,8 +742,7 @@ async fn write_file_requires_approval_and_audit_event_excludes_content() {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "profile-v1")
-    .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
-    .with_tool_worker(worker);
+    .with_tools(ToolDispatcher::new(tool_registry()), worker);
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -836,8 +831,7 @@ async fn interrupt_cancels_running_tool_without_persisting_a_late_result() {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(Arc::new(LongTerminalProvider), "mock", "profile-v1")
-    .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
-    .with_tool_worker(worker);
+    .with_tools(ToolDispatcher::new(tool_registry()), worker);
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -932,8 +926,7 @@ async fn approval_timeout_wins_without_starting_terminal_or_accepting_a_late_dec
         "mock",
         "profile-v1",
     )
-    .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
-    .with_tool_worker(worker)
+    .with_tools(ToolDispatcher::new(tool_registry()), worker)
     .with_approval_timeout(Duration::from_millis(20));
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor

@@ -181,11 +181,11 @@ impl RuntimeDependencies {
 /// 此类型不公开，防止 transport 或业务层绕过 `RuntimeDependencies` 在运行中拼接
 /// 不完整依赖；它只处理 actor 构造，不拥有 actor 的启动、停止或映射关系。
 pub(crate) struct SessionActorFactory {
-    pub(crate) storage: StorageDependencies,
-    pub(crate) worker_factory: Option<WorkerFactory>,
-    pub(crate) model: Option<ModelDependencies>,
-    pub(crate) tools: ToolDependencies,
-    pub(crate) policy: RuntimePolicy,
+    storage: StorageDependencies,
+    worker_factory: Option<WorkerFactory>,
+    model: Option<ModelDependencies>,
+    tools: ToolDependencies,
+    policy: RuntimePolicy,
 }
 
 impl SessionActorFactory {

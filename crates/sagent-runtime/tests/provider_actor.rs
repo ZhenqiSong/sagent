@@ -43,10 +43,11 @@ async fn provider_events_are_bridged_and_final_text_is_persisted() {
         MockAction::Delta("，Provider".into()),
         MockAction::Finish(StopReason::Stop),
     ]));
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, "test-model", "profile-v1");
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await
@@ -118,10 +119,11 @@ async fn openai_sse_is_driven_through_provider_worker_and_actor() {
             .expect("Provider 配置有效"),
     );
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, "sse-model", "sse-profile");
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await
@@ -180,10 +182,11 @@ async fn provider_usage_is_published_without_polluting_assistant_message() {
             .expect("Provider 配置有效"),
     );
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, "usage-model", "usage-profile");
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor.get_or_start(session_id.clone()).await.unwrap();
     let mut events = handle.subscribe();
     handle
@@ -232,10 +235,11 @@ async fn provider_failure_does_not_create_assistant_message() {
         ProviderError::Authentication,
     )]));
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, "test-model", "profile-v1");
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor.get_or_start(session_id.clone()).await.unwrap();
     let mut events = handle.subscribe();
     handle
@@ -271,10 +275,11 @@ async fn cancellation_during_provider_worker_does_not_create_assistant_message()
     create_session(&path, &session_id);
     let provider = Arc::new(MockProvider::new([MockAction::WaitForCancel]));
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, "test-model", "profile-v1");
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor.get_or_start(session_id.clone()).await.unwrap();
     let mut events = handle.subscribe();
     handle
@@ -309,10 +314,11 @@ async fn late_interrupt_cannot_overwrite_a_completed_turn() {
     create_session(&path, &session_id);
     let provider = Arc::new(MockProvider::new([MockAction::Finish(StopReason::Stop)]));
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, "test-model", "profile-v1");
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor.get_or_start(session_id.clone()).await.unwrap();
     let mut events = handle.subscribe();
     let receipt = handle
@@ -364,10 +370,11 @@ async fn incomplete_sse_stream_fails_turn_without_empty_assistant_message() {
             .expect("Provider 配置有效"),
     );
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, "eof-model", "profile-v1");
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor.get_or_start(session_id.clone()).await.unwrap();
     let mut events = handle.subscribe();
     handle

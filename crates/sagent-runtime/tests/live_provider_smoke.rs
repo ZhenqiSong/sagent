@@ -88,10 +88,11 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
 
     let state_db = paths.state_db.clone();
     let provider = Arc::new(resolved.client);
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&state_db).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, model.clone(), profile_revision.clone());
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor.get_or_start(session_id.clone()).await?;
 
     Ok(Some(LiveSession {

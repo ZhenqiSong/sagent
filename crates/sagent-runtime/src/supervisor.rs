@@ -10,10 +10,8 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use sagent_agent::{ApprovalDecision, RequestId, SessionCommand, UserInput};
-use sagent_provider::ModelProvider;
 use sagent_types::{ApprovalId, ClientCapabilities, SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -22,8 +20,6 @@ use crate::RuntimeError;
 use crate::event::{RuntimeEvent, RuntimeEventSubscription};
 use crate::input::{ActorInput, CommandReply};
 use crate::runtime_dependencies::{RuntimeDependencies, SessionActorFactory};
-use crate::tool_dispatch::ToolDispatcher;
-use crate::tool_worker::ToolWorker;
 
 /// 每个 Session 的 mailbox 容量；满时命令立即返回 `MailboxFull`。
 const MAILBOX_CAPACITY: usize = 32;
@@ -55,45 +51,6 @@ impl SessionSupervisor {
             sessions: Mutex::new(HashMap::new()),
             actor_factory: dependencies.into_actor_factory(),
         }
-    }
-
-    /// 在 actor 启动前补充 Provider；新代码应优先在 `RuntimeDependencies` 中完成装配。
-    pub fn with_provider(
-        mut self,
-        provider: std::sync::Arc<dyn ModelProvider>,
-        model: impl Into<String>,
-        profile_revision: impl Into<String>,
-    ) -> Self {
-        self.actor_factory.model = Some(crate::runtime_dependencies::ModelDependencies {
-            provider,
-            model: model.into(),
-            profile_revision: profile_revision.into(),
-        });
-        self
-    }
-
-    /// 在 actor 启动前补充审批超时；新代码应优先在 `RuntimeDependencies` 中配置。
-    pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
-        self.actor_factory.policy.approval_timeout = timeout;
-        self
-    }
-
-    /// 在 actor 启动前补充工具定义；新代码应优先在 `RuntimeDependencies` 中配置。
-    pub fn with_tool_dispatcher(mut self, dispatcher: ToolDispatcher) -> Self {
-        self.actor_factory.tools.dispatcher = Some(dispatcher);
-        self
-    }
-
-    /// 在 actor 启动前补充工具执行器；新代码应优先在 `RuntimeDependencies` 中配置。
-    pub fn with_tool_worker(mut self, worker: ToolWorker) -> Self {
-        self.actor_factory.tools.worker = Some(worker);
-        self
-    }
-
-    /// 在 actor 启动前补充工具批次上限；新代码应优先在 `RuntimeDependencies` 中配置。
-    pub fn with_max_tool_rounds(mut self, limit: u32) -> Self {
-        self.actor_factory.policy.max_tool_rounds = limit.max(1);
-        self
     }
 
     /// 取得会话句柄；会话尚未运行时启动一个 actor。

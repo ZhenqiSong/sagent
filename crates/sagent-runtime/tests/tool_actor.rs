@@ -375,12 +375,13 @@ async fn tool_results_are_replayed_to_the_next_provider_round_before_final_text(
         TerminalLimits::default(),
     );
     let dispatcher = ToolDispatcher::new(tool_registry());
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider, "mock", "profile-v1")
     .with_tool_dispatcher(dispatcher)
     .with_tool_worker(worker);
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await
@@ -467,13 +468,14 @@ async fn tool_loop_stops_before_persisting_a_call_beyond_the_configured_limit() 
         ReadFileLimits::default(),
         TerminalLimits::default(),
     );
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider.clone(), "mock", "profile-v1")
     .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
     .with_tool_worker(worker)
     .with_max_tool_rounds(2);
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await
@@ -543,12 +545,13 @@ async fn approval_once_resumes_the_paused_terminal_call_and_replays_its_result()
         ReadFileLimits::default(),
         TerminalLimits::default(),
     );
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider.clone(), "mock", "profile-v1")
     .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
     .with_tool_worker(worker);
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await
@@ -643,12 +646,13 @@ async fn approval_denial_persists_a_tool_error_without_starting_terminal() {
         ReadFileLimits::default(),
         TerminalLimits::default(),
     );
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider.clone(), "mock", "profile-v1")
     .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
     .with_tool_worker(worker);
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await
@@ -738,12 +742,13 @@ async fn write_file_requires_approval_and_audit_event_excludes_content() {
         ReadFileLimits::default(),
         TerminalLimits::default(),
     );
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(provider.clone(), "mock", "profile-v1")
     .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
     .with_tool_worker(worker);
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await
@@ -827,12 +832,13 @@ async fn interrupt_cancels_running_tool_without_persisting_a_late_result() {
         TerminalLimits::default(),
     );
     let worker_probe = worker.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(Arc::new(LongTerminalProvider), "mock", "profile-v1")
     .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
     .with_tool_worker(worker);
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await
@@ -916,9 +922,9 @@ async fn approval_timeout_wins_without_starting_terminal_or_accepting_a_late_dec
         ReadFileLimits::default(),
         TerminalLimits::default(),
     );
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let dependencies = RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    }))
+    })
     .with_provider(
         Arc::new(ApprovalProvider {
             calls: AtomicUsize::new(0),
@@ -929,6 +935,7 @@ async fn approval_timeout_wins_without_starting_terminal_or_accepting_a_late_dec
     .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
     .with_tool_worker(worker)
     .with_approval_timeout(Duration::from_millis(20));
+    let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await

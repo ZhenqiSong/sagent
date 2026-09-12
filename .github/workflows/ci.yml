@@ -70,7 +70,7 @@ jobs:
               line=${line//$'\r'/'%0D'}
               line=${line//$'\n'/'%0A'}
               echo "::error title=workspace test::$line"
-            done < <(tail -n 80 "$log")
+            done < <(grep -nE 'FAILED|panicked|assertion|failures:|error:|left:|right:|SIG[A-Z]+' "$log" | tail -n 120)
           fi
 
       - name: Run TUI unit tests

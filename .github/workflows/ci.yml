@@ -48,6 +48,11 @@ jobs:
       - name: Check compilation
         run: cargo check --workspace --all-targets
 
+      # 文档构建会解析所有 public API 的链接和模块关系；它不替代后续的 missing_docs
+      # 收紧，但能在重构早期发现错误导出、失效 intra-doc link 和 crate 文档断裂。
+      - name: Build workspace documentation
+        run: cargo doc --workspace --no-deps
+
       - name: Run workspace tests except TUI black-box
         # 先完成其他 crate，避免 workspace 测试编排影响 TUI 黑盒依赖的兄弟 binary。
         run: cargo test --workspace --exclude sagent-tui -- --test-threads=1

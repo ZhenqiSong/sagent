@@ -2,7 +2,10 @@
 
 状态：规划中
 范围：独立 Rust 项目 `sagent`
-前置条件：Phase 0–2 已关闭；三平台 CI 与三平台手工 smoke 已完成。
+前置条件：Phase 0–2 已关闭；三平台 CI 与三平台手工 smoke 已完成；并完成
+[代码可读性、职责边界与可替换性优化计划](rust-code-quality-and-architecture-optimization-plan.md)
+的退出标准。该计划先固定 Storage、Provider、工具、Runtime 和 transport 的边界，避免
+Phase 3 的功能继续堆叠到现有大对象和具体基础设施实现中。
 
 ## 1. 定位、命名与目标
 

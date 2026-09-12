@@ -23,7 +23,8 @@ pub use command_policy::{CommandRisk, classify_command};
 pub use definition::{ToolDefinition, ToolPermission};
 pub use error::RegistryError;
 pub use process::{
-    BoundedOutput, ProcessSupervisor, ProcessTreeGuard, TerminationReason, sanitize_environment,
+    ActiveProcess, BoundedOutput, ProcessSupervisor, ProcessTreeGuard, TerminationReason,
+    sanitize_environment,
 };
 pub use read_file::{ReadFileLimits, ReadFileRequest, ReadFileService};
 pub use registry::{ToolRegistry, builtin_registry};

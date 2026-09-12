@@ -209,7 +209,8 @@ impl TerminalExecutor {
         }
         let process_id = child.id().unwrap_or_default();
         let id = tool_call_id.as_uuid().to_string();
-        self.supervisor.register(id.clone());
+        // 登记发生在 spawn 后，确保失败诊断中的 PID 与真正受监管的 shell/process group 对应。
+        self.supervisor.register(id.clone(), process_id);
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let timeout_duration = Duration::from_millis(request.timeout_ms);

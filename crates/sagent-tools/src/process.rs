@@ -1,6 +1,6 @@
 //! Terminal 子进程启动、输出读取和进程树终止。
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
@@ -19,10 +19,22 @@ pub enum TerminationReason {
     Shutdown,
 }
 
-/// 只保存当前执行中的调用标识，不保存 Session/Turn 内容。
+/// 一个仍受终端监督器管理的子进程摘要。
+///
+/// 该结构仅用于生命周期诊断：调用标识可关联到审计事件，PID 可帮助 CI 在进程树
+/// 清理失败时定位宿主进程；两者都不包含命令、环境变量、Session 或 Turn 内容。
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ActiveProcess {
+    /// 当前工具调用的稳定标识。
+    pub tool_call_id: String,
+    /// shell 进程的宿主 PID；Unix 下它同时是独立 process group 的 leader。
+    pub process_id: u32,
+}
+
+/// 只保存当前执行中的调用标识和 shell PID，不保存命令或 Session/Turn 内容。
 #[derive(Debug, Clone, Default)]
 pub struct ProcessSupervisor {
-    active: Arc<Mutex<HashSet<String>>>,
+    active: Arc<Mutex<HashMap<String, u32>>>,
 }
 
 /// Windows Job Object 或 POSIX no-op guard，保证执行结束时不会遗留子进程树。
@@ -120,12 +132,12 @@ impl ProcessSupervisor {
         Self::default()
     }
 
-    /// 登记一个正在执行的工具调用。
-    pub fn register(&self, tool_call_id: impl Into<String>) {
+    /// 登记一个正在执行的工具调用及其 shell PID。
+    pub fn register(&self, tool_call_id: impl Into<String>, process_id: u32) {
         self.active
             .lock()
             .expect("process registry poisoned")
-            .insert(tool_call_id.into());
+            .insert(tool_call_id.into(), process_id);
     }
 
     /// 移除已完成或已取消的工具调用。
@@ -139,6 +151,25 @@ impl ProcessSupervisor {
     /// 返回当前登记的活动进程数量。
     pub fn active_count(&self) -> usize {
         self.active.lock().expect("process registry poisoned").len()
+    }
+
+    /// 返回活动进程的稳定快照，供关闭失败诊断而非业务决策使用。
+    ///
+    /// 输出按调用标识排序，使 CI 的失败日志可比较；调用方不能通过该快照终止或修改
+    /// 进程，真正的取消仍必须走拥有 child handle 的 terminal 执行任务。
+    pub fn active_processes(&self) -> Vec<ActiveProcess> {
+        let mut processes = self
+            .active
+            .lock()
+            .expect("process registry poisoned")
+            .iter()
+            .map(|(tool_call_id, process_id)| ActiveProcess {
+                tool_call_id: tool_call_id.clone(),
+                process_id: *process_id,
+            })
+            .collect::<Vec<_>>();
+        processes.sort_by(|left, right| left.tool_call_id.cmp(&right.tool_call_id));
+        processes
     }
 }
 

@@ -125,7 +125,7 @@ fn create_active_profile_temp_file(root: &Path, profile: &str) -> Result<PathBuf
 /// 返回指定 Sagent 根目录中可用的 profile。
 ///
 /// default 永远存在于结果首位，它直接对应根目录；命名 profile 则来自
-/// \`<root>/profiles/\` 下名称合法的直接子目录。无效目录不会作为 profile
+/// `&lt;root&gt;/profiles/` 下名称合法的直接子目录。无效目录不会作为 profile
 /// 暴露给调用方，避免历史残留或手工创建的路径绕过名称校验。
 pub fn list_profile_names(root: &Path) -> Result<Vec<ProfileName>> {
     if !root.is_absolute() {

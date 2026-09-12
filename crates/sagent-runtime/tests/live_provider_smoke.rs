@@ -17,7 +17,8 @@ use anyhow::{Result, bail};
 use sagent_agent::{RequestId, UserInput};
 use sagent_config::{normalize_profile_name, resolve_openai_provider, resolve_paths};
 use sagent_runtime::{
-    RuntimeEventKind, RuntimeEventSubscription, SessionHandle, SessionSupervisor,
+    RuntimeDependencies, RuntimeEventKind, RuntimeEventSubscription, SessionHandle,
+    SessionSupervisor,
 };
 use sagent_store::{MessageQuery, NewSession, Store};
 use sagent_types::SessionId;
@@ -87,9 +88,9 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
 
     let state_db = paths.state_db.clone();
     let provider = Arc::new(resolved.client);
-    let supervisor = SessionSupervisor::new(move || {
+    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
         Store::open_readwrite(&state_db).map_err(|error| error.to_string())
-    })
+    }))
     .with_provider(provider, model.clone(), profile_revision.clone());
     let handle = supervisor.get_or_start(session_id.clone()).await?;
 

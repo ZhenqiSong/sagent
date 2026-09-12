@@ -9,20 +9,19 @@
 //! `SessionHandle` 只投递命令并等待一次应答；它不暴露 Store，也不等待整个回合。
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use sagent_agent::{ApprovalDecision, RequestId, SessionCommand, UserInput};
 use sagent_provider::ModelProvider;
-use sagent_store::Store;
 use sagent_types::{ApprovalId, ClientCapabilities, SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::RuntimeError;
-use crate::actor::{SessionActor, WorkerFactory, utc_now};
 use crate::event::{RuntimeEvent, RuntimeEventSubscription};
 use crate::input::{ActorInput, CommandReply};
+use crate::runtime_dependencies::{RuntimeDependencies, SessionActorFactory};
 use crate::tool_dispatch::ToolDispatcher;
 use crate::tool_worker::ToolWorker;
 
@@ -30,85 +29,6 @@ use crate::tool_worker::ToolWorker;
 const MAILBOX_CAPACITY: usize = 32;
 /// 每个 Session 运行时事件广播容量。
 const EVENT_CAPACITY: usize = 64;
-const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
-const DEFAULT_MAX_TOOL_ROUNDS: u32 = 8;
-
-/// 为单个新 actor 打开独占 Store 的工厂。
-///
-/// actor 是 Store 的唯一写入者；Supervisor 不会把同一个 Store 交给两个 actor。
-/// 打开失败时以可读原因返回，由调用方转换为 `RuntimeError::Persistence`。
-type StoreFactory = Arc<dyn Fn() -> Result<Store, String> + Send + Sync>;
-
-/// 创建 `SessionActor` 所需的不可变运行时配置。
-///
-/// 它拥有 Store 打开方式以及 actor 的可选能力依赖。配置只在 actor 创建时读取
-/// 一次并复制为快照，因此不会在活跃会话中途改变模型、工具或审批语义。
-struct SessionActorFactory {
-    store_factory: StoreFactory,
-    worker_factory: Option<WorkerFactory>,
-    provider: Option<Arc<dyn ModelProvider>>,
-    model: String,
-    profile_revision: String,
-    approval_timeout: Duration,
-    tool_dispatcher: Option<ToolDispatcher>,
-    tool_worker: Option<ToolWorker>,
-    max_tool_rounds: u32,
-}
-
-impl SessionActorFactory {
-    /// 使用运行时默认值创建 actor 配置。
-    fn new<F>(store_factory: F) -> Self
-    where
-        F: Fn() -> Result<Store, String> + Send + Sync + 'static,
-    {
-        Self {
-            store_factory: Arc::new(store_factory),
-            worker_factory: None,
-            provider: None,
-            model: "unconfigured".into(),
-            profile_revision: "runtime-v1".into(),
-            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
-            tool_dispatcher: None,
-            tool_worker: None,
-            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
-        }
-    }
-
-    /// 创建一个拥有独占 Store 和固定配置快照的 actor。
-    fn create(
-        &self,
-        session_id: SessionId,
-        command_rx: mpsc::Receiver<ActorInput>,
-        command_tx: mpsc::Sender<ActorInput>,
-        event_tx: broadcast::Sender<RuntimeEvent>,
-    ) -> Result<SessionActor, RuntimeError> {
-        let store = (self.store_factory)().map_err(RuntimeError::Persistence)?;
-        let actor = SessionActor::new(session_id, store, command_rx, command_tx, event_tx);
-        let actor = match &self.worker_factory {
-            Some(factory) => actor.with_worker_factory(factory.clone(), utc_now),
-            None => actor,
-        };
-        let actor = actor.with_approval_timeout(self.approval_timeout);
-        let actor = actor.with_max_tool_rounds(self.max_tool_rounds);
-        let actor = match &self.provider {
-            Some(provider) => actor.with_provider(
-                provider.clone(),
-                self.model.clone(),
-                self.profile_revision.clone(),
-            ),
-            None => actor,
-        };
-        let actor = match &self.tool_dispatcher {
-            Some(dispatcher) => actor.with_tool_dispatcher(dispatcher.clone()),
-            None => actor,
-        };
-        Ok(match &self.tool_worker {
-            Some(worker) => actor.with_tool_worker(worker.clone()),
-            None => actor,
-        })
-    }
-}
-
 /// Supervisor 为每个正在运行的 Session 保存的托管状态。
 ///
 /// 只保存“投递 + 订阅 + 生命周期”三样东西；actor 的可变状态与 Store 都在
@@ -126,18 +46,54 @@ pub struct SessionSupervisor {
 }
 
 impl SessionSupervisor {
-    /// 用 store 工厂创建 Supervisor。
+    /// 用已解析且冻结的运行时依赖创建 Supervisor。
     ///
-    /// store 工厂在每个 Session 首次启动时被调用一次，返回该 actor 独占的
-    /// 读写 Store。调用方负责解析 DB 路径，并在 RPC/config 层注入此工厂。
-    pub fn new<F>(store_factory: F) -> Self
-    where
-        F: Fn() -> Result<Store, String> + Send + Sync + 'static,
-    {
+    /// 依赖只能在 bootstrap 阶段组合；Supervisor 接管后只维护 actor 生命周期，
+    /// 不再直接保存 Provider、工具、Store 或策略配置。
+    pub fn new(dependencies: RuntimeDependencies) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            actor_factory: SessionActorFactory::new(store_factory),
+            actor_factory: dependencies.into_actor_factory(),
         }
+    }
+
+    /// 在 actor 启动前补充 Provider；新代码应优先在 `RuntimeDependencies` 中完成装配。
+    pub fn with_provider(
+        mut self,
+        provider: std::sync::Arc<dyn ModelProvider>,
+        model: impl Into<String>,
+        profile_revision: impl Into<String>,
+    ) -> Self {
+        self.actor_factory.model = Some(crate::runtime_dependencies::ModelDependencies {
+            provider,
+            model: model.into(),
+            profile_revision: profile_revision.into(),
+        });
+        self
+    }
+
+    /// 在 actor 启动前补充审批超时；新代码应优先在 `RuntimeDependencies` 中配置。
+    pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
+        self.actor_factory.policy.approval_timeout = timeout;
+        self
+    }
+
+    /// 在 actor 启动前补充工具定义；新代码应优先在 `RuntimeDependencies` 中配置。
+    pub fn with_tool_dispatcher(mut self, dispatcher: ToolDispatcher) -> Self {
+        self.actor_factory.tools.dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// 在 actor 启动前补充工具执行器；新代码应优先在 `RuntimeDependencies` 中配置。
+    pub fn with_tool_worker(mut self, worker: ToolWorker) -> Self {
+        self.actor_factory.tools.worker = Some(worker);
+        self
+    }
+
+    /// 在 actor 启动前补充工具批次上限；新代码应优先在 `RuntimeDependencies` 中配置。
+    pub fn with_max_tool_rounds(mut self, limit: u32) -> Self {
+        self.actor_factory.policy.max_tool_rounds = limit.max(1);
+        self
     }
 
     /// 取得会话句柄；会话尚未运行时启动一个 actor。
@@ -198,50 +154,6 @@ impl SessionSupervisor {
         let _ = reply.await;
         let _ = managed.join.await;
         Ok(())
-    }
-
-    /// 为测试注入受控 worker 工厂；生产路径使用 `with_provider`。
-    #[cfg(test)]
-    fn with_worker_factory(mut self, worker_factory: WorkerFactory) -> Self {
-        self.actor_factory.worker_factory = Some(worker_factory);
-        self
-    }
-
-    /// 注入真实模型 Provider 和当前 Profile 的模型元数据。
-    pub fn with_provider(
-        mut self,
-        provider: Arc<dyn ModelProvider>,
-        model: impl Into<String>,
-        profile_revision: impl Into<String>,
-    ) -> Self {
-        self.actor_factory.provider = Some(provider);
-        self.actor_factory.model = model.into();
-        self.actor_factory.profile_revision = profile_revision.into();
-        self
-    }
-
-    /// 配置单个 pending approval 的最大等待时间。
-    pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
-        self.actor_factory.approval_timeout = timeout;
-        self
-    }
-
-    /// 配置当前 Supervisor 使用的工具 registry；工具 worker 仍由 Runtime 统一调度。
-    pub fn with_tool_dispatcher(mut self, dispatcher: ToolDispatcher) -> Self {
-        self.actor_factory.tool_dispatcher = Some(dispatcher);
-        self
-    }
-
-    /// 配置具体工具执行器；实际工具仍由每个 SessionActor 监管。
-    pub fn with_tool_worker(mut self, worker: ToolWorker) -> Self {
-        self.actor_factory.tool_worker = Some(worker);
-        self
-    }
-
-    /// 配置单个 Turn 最多可完成多少批工具调用。
-    pub fn with_max_tool_rounds(mut self, limit: u32) -> Self {
-        self.actor_factory.max_tool_rounds = limit.max(1);
-        self
     }
 
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, HashMap<SessionId, ManagedSession>> {
@@ -429,7 +341,7 @@ mod tests {
     use crate::actor::WorkerFactory;
     use crate::event::RuntimeEventSubscription;
     use crate::input::{ActorInput, WorkerEvent};
-    use crate::{RuntimeError, RuntimeEvent, RuntimeEventKind};
+    use crate::{RuntimeDependencies, RuntimeError, RuntimeEvent, RuntimeEventKind};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -486,9 +398,8 @@ mod tests {
         let session_id = SessionId::new("concurrent-session");
         create_sessions(&path, &[&session_id]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = Arc::new(SessionSupervisor::new(counting_factory(
-            path.clone(),
-            opens.clone(),
+        let supervisor = Arc::new(SessionSupervisor::new(RuntimeDependencies::new(
+            counting_factory(path.clone(), opens.clone()),
         )));
 
         let mut tasks = Vec::new();
@@ -555,7 +466,10 @@ mod tests {
         let session_id = SessionId::new("reuse-session");
         create_sessions(&path, &[&session_id]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = SessionSupervisor::new(counting_factory(path.clone(), opens.clone()));
+        let supervisor = SessionSupervisor::new(RuntimeDependencies::new(counting_factory(
+            path.clone(),
+            opens.clone(),
+        )));
 
         let first = supervisor
             .get_or_start(session_id.clone())
@@ -604,7 +518,10 @@ mod tests {
         let session_id = SessionId::new("close-session");
         create_sessions(&path, &[&session_id]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = SessionSupervisor::new(counting_factory(path.clone(), opens.clone()));
+        let supervisor = SessionSupervisor::new(RuntimeDependencies::new(counting_factory(
+            path.clone(),
+            opens.clone(),
+        )));
 
         let handle = supervisor
             .get_or_start(session_id.clone())
@@ -655,7 +572,10 @@ mod tests {
         let session_b = SessionId::new("independent-b");
         create_sessions(&path, &[&session_a, &session_b]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = SessionSupervisor::new(counting_factory(path.clone(), opens.clone()));
+        let supervisor = SessionSupervisor::new(RuntimeDependencies::new(counting_factory(
+            path.clone(),
+            opens.clone(),
+        )));
 
         let handle_a = supervisor
             .get_or_start(session_a.clone())
@@ -737,8 +657,9 @@ mod tests {
             })
         };
 
-        let supervisor = SessionSupervisor::new(counting_factory(path.clone(), opens))
+        let dependencies = RuntimeDependencies::new(counting_factory(path.clone(), opens))
             .with_worker_factory(factory);
+        let supervisor = SessionSupervisor::new(dependencies);
         let handle_a = supervisor
             .get_or_start(session_a.clone())
             .await
@@ -846,9 +767,10 @@ mod tests {
 
     #[tokio::test]
     async fn store_open_failure_returns_persistence_without_actor() {
-        let supervisor = SessionSupervisor::new(|| -> Result<Store, String> {
+        let dependencies = RuntimeDependencies::new(|| -> Result<Store, String> {
             Err("无法打开数据库".into())
         });
+        let supervisor = SessionSupervisor::new(dependencies);
 
         let result = supervisor.get_or_start(SessionId::new("no-store")).await;
         assert!(matches!(result, Err(RuntimeError::Persistence(_))));

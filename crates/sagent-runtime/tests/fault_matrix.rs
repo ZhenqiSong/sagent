@@ -20,7 +20,9 @@ use sagent_provider::{
     ProviderFinish, ProviderRequest, StopReason,
     mock::{MockAction, MockProvider, MockSseChunk, MockSseServer},
 };
-use sagent_runtime::{RuntimeEventKind, SessionSupervisor, ToolDispatcher, ToolWorker};
+use sagent_runtime::{
+    RuntimeDependencies, RuntimeEventKind, SessionSupervisor, ToolDispatcher, ToolWorker,
+};
 use sagent_store::{EventQuery, MessageQuery, NewSession, Store};
 use sagent_tools::{
     ReadFileLimits, TerminalLimits, ToolDefinition, ToolPermission, ToolRegistry, WorkspaceRoot,
@@ -122,9 +124,9 @@ async fn slow_first_token_keeps_stream_order_and_completes() {
             .expect("Provider 配置应有效"),
     );
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(move || {
+    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    })
+    }))
     .with_provider(provider, "mock", "fault-v1");
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -192,9 +194,9 @@ async fn repeated_delta_is_transient_and_persists_one_final_message() {
         MockAction::Finish(StopReason::Stop),
     ]));
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(move || {
+    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    })
+    }))
     .with_provider(provider, "mock", "fault-v1");
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -268,9 +270,9 @@ async fn tool_call_eof_fails_once_without_assistant_tool_call_message() {
             .expect("Provider 配置应有效"),
     );
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(move || {
+    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    })
+    }))
     .with_provider(provider, "mock", "fault-v1");
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -404,9 +406,9 @@ async fn tool_timeout_is_replayed_once_and_does_not_repeat_execution() {
         ReadFileLimits::default(),
         TerminalLimits::default(),
     );
-    let supervisor = SessionSupervisor::new(move || {
+    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    })
+    }))
     .with_provider(provider.clone(), "mock", "fault-v1")
     .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
     .with_tool_worker(worker);

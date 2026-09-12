@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use sagent_runtime::SessionSupervisor;
+use sagent_runtime::{RuntimeDependencies, SessionSupervisor};
 use sagent_store::{
     EVENT_TOOL_STARTED, MessageQuery, NewDaemonEvent, NewGeneration, NewMessage, NewSession,
     StartTurn, Store,
@@ -85,9 +85,9 @@ async fn startup_records_unknown_tool_result_without_reexecuting_and_allows_a_ne
     }
 
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(move || {
+    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
         Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
-    });
+    }));
     let handle = supervisor
         .get_or_start(session_id.clone())
         .await

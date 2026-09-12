@@ -254,16 +254,17 @@ workspace 均使用临时 fixture。为保证 Windows 下黑盒稳定性，修�
 
 ### P2.5 三平台手工 smoke 与发布记录
 
-状态：Windows 已验证；macOS/Linux 待验证。
+状态：已完成。
 
 每个平台执行一次受控手工验证：启动/退出、panic/启动失败后的终端恢复、Ctrl-C interrupt、
 approval deny、terminal timeout 和子进程树清理。将 OS、终端、Rust 版本、命令、结果和已知
 限制记录在 `docs/testing/phase-2-platform-smoke.md`。
 
-**Windows 完成记录：** 已在 Windows 11 原生 ConPTY/PowerShell 环境验证真实 TUI/RPC 启停、
-无效 RPC 启动失败后的终端恢复、Ctrl-C、审批拒绝、terminal 超时/取消和子进程清理；结果
-记录于 `docs/testing/phase-2-platform-smoke.md`。尚未通过故意注入生产 panic 验证 panic
-路径，也尚未执行 macOS/Linux 主机 smoke。
+**三平台完成记录：** Windows 已在原生 ConPTY/PowerShell 环境完成验证；macOS/Linux
+已在原生主机完成同一清单。三平台均覆盖真实 TUI/RPC 启停、启动失败后的终端恢复、
+Ctrl-C、审批拒绝、terminal 超时/取消和子进程清理；结果记录于
+`docs/testing/phase-2-platform-smoke.md`。生产 panic 注入不作为默认 CI 步骤，真实
+Provider smoke 仍保持显式 opt-in。
 
 真实 Provider smoke 保持显式 opt-in，使用专用测试凭据；不得写入默认测试或日志。
 

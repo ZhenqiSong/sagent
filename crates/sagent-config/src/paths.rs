@@ -157,7 +157,11 @@ pub fn profile_root(home: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, fs, path::Path};
+    use std::{
+        ffi::{OsStr, OsString},
+        fs,
+        path::Path,
+    };
 
     use super::{
         configured_home, platform_default_home, profile_root, resolve_active_paths, resolve_paths,
@@ -199,10 +203,12 @@ mod tests {
         let home = platform_default_home();
 
         assert!(home.is_absolute());
-        assert_eq!(
-            home.file_name().and_then(|name| name.to_str()),
-            Some("sagent")
-        );
+        // Windows 遵循 LOCALAPPDATA 的无点目录；POSIX 遵循 Unix 用户目录下的隐藏目录。
+        #[cfg(windows)]
+        let expected_leaf = OsStr::new("sagent");
+        #[cfg(not(windows))]
+        let expected_leaf = OsStr::new(".sagent");
+        assert_eq!(home.file_name(), Some(expected_leaf));
     }
 
     #[test]

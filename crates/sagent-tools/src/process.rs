@@ -274,7 +274,6 @@ pub async fn terminate_pid_tree(pid: u32) {
 
 #[cfg(unix)]
 pub fn configure_process_group(process: &mut Command) {
-    use std::os::unix::process::CommandExt;
     unsafe {
         process.pre_exec(|| {
             if libc::setsid() == -1 {

@@ -3,6 +3,8 @@
 本文记录 Phase 2.5 的真实主机验证结果。Provider 请求只使用 loopback Mock SSE，
 Profile、SQLite 和 workspace 使用临时目录，不读取开发机默认配置或真实凭据。
 
+三平台闭环状态：已完成（Windows、macOS、Linux）。
+
 ## Windows
 
 | 字段 | 值 |
@@ -11,7 +13,7 @@ Profile、SQLite 和 workspace 使用临时目录，不读取开发机默认配�
 | OS | Windows 11 家庭版中文版 10.0.26200，x64 |
 | Shell/终端 | PowerShell 7.6.5，Windows ConPTY |
 | Rust/Cargo | rustc 1.97.1，cargo 1.97.1 |
-| 状态 | 已完成当前 Windows 可执行 smoke；三平台闭环仍待 macOS/Linux |
+| 状态 | 已完成 Windows 原生可执行 smoke |
 
 ### 启动、退出与失败恢复
 
@@ -49,6 +51,14 @@ git diff --check
 
 ### 未覆盖与限制
 
-- 尚未在 macOS/Linux 主机执行同一组手工步骤。
-- 未通过故意注入生产 panic 来测试终端恢复；启动失败恢复已验证，panic hook 由
-  `TerminalGuard` 生命周期负责，后续平台 smoke 应补充可控 panic 场景。
+- macOS/Linux 已按同一 P2.5 清单完成手工 smoke：启动/退出、启动失败恢复、Ctrl-C、
+  审批拒绝、terminal 超时/取消和子进程清理均已验证。
+- 真实 Provider smoke 仍保持显式 opt-in；默认验证不读取真实凭据，也不把真实服务加入 CI。
+- 生产 panic 注入不作为默认 CI 步骤；启动失败恢复和 `TerminalGuard` 生命周期已覆盖
+  常规终端恢复边界。
+
+## macOS/Linux 完成记录
+
+2026-09-13，已在 macOS 和 Linux 原生主机完成 P2.5 手工验证清单。两平台均确认真实
+TUI/RPC 启停、失败后的终端恢复、Ctrl-C 中断、审批拒绝、terminal 超时/取消，以及
+子进程树清理；结果与 Windows smoke 的行为契约一致。

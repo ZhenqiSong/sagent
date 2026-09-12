@@ -211,6 +211,9 @@ mod tests {
 
     #[test]
     fn rejects_corrupt_database_fixture() {
+        // 该 fixture 故意使用 .db 后缀但内容不是 SQLite；它验证只读打开后的结构探测
+        // 不会把损坏文件误判为空数据库。虽然根目录忽略所有运行时 .db，文件本身
+        // 仍必须以强制方式纳入版本控制，否则干净 checkout 会在这里找不到 fixture。
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/corrupt_state.db");
         let store = Store::open_readonly(&path).expect("打开句柄本身可以延迟校验文件内容");

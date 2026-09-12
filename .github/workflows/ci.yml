@@ -10,6 +10,8 @@ env:
   CARGO_TERM_COLOR: always
   # 确保 CI 中不使用用户本地配置
   SAGENT_HOME: ""
+  # 黑盒 PTY 需要一个明确的终端类型；非交互 runner 默认可能不提供 TERM。
+  TERM: xterm-256color
 
 jobs:
   # ── 代码质量和测试（Linux/macOS/Windows） ──
@@ -52,7 +54,8 @@ jobs:
         run: cargo build --workspace --bins
 
       - name: Run tests
-        run: cargo test --workspace
+        # 将 PTY 黑盒串行化，避免三个真实终端同时竞争 runner 的伪终端资源。
+        run: cargo test --workspace -- --test-threads=1
 
       # 契约 fixture 保护跨 crate 的外部行为；它不依赖用户 home、网络或真实凭据，
       # 因而必须与普通单元测试一起在每个原生 OS 上执行。

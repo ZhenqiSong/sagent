@@ -29,6 +29,8 @@ pub enum WorkspaceError {
     NotRegularFile,
     #[error("目标不是目录")]
     NotDirectory,
+    #[error("目标父目录不存在")]
+    ParentNotFound,
     #[error("文件系统操作失败：{0:?}")]
     Io(ErrorKind),
 }
@@ -64,6 +66,51 @@ impl WorkspaceRoot {
         requested: impl AsRef<Path>,
     ) -> Result<PathBuf, WorkspaceError> {
         self.resolve_kind(requested, true)
+    }
+
+    /// 解析可安全写入的相对文件目标。
+    ///
+    /// 新文件尚不能 `canonicalize`，因此必须先 canonicalize 已存在的父目录，再拼接最后
+    /// 一个文件名。写工具故意拒绝绝对路径和不存在父目录：这避免模型在不明确的情况下
+    /// 改变工作区结构，也避免通过未验证的 symlink 链逃逸 root。
+    pub fn resolve_write_target(
+        &self,
+        requested: impl AsRef<Path>,
+    ) -> Result<PathBuf, WorkspaceError> {
+        let requested = requested.as_ref();
+        if requested.as_os_str().is_empty() {
+            return Err(WorkspaceError::EmptyPath);
+        }
+        if requested.is_absolute() {
+            return Err(WorkspaceError::PathDenied);
+        }
+        let joined = self.root.join(requested);
+        if !lexically_within(&joined, &self.root) {
+            return Err(WorkspaceError::PathDenied);
+        }
+        let parent = joined.parent().ok_or(WorkspaceError::PathDenied)?;
+        let canonical_parent = fs::canonicalize(parent).map_err(|error| match error.kind() {
+            ErrorKind::NotFound => WorkspaceError::ParentNotFound,
+            kind => WorkspaceError::Io(kind),
+        })?;
+        if !canonical_parent.starts_with(&self.root) {
+            return Err(WorkspaceError::PathDenied);
+        }
+        if !fs::metadata(&canonical_parent)
+            .map_err(|error| WorkspaceError::Io(error.kind()))?
+            .is_dir()
+        {
+            return Err(WorkspaceError::NotDirectory);
+        }
+        let name = requested.file_name().ok_or(WorkspaceError::PathDenied)?;
+        let target = canonical_parent.join(name);
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() => Err(WorkspaceError::PathDenied),
+            Ok(metadata) if !metadata.is_file() => Err(WorkspaceError::NotRegularFile),
+            Ok(_) => Ok(target),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(target),
+            Err(error) => Err(WorkspaceError::Io(error.kind())),
+        }
     }
 
     fn resolve_kind(

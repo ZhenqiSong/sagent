@@ -123,6 +123,8 @@ format、workspace test 和 clippy 之外，额外运行 `cargo run -p sagent-co
 
 ### P1.2 Transport-neutral RPC 与 WebSocket
 
+状态：已完成。
+
 **目的：** 在不改变业务 handler 的前提下支持 stdio 和 WebSocket。
 
 **实施：**
@@ -135,6 +137,15 @@ format、workspace test 和 clippy 之外，额外运行 `cargo run -p sagent-co
 
 **验收：** 同一组 RPC contract fixtures 可在 stdio 与 WebSocket 运行；业务 service 不导入
 具体 transport 类型。
+
+**完成记录：** 抽出了可由两类 transport 共用的连接状态、请求 dispatcher、事件 bridge
+和已序列化输出帧；stdio 只追加 NDJSON 换行，WebSocket 将同一 JSON 文本作为单个 text
+message 发送。新增 `--websocket-addr <loopback-address>`，仅允许 IPv4/IPv6 loopback，
+避免未认证监听器暴露到网络。每条 WebSocket 连接都打开独占只读 Store 服务并创建独立
+`ConnectionState`，同时共享同一 Profile 的 Supervisor，以维持 capability 隔离与重连后的
+Actor 可达性。真实 loopback WebSocket 测试覆盖 handshake 后的 ready → request → response
+顺序，另覆盖二进制与超大帧拒绝；现有 stdio 集成测试持续验证同一 dispatcher 的 NDJSON
+行为。
 
 ### P1.3 完成只读管理面与 Store 规模验证
 
@@ -162,6 +173,8 @@ fixture 避免逐条提交污染查询数据；benchmark 现可实际运行 10k 
 
 ### P2.1 实现 `write_file`
 
+状态：已完成。
+
 **范围：** workspace 内写入、临时 sibling 文件、flush/sync、原子 rename、明确的 overwrite
 policy、大小限制、审计事件和 cancellation 清理。
 
@@ -171,7 +184,18 @@ policy、大小限制、审计事件和 cancellation 清理。
 **验收：** 新建、覆盖拒绝/允许、父目录不存在、rename 失败、取消、并发写同一路径和
 workspace 逃逸均有 fixture；失败不留下半写文件或临时文件。
 
+**完成记录：** `sagent-tools::WriteFileService` 只接受相对 workspace 路径；它先
+canonicalize 已存在父目录，拒绝绝对路径、`..`、symlink 与不存在父目录，然后在目标同目录
+创建私有临时 sibling 文件，写入后 `sync_all` 再提交。默认拒绝覆盖；non-overwrite 通过
+atomic hard-link 保证并发调用至多一个成功，显式 `overwrite=true` 才执行同目录 rename。
+取消、写入和提交失败都会清理临时文件，模型结果不回显内容或临时路径。Runtime 将
+`write_file` 标为 `ApprovalRequired`，审批前不启动工具；`tool.started` 审计仅保存相对路径、
+覆盖意图和内容字节数。工具 schema 已纳入版本化 registry contract，工具、Runtime 审批/审计
+和并发写入测试覆盖该边界。
+
 ### P2.2 暴露 `session_search` 工具
+
+状态：已完成。
 
 **范围：** 只调用 Store 的 FTS repository，不执行 shell，不加载任意文件；输入包括 query、
 limit 和明确的当前 Profile/权限范围。
@@ -179,7 +203,16 @@ limit 和明确的当前 Profile/权限范围。
 **验收：** CJK/emoji、空 query、FTS 缺失、结果上限、跨 Profile 隔离和取消均有测试；结果
 携带稳定 session/message 引用和有界 snippet，不泄漏隐藏字段。
 
+**完成记录：** 新增 Profile 固定的 `SessionSearchService`，每次查询短暂打开只读 Store，
+只调用现有 FTS repository；请求只接受 query、limit 和可选 session_id，未知字段被拒绝，
+结果上限收敛为服务限制。CJK/emoji 复用 Store 的 LIKE/FTS 分支，输出仅含稳定
+session/message 引用与最多 500 字符 snippet；空 query、预取消、缺失 Store/FTS 和工具未绑定
+均 fail-closed。Runtime 通过显式 `with_session_search(state_db)` 绑定当前 Profile，未绑定时
+不会隐式打开数据库；registry contract、工具层和 Runtime worker 测试已覆盖上述边界。
+
 ### P2.3 补齐 Provider 与工具回环故障矩阵
+
+状态：已完成。
 
 补充本地 Mock SSE/Tool fixture，至少覆盖：慢首 token、重复 delta、半包 tool-call、
 tool-call 后 EOF、429/5xx、取消竞争、工具超时、approval timeout、迟到 tool/provider
@@ -188,7 +221,17 @@ result。
 **验收：** 每种失败只产生一个持久化终态；取消不伪造 final assistant message；工具不会被
 重复执行；delta/usage 不会进入 replay。
 
+**完成记录：** 新增 `fault_matrix.rs` 真实 Runtime 回环 fixture，覆盖慢首 token、重复
+delta、tool-call EOF、工具 timeout，以及成功/失败/中断终态唯一性、取消后无 assistant
+消息、工具结果只回放一次和 transient delta/usage 不进入 `events_since`。Provider 层新增
+半包 tool-call SSE fixture 与 429/5xx adapter 断言；SSE parser 按流保存 `index → call_id`
+映射，兼容后续 delta 省略 id 的 OpenAI-compatible 响应。所有 fixture 只使用本地 TCP、临时
+SQLite 和临时 workspace，不读取真实凭据；`benchmarks/fault-matrix.json` 已将 P2.3 行标记
+为 covered。
+
 ### P2.4 完整 TUI 黑盒 E2E
+
+状态：已完成。
 
 以真实 `sagent-tui` 与 `sagent-rpc` 子进程、临时 Profile 和 Mock SSE 运行以下流程：
 
@@ -202,11 +245,25 @@ hello → list/create/resume → submit → delta → complete
 测试应验证 response 先于首个 delta、TUI 不直接访问 Store、旧 turn 的 event 被忽略、
 reconnect 不重复 transcript，及 stdout 始终为完整 NDJSON。
 
+**完成记录：** 新增 `crates/sagent-tui/tests/blackbox_e2e.rs`，通过真实 PTY 启动 TUI 和
+RPC 子进程，覆盖 list/create/resume/submit/stream/complete、受审批 terminal、Ctrl-C
+中断，以及杀掉 RPC 后重连并保持 transcript 唯一。新增 stdio RPC 工具审批回环测试，验证
+审批后的第二轮 Provider 请求和最终终态；Mock SSE 仅监听 loopback，Profile、SQLite 和
+workspace 均使用临时 fixture。为保证 Windows 下黑盒稳定性，修正了 HTTP fixture 请求体
+消费、RPC 子进程退出探测，以及 Provider 正常退出事件与工具调用事件跨 sender 乱序的问题。
+
 ### P2.5 三平台手工 smoke 与发布记录
+
+状态：Windows 已验证；macOS/Linux 待验证。
 
 每个平台执行一次受控手工验证：启动/退出、panic/启动失败后的终端恢复、Ctrl-C interrupt、
 approval deny、terminal timeout 和子进程树清理。将 OS、终端、Rust 版本、命令、结果和已知
 限制记录在 `docs/testing/phase-2-platform-smoke.md`。
+
+**Windows 完成记录：** 已在 Windows 11 原生 ConPTY/PowerShell 环境验证真实 TUI/RPC 启停、
+无效 RPC 启动失败后的终端恢复、Ctrl-C、审批拒绝、terminal 超时/取消和子进程清理；结果
+记录于 `docs/testing/phase-2-platform-smoke.md`。尚未通过故意注入生产 panic 验证 panic
+路径，也尚未执行 macOS/Linux 主机 smoke。
 
 真实 Provider smoke 保持显式 opt-in，使用专用测试凭据；不得写入默认测试或日志。
 

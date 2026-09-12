@@ -1,10 +1,11 @@
 use async_trait::async_trait;
 use sagent_provider::{
-    ModelProvider, ProviderError, ProviderEvent, ProviderEventSink, ProviderMessage,
-    ProviderRequest, ProviderRole, StopReason, TokenUsage,
+    ModelProvider, OpenAiCompatibleProvider, ProviderError, ProviderEvent, ProviderEventSink,
+    ProviderMessage, ProviderRequest, ProviderRole, StopReason, TokenUsage,
     mock::{MockAction, MockProvider, MockSseChunk, MockSseServer},
 };
 use sagent_types::{SessionId, TurnId};
+use serde_json::json;
 use std::time::Duration;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -41,6 +42,38 @@ fn request() -> ProviderRequest {
         temperature: None,
         stream: true,
     }
+}
+
+/// 让 tool-call fixture 使用当前宿主 shell 的语法；Provider 测试不执行该命令。
+#[cfg(windows)]
+fn approval_command() -> &'static str {
+    "del /s /q __sagent_missing_fixture__.txt & echo approved > approval-marker.txt"
+}
+
+/// macOS/Linux 的 POSIX 等价命令，保留需要审批的 `rm -rf` 风险标记。
+#[cfg(not(windows))]
+fn approval_command() -> &'static str {
+    "rm -rf __sagent_missing_fixture__.txt && printf approved > approval-marker.txt"
+}
+
+/// 构造真实 adapter 可解析的 tool-call SSE，不依赖手工 JSON 转义。
+fn terminal_tool_call_sse() -> String {
+    let arguments = json!({"command": approval_command()}).to_string();
+    let call = json!({
+        "id": "tool",
+        "choices": [{
+            "delta": {"tool_calls": [{
+                "index": 0,
+                "id": "call-terminal",
+                "function": {"name": "terminal", "arguments": arguments}
+            }]}
+        }]
+    });
+    let finish = json!({
+        "id": "tool",
+        "choices": [{"finish_reason": "tool_calls"}]
+    });
+    format!("data: {call}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -202,4 +235,31 @@ async fn mock_sse_server_can_return_rate_limit_and_server_error() {
         assert!(text.starts_with(&format!("HTTP/1.1 {status} {reason}")));
         assert!(text.ends_with(fixture));
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mock_sse_sequence_accepts_tool_call_fixture() {
+    // Arrange：工具审批黑盒会让同一 Turn 发起两次 Provider 请求；先单独验证第一轮
+    // 的 OpenAI SSE tool-call JSON 能走完整 adapter，避免把 parser 问题误判成 TUI 问题。
+    let first = terminal_tool_call_sse();
+    let server = MockSseServer::spawn_sequence(vec![vec![MockSseChunk::text(first)]])
+        .await
+        .expect("应能启动 tool-call fixture server");
+    let provider = OpenAiCompatibleProvider::from_endpoint(&server.url(), "fixture-key")
+        .expect("fixture endpoint 应有效");
+    let mut sink = CollectingSink { events: Vec::new() };
+
+    // Act：真实 HTTP/SSE adapter 读取完整流并聚合工具调用增量。
+    let finish = provider
+        .stream(request(), &mut sink, CancellationToken::new())
+        .await
+        .expect("tool-call SSE 应完成");
+    server.wait().await.expect("fixture server 应完成");
+
+    // Assert：第一轮必须返回 tool_calls 终止原因和完整 terminal 参数。
+    assert_eq!(finish.reason, StopReason::ToolCalls);
+    assert!(sink.events.iter().any(|event| matches!(
+        event,
+        ProviderEvent::ToolCallDelta { name: Some(name), .. } if name == "terminal"
+    )));
 }

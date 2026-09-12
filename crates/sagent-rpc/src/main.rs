@@ -12,6 +12,8 @@ mod runtime_bootstrap;
 mod service;
 #[path = "transport/stdio.rs"]
 mod stdio;
+#[path = "transport/websocket.rs"]
+mod websocket;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -26,19 +28,26 @@ async fn main() {
     }
 }
 
-/// 解析作用域、构造 Profile 隔离的 Runtime，并启动 NDJSON 请求循环。
+/// 解析作用域、构造 Profile 隔离的 Runtime，并按显式参数启动本地 transport。
 async fn run() -> Result<()> {
     let args = args::RpcArgs::parse();
     let paths = match args.profile.as_ref() {
         Some(profile) => resolve_paths(args.home.as_deref(), Some(profile))?,
         None => resolve_active_paths(args.home.as_deref(), None)?,
     };
-    let service = runtime_bootstrap::RuntimeBootstrap::from_paths(paths)?.into_service();
-    let reader = tokio::io::BufReader::new(tokio::io::stdin());
-    let writer = tokio::io::BufWriter::new(tokio::io::stdout());
-    let connection = connection::ConnectionState::new();
-    stdio::run(reader, writer, service, connection)
-        .await
-        .context("stdio RPC 循环失败")?;
+    let bootstrap = runtime_bootstrap::RuntimeBootstrap::from_paths(paths)?;
+    if let Some(address) = args.websocket_addr {
+        websocket::run(address, std::sync::Arc::new(bootstrap))
+            .await
+            .context("WebSocket RPC 服务失败")?;
+    } else {
+        let service = bootstrap.open_service()?;
+        let reader = tokio::io::BufReader::new(tokio::io::stdin());
+        let writer = tokio::io::BufWriter::new(tokio::io::stdout());
+        let connection = connection::ConnectionState::new();
+        stdio::run(reader, writer, service, connection)
+            .await
+            .context("stdio RPC 循环失败")?;
+    }
     Ok(())
 }

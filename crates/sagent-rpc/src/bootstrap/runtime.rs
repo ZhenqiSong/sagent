@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use sagent_config::{SagentPaths, read_public_config, resolve_openai_provider};
+use sagent_config::{SagentPaths, read_public_config, resolve_openai_provider, resolve_workspace};
 use sagent_provider::ModelProvider;
-use sagent_runtime::SessionSupervisor;
+use sagent_runtime::{SessionSupervisor, ToolDispatcher, ToolWorker};
 use sagent_store::Store;
+use sagent_tools::{ReadFileLimits, TerminalLimits, WorkspaceRoot, builtin_registry};
 
 use crate::service::RuntimeService;
 
@@ -15,7 +16,11 @@ use crate::service::RuntimeService;
 /// Bootstrap 在启动时固定路径与 Provider；RPC 请求不能传入 home、profile、model、
 /// endpoint 或 API key，因而不会在同一个 daemon 内跨越 Profile 或凭据边界。
 pub struct RuntimeBootstrap {
-    service: RuntimeService,
+    state_db: std::path::PathBuf,
+    model: String,
+    supervisor: Arc<SessionSupervisor>,
+    provider_ready: bool,
+    public_config: sagent_protocol::ConfigReadResult,
 }
 
 impl RuntimeBootstrap {
@@ -40,6 +45,31 @@ impl RuntimeBootstrap {
                 .map_err(|error| format!("无法打开 actor 数据库：{error}"))
         });
 
+        // 工具边界必须在 Profile bootstrap 时固定，不能接受来自 prompt.submit 的路径或
+        // registry 覆盖。workspace 不可用时只关闭工具而不影响只读 RPC/空会话，让损坏的
+        // 工具配置不会阻塞用户恢复已有 transcript；可用时每个 Actor 共享无状态 worker
+        // 配置，但实际 Store 写入仍由 Actor 独占连接完成。
+        let base_supervisor = match resolve_workspace(&paths)
+            .and_then(|root| WorkspaceRoot::new(root).map_err(|error| anyhow::anyhow!(error)))
+        {
+            Ok(workspace) => match builtin_registry() {
+                Ok(registry) => {
+                    let dispatcher = ToolDispatcher::new(registry);
+                    let worker = ToolWorker::new(
+                        workspace,
+                        ReadFileLimits::default(),
+                        TerminalLimits::default(),
+                    )
+                    .with_session_search(state_db.clone());
+                    base_supervisor
+                        .with_tool_dispatcher(dispatcher)
+                        .with_tool_worker(worker)
+                }
+                Err(_) => base_supervisor,
+            },
+            Err(_) => base_supervisor,
+        };
+
         // Provider 缺失不破坏第三阶段的只读 RPC 或空会话创建；后续 prompt.submit 会
         // 使用 provider_ready 返回稳定 runtime_unavailable，而不会泄露 resolver 细节。
         let resolved_provider = resolve_openai_provider(&paths, None, None);
@@ -56,27 +86,36 @@ impl RuntimeBootstrap {
             Err(_) => (base_supervisor, "unconfigured".to_owned(), false),
         };
 
-        let read_store = Store::open_readonly(&state_db)
-            .with_context(|| format!("打开 RPC 只读数据库失败：{}", state_db.display()))?;
-        let service = RuntimeService::new(
-            sagent_protocol::SessionService::new(read_store),
+        Ok(Self {
             state_db,
             model,
-            Arc::new(supervisor),
+            supervisor: Arc::new(supervisor),
             provider_ready,
-            sagent_protocol::ConfigReadResult {
+            public_config: sagent_protocol::ConfigReadResult {
                 profile: public_config.profile,
                 provider: public_config.provider,
                 model: public_config.model,
                 provider_names: public_config.provider_names,
                 unknown_fields: public_config.unknown_fields,
             },
-        );
-        Ok(Self { service })
+        })
     }
 
-    /// 交出唯一的 RPC 服务实例给异步 transport。
-    pub fn into_service(self) -> RuntimeService {
-        self.service
+    /// 为一条 transport 连接打开独占的只读 Store 适配层。
+    ///
+    /// `rusqlite::Connection` 不应跨 WebSocket 连接共享；Supervisor 则必须共享，才能让
+    /// 同一 Profile 的重连客户端继续控制既有 Actor。因此每条连接新建读服务、复用同一
+    /// Actor 注册表和启动期配置快照。
+    pub fn open_service(&self) -> Result<RuntimeService> {
+        let read_store = Store::open_readonly(&self.state_db)
+            .with_context(|| format!("打开 RPC 只读数据库失败：{}", self.state_db.display()))?;
+        Ok(RuntimeService::new(
+            sagent_protocol::SessionService::new(read_store),
+            self.state_db.clone(),
+            self.model.clone(),
+            Arc::clone(&self.supervisor),
+            self.provider_ready,
+            self.public_config.clone(),
+        ))
     }
 }

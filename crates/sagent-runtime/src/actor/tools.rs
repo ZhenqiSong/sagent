@@ -147,15 +147,25 @@ impl SessionActor {
         turn_id: TurnId,
         plan: &crate::ToolDispatchPlan,
     ) -> Result<(), RuntimeError> {
+        let mut payload = serde_json::json!({
+            "provider_call_id": plan.call.call_id,
+            "tool_name": plan.call.name,
+        });
+        if plan.call.name == "write_file" {
+            // 审计需要能回答“哪个文件、是否请求覆盖、写入多少字节”，但 file content
+            // 属于模型输入/用户数据，绝不能复制到 daemon event 或恢复日志。
+            payload["write_file"] = serde_json::json!({
+                "path": plan.call.arguments.get("path").and_then(serde_json::Value::as_str),
+                "overwrite": plan.call.arguments.get("overwrite").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                "content_bytes": plan.call.arguments.get("content").and_then(serde_json::Value::as_str).map(str::len),
+            });
+        }
         self.store
             .append_event(&NewDaemonEvent {
                 session_id: self.session_id.clone(),
                 turn_id: Some(turn_id),
                 event_type: EVENT_TOOL_STARTED.to_owned(),
-                payload: serde_json::json!({
-                    "provider_call_id": plan.call.call_id,
-                    "tool_name": plan.call.name,
-                }),
+                payload,
                 created_at: (self.clock)(),
             })
             .map(|_| ())

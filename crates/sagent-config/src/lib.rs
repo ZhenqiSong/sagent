@@ -14,5 +14,5 @@ pub use profile::{
 };
 pub use provider::{
     ProviderConfig, PublicConfig, ResolvedProvider, ResolvedProviderConfig, read_public_config,
-    resolve_openai_provider, resolve_provider_config,
+    resolve_openai_provider, resolve_provider_config, resolve_workspace,
 };

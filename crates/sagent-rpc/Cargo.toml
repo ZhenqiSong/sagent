@@ -14,13 +14,16 @@ anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread", "sync"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
 sagent-config = { path = "../sagent-config" }
 sagent-agent = { path = "../sagent-agent" }
 sagent-provider = { path = "../sagent-provider" }
 sagent-protocol = { path = "../sagent-protocol" }
 sagent-runtime = { path = "../sagent-runtime" }
+sagent-tools = { path = "../sagent-tools" }
 sagent-store = { path = "../sagent-store" }
 sagent-types = { path = "../sagent-types" }
 uuid.workspace = true

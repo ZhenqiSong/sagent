@@ -13,8 +13,10 @@ mod read_file;
 mod registry;
 mod result;
 mod schema;
+mod session_search;
 mod terminal;
 mod workspace;
+mod write_file;
 
 pub use approval_policy::{ApprovalPolicyDecision, classify_tool};
 pub use command_policy::{CommandRisk, classify_command};
@@ -24,8 +26,10 @@ pub use process::{
     BoundedOutput, ProcessSupervisor, ProcessTreeGuard, TerminationReason, sanitize_environment,
 };
 pub use read_file::{ReadFileLimits, ReadFileRequest, ReadFileService};
-pub use registry::ToolRegistry;
+pub use registry::{ToolRegistry, builtin_registry};
 pub use result::{TRUNCATION_MARKER, ToolResult};
 pub use schema::{canonical_json, canonical_tool_schema, tool_schema_hash};
+pub use session_search::{SessionSearchLimits, SessionSearchRequest, SessionSearchService};
 pub use terminal::{TerminalExecutor, TerminalLimits, TerminalRequest};
 pub use workspace::{WorkspaceError, WorkspaceRoot};
+pub use write_file::{WriteFileLimits, WriteFileRequest, WriteFileService};

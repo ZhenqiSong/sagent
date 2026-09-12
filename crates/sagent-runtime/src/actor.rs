@@ -356,14 +356,18 @@ impl SessionActor {
         let worker = worker.map(|worker| {
             let sender = self.command_tx.clone();
             tokio::spawn(async move {
-                let result = worker
-                    .await
-                    .map_err(|error| crate::input::WorkerFailure(error.to_string()));
-                // 退出事实不能因为 mailbox 暂时拥塞而丢失；stop_worker 会在
-                // Actor 已经决定终态时主动 abort 这个监控任务，避免等待发送造成死锁。
-                let _ = sender
-                    .send(ActorInput::WorkerExited { turn_id, result })
-                    .await;
+                // 正常 Provider 结果已经通过同一个 worker task 先投递为 WorkerEvent；
+                // 监控 task 使用另一 sender 时无法保证跨 sender 顺序，若把 Ok 退出也
+                // 投递会与 ToolCalls/FinalText 竞争并提前失败 Turn。只有 JoinError
+                //（例如 worker panic）才需要补一条失败事实。
+                if let Err(error) = worker.await {
+                    let _ = sender
+                        .send(ActorInput::WorkerExited {
+                            turn_id,
+                            result: Err(crate::input::WorkerFailure(error.to_string())),
+                        })
+                        .await;
+                }
             })
         });
         self.active = Some(ActiveTurn {
@@ -371,7 +375,6 @@ impl SessionActor {
             request_id,
             generation: self.generation,
             tool_rounds: 0,
-            provider_exit_credits: 0,
             system,
             state: TurnState::Prompting,
             cancellation,
@@ -526,12 +529,16 @@ impl SessionActor {
         let worker_abort = worker.abort_handle();
         let sender = self.command_tx.clone();
         let monitor = tokio::spawn(async move {
-            let result = worker
-                .await
-                .map_err(|error| crate::input::WorkerFailure(error.to_string()));
-            let _ = sender
-                .send(ActorInput::WorkerExited { turn_id, result })
-                .await;
+            // 正常的 ToolCalls/FinalText 已先由 Provider worker 发出；这里只处理
+            // JoinError，避免独立 monitor sender 把正常退出排到业务事件之前。
+            if let Err(error) = worker.await {
+                let _ = sender
+                    .send(ActorInput::WorkerExited {
+                        turn_id,
+                        result: Err(crate::input::WorkerFailure(error.to_string())),
+                    })
+                    .await;
+            }
         });
         let active = self
             .active

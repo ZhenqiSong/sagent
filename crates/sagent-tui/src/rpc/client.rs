@@ -82,6 +82,8 @@ pub struct RpcClient {
     writer_task: JoinHandle<()>,
     stderr_task: JoinHandle<()>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    /// Windows 管道在子进程退出后可能稍晚才产生 EOF；轮询 Child 状态可提前触发重连。
+    child_exit_reported: bool,
 }
 
 impl RpcClient {
@@ -131,6 +133,7 @@ impl RpcClient {
             writer_task,
             stderr_task,
             stderr_tail,
+            child_exit_reported: false,
         })
     }
 
@@ -283,6 +286,14 @@ impl RpcClient {
 
     /// 非阻塞提取一条服务端 event；终端 tick 使用它避免 RPC reader 与键盘循环竞争 stdout。
     pub fn try_next_event(&mut self) -> Option<ClientPoll> {
+        if !self.child_exit_reported
+            && let Ok(Some(status)) = self.child.try_wait()
+        {
+            self.child_exit_reported = true;
+            return Some(ClientPoll::Disconnected(format!(
+                "RPC 子进程已退出：{status}"
+            )));
+        }
         match self.incoming_rx.try_recv() {
             Ok(Incoming::Event(event)) => Some(ClientPoll::Event(event)),
             Ok(Incoming::Disconnected(message)) => Some(ClientPoll::Disconnected(message)),

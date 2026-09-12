@@ -194,6 +194,9 @@ impl ReadFileService {
             WorkspaceError::EmptyPath => ("invalid_path", "文件路径不能为空"),
             WorkspaceError::PathDenied => ("path_denied", "文件路径不在 workspace root 内"),
             WorkspaceError::PathNotFound => ("not_found", "文件不存在"),
+            // read_file 不会解析新目标；保留该映射使 WorkspaceError 的公共错误集合扩展
+            // 后仍不会把内部路径语义泄露给模型。
+            WorkspaceError::ParentNotFound => ("not_found", "文件不存在"),
             WorkspaceError::NotRegularFile | WorkspaceError::NotDirectory => {
                 ("not_file", "目标不是普通文件")
             }

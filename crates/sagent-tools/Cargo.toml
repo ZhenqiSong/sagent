@@ -6,7 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 sagent-types = { path = "../sagent-types" }
+sagent-store = { path = "../sagent-store" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

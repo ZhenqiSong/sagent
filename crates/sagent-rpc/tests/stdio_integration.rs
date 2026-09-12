@@ -20,6 +20,38 @@ fn remove(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
 
+/// 返回当前宿主 shell 的审批 fixture；命令只操作临时 workspace 内的 fixture 路径。
+#[cfg(windows)]
+fn approval_command() -> &'static str {
+    "del /s /q __sagent_missing_fixture__.txt & echo approved > approval-marker.txt"
+}
+
+/// macOS/Linux 使用 POSIX shell 语法，避免 RPC 黑盒依赖 Windows 命令解释器。
+#[cfg(not(windows))]
+fn approval_command() -> &'static str {
+    "rm -rf __sagent_missing_fixture__.txt && printf approved > approval-marker.txt"
+}
+
+/// 生成平台无关的 tool-call SSE 字节脚本，保持 OpenAI-compatible 字段形状稳定。
+fn terminal_tool_call_sse() -> String {
+    let arguments = json!({"command": approval_command()}).to_string();
+    let call = json!({
+        "id": "tool",
+        "choices": [{
+            "delta": {"tool_calls": [{
+                "index": 0,
+                "id": "call-terminal",
+                "function": {"name": "terminal", "arguments": arguments}
+            }]}
+        }]
+    });
+    let finish = json!({
+        "id": "tool",
+        "choices": [{"finish_reason": "tool_calls"}]
+    });
+    format!("data: {call}\n\ndata: {finish}\n\ndata: [DONE]\n\n")
+}
+
 fn create_fixture(home: &Path) -> PathBuf {
     fs::create_dir_all(home).expect("应能创建临时 home");
     let database = home.join("state.db");
@@ -150,6 +182,118 @@ fn output_frames(output: &[u8]) -> Vec<Value> {
         .lines()
         .map(|line| serde_json::from_str(line).expect("stdout 每一行必须是 JSON"))
         .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stdio_real_runtime_reaches_terminal_approval_and_second_provider_round() {
+    // Arrange：这是不经过 TUI 的最小真实 RPC 黑盒，专门把 approval.requested 与
+    // approval.respond 的协议帧暴露出来，定位工具回环是否在 transport 之前卡住。
+    let home = test_home("tool-approval-blackbox");
+    remove(&home);
+    fs::create_dir_all(home.join("workspace")).expect("应能创建 workspace");
+    let first = terminal_tool_call_sse();
+    let second = include_str!("../../sagent-provider/tests/fixtures/provider/normal_text.sse");
+    let server = MockSseServer::spawn_sequence(vec![
+        vec![MockSseChunk::text(first)],
+        vec![MockSseChunk::text(second)],
+    ])
+    .await
+    .expect("应能启动 approval SSE server");
+    fs::write(
+        home.join("config.yaml"),
+        format!(
+            "provider: openai-compatible\nmodel: approval-fixture\nbase_url: {}\napi_key_env: SAGE_APPROVAL_KEY\nworkspace: workspace\n",
+            server.url()
+        ),
+    )
+    .expect("应能写入 approval provider 配置");
+    fs::write(home.join(".env"), "SAGE_APPROVAL_KEY=fixture-key\n").expect("应能写入 fixture 凭据");
+    let session_id = SessionId::new("approval-blackbox-session");
+    let mut store = Store::open_readwrite(&home.join("state.db")).expect("应能创建状态库");
+    store
+        .create_session(&NewSession {
+            id: session_id.clone(),
+            source: Some("rpc-test".into()),
+            model: Some("approval-fixture".into()),
+            title: None,
+            started_at: "2026-09-12T00:00:00Z".into(),
+        })
+        .expect("应能创建 approval session");
+    drop(store);
+
+    // Act：先读到审批事件，再通过同一连接发送 Once，最后等待完成事件。
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sagent-rpc"))
+        .args(["--home", home.to_str().expect("临时路径必须是 UTF-8")])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("应能启动 sagent-rpc");
+    let mut stdin = child.stdin.take().expect("应有 stdin");
+    let hello_submit = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"client.hello\",\"params\":{\"protocol_version\":1,\"client_id\":\"550e8400-e29b-41d4-a716-446655440000\",\"surface\":\"tui\",\"capabilities\":{\"interactive_approval\":true,\"supports_stream_edits\":false}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"prompt.submit\",\"params\":{\"session_id\":\"approval-blackbox-session\",\"text\":\"run\"}}\n"
+    );
+    stdin
+        .write_all(hello_submit.as_bytes())
+        .expect("应能发送 hello/submit");
+    stdin.flush().expect("应能刷新 hello/submit");
+    let stdout = child.stdout.take().expect("应有 stdout");
+    let mut stdout = BufReader::new(stdout);
+    let mut approval = None;
+    let mut approval_frame = Value::Null;
+    let mut saw_response = false;
+    let mut line = String::new();
+    while approval.is_none() {
+        line.clear();
+        assert_ne!(
+            stdout.read_line(&mut line).expect("应能读取审批前帧"),
+            0,
+            "审批事件前 stdout 不应 EOF"
+        );
+        let frame: Value = serde_json::from_str(line.trim()).expect("每帧必须是 JSON");
+        saw_response |= frame["id"] == json!(2);
+        if frame["params"]["type"] == "approval.requested" {
+            approval_frame = frame.clone();
+            approval = frame["params"]["payload"]["data"]["approval_id"]
+                .as_str()
+                .map(str::to_owned);
+        }
+    }
+    assert!(saw_response, "submit response 必须早于 approval.requested");
+    let approval_id = approval.expect("approval.requested 必须包含 approval_id");
+    let turn_id = approval_frame["params"]["payload"]["turn_id"]
+        .as_str()
+        .expect("approval event 必须包含 turn_id");
+    let approval_request = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"approval.respond\",\"params\":{{\"session_id\":\"approval-blackbox-session\",\"turn_id\":\"{}\",\"approval_id\":\"{}\",\"decision\":\"once\"}}}}\n",
+        turn_id, approval_id
+    );
+    stdin
+        .write_all(approval_request.as_bytes())
+        .expect("应能发送 approval.respond");
+    stdin.flush().expect("应能刷新 approval.respond");
+
+    let mut completed = false;
+    while !completed {
+        line.clear();
+        assert_ne!(
+            stdout.read_line(&mut line).expect("应能读取终态帧"),
+            0,
+            "approval.respond 后 stdout 不应 EOF"
+        );
+        let frame: Value = serde_json::from_str(line.trim()).expect("每帧必须是 JSON");
+        completed = frame["params"]["type"] == "turn.completed";
+    }
+    drop(stdin);
+    let output = child.wait_with_output().expect("应能等待 RPC 退出");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.wait().await.expect("两轮 SSE 都应完成");
+    remove(&home);
 }
 
 #[test]

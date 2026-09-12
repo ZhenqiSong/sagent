@@ -2,13 +2,18 @@
   "matrix_version": 1,
   "policy": "All rows use local fixtures or temporary resources; no row requires a live credential.",
   "rows": [
-    {"fault": "provider EOF", "coverage": "crates/sagent-provider/tests/sse_parser.rs", "status": "covered"},
-    {"fault": "provider 429 and 5xx", "coverage": "crates/sagent-provider/tests/mock_provider.rs", "status": "covered"},
+    {"fault": "provider EOF", "coverage": "crates/sagent-runtime/tests/fault_matrix.rs + crates/sagent-provider/tests/sse_parser.rs", "status": "covered"},
+    {"fault": "provider 429 and 5xx", "coverage": "crates/sagent-provider/tests/openai_adapter.rs", "status": "covered"},
+    {"fault": "slow first token", "coverage": "crates/sagent-runtime/tests/fault_matrix.rs + crates/sagent-provider/tests/fixtures/provider/slow_first_token.sse", "status": "covered"},
+    {"fault": "repeated model delta", "coverage": "crates/sagent-runtime/tests/fault_matrix.rs", "status": "covered"},
+    {"fault": "split tool-call arguments", "coverage": "crates/sagent-provider/tests/openai_adapter.rs + crates/sagent-provider/tests/fixtures/provider/tool_call_split.sse", "status": "covered"},
+    {"fault": "tool-call followed by EOF", "coverage": "crates/sagent-runtime/tests/fault_matrix.rs + crates/sagent-provider/tests/fixtures/provider/tool_call_eof.sse", "status": "covered"},
     {"fault": "SQLite corrupt or busy", "coverage": "crates/sagent-store/src/schema.rs", "status": "covered"},
     {"fault": "RPC EOF or oversized frame", "coverage": "crates/sagent-rpc/tests/stdio_integration.rs", "status": "covered"},
+    {"fault": "terminal timeout", "coverage": "crates/sagent-runtime/tests/fault_matrix.rs + crates/sagent-tools/tests/terminal.rs", "status": "covered"},
     {"fault": "terminal spawn failure", "coverage": "crates/sagent-tools/tests/terminal.rs", "status": "covered"},
+    {"fault": "approval timeout", "coverage": "crates/sagent-runtime/tests/tool_actor.rs", "status": "covered"},
     {"fault": "late tool/provider result after cancellation", "coverage": "crates/sagent-runtime/tests/tool_actor.rs", "status": "covered"},
-    {"fault": "slow first token", "coverage": "local Mock SSE fixture", "status": "planned"},
-    {"fault": "approval timeout end-to-end RPC", "coverage": "local Mock SSE fixture", "status": "planned"}
+    {"fault": "cancel race does not create assistant final", "coverage": "crates/sagent-runtime/tests/provider_actor.rs + crates/sagent-runtime/src/actor/tests.rs", "status": "covered"}
   ]
 }

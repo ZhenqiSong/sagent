@@ -156,7 +156,7 @@ impl MockSseChunk {
     }
 }
 
-/// 只服务一个连接的本地 HTTP/SSE 测试服务器。
+/// 只绑定 loopback、按固定脚本服务请求的本地 HTTP/SSE 测试服务器。
 pub struct MockSseServer {
     address: SocketAddr,
     task: JoinHandle<Result<(), String>>,
@@ -166,6 +166,37 @@ impl MockSseServer {
     /// 启动 200 text/event-stream 响应。
     pub async fn spawn(chunks: Vec<MockSseChunk>) -> io::Result<Self> {
         Self::spawn_response(200, "OK", "text/event-stream", chunks).await
+    }
+
+    /// 启动一个按请求顺序返回多段 SSE 的本地服务器。
+    ///
+    /// Provider 的工具回环会为同一个 Turn 发起多次 HTTP 请求；单连接 fixture 无法
+    /// 覆盖“工具结果回到第二轮模型”的真实链路。该 helper 仍只绑定 loopback，且每个
+    /// 响应使用独立的固定字节脚本，测试不会访问外部网络或依赖真实凭据。
+    pub async fn spawn_sequence(responses: Vec<Vec<MockSseChunk>>) -> io::Result<Self> {
+        if responses.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "mock SSE sequence must contain at least one response",
+            ));
+        }
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let address = listener.local_addr()?;
+        let task = tokio::spawn(async move {
+            for chunks in responses {
+                let (mut stream, _) = listener
+                    .accept()
+                    .await
+                    .map_err(|error| format!("accept failed: {error}"))?;
+                read_request(&mut stream)
+                    .await
+                    .map_err(|error| format!("read request failed: {error}"))?;
+                write_response(&mut stream, 200, "OK", "text/event-stream", chunks).await?;
+            }
+            Ok(())
+        });
+
+        Ok(Self { address, task })
     }
 
     /// 启动指定状态码的 JSON 错误响应。
@@ -201,30 +232,7 @@ impl MockSseServer {
             read_request(&mut stream)
                 .await
                 .map_err(|error| format!("read request failed: {error}"))?;
-
-            let content_length: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
-            let headers = format!(
-                "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
-            );
-            stream
-                .write_all(headers.as_bytes())
-                .await
-                .map_err(|error| format!("write headers failed: {error}"))?;
-
-            for chunk in chunks {
-                if let Some(delay) = chunk.delay_before {
-                    sleep(delay).await;
-                }
-                stream
-                    .write_all(&chunk.bytes)
-                    .await
-                    .map_err(|error| format!("write body failed: {error}"))?;
-                stream
-                    .flush()
-                    .await
-                    .map_err(|error| format!("flush body failed: {error}"))?;
-            }
-            Ok(())
+            write_response(&mut stream, status, &reason, &content_type, chunks).await
         });
 
         Ok(Self { address, task })
@@ -243,6 +251,39 @@ impl MockSseServer {
     }
 }
 
+/// 写入一份完整 HTTP 响应；响应头先声明固定长度，便于客户端区分 EOF 与截断 body。
+async fn write_response(
+    stream: &mut TcpStream,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    chunks: Vec<MockSseChunk>,
+) -> Result<(), String> {
+    let content_length: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+    let headers = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+    );
+    stream
+        .write_all(headers.as_bytes())
+        .await
+        .map_err(|error| format!("write headers failed: {error}"))?;
+
+    for chunk in chunks {
+        if let Some(delay) = chunk.delay_before {
+            sleep(delay).await;
+        }
+        stream
+            .write_all(&chunk.bytes)
+            .await
+            .map_err(|error| format!("write body failed: {error}"))?;
+        stream
+            .flush()
+            .await
+            .map_err(|error| format!("flush body failed: {error}"))?;
+    }
+    Ok(())
+}
+
 async fn read_request(stream: &mut TcpStream) -> io::Result<()> {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 512];
@@ -256,6 +297,39 @@ async fn read_request(stream: &mut TcpStream) -> io::Result<()> {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "HTTP request headers too large",
+            ));
+        }
+    }
+    // 必须把 POST body 一并消费后再关闭连接；Windows 在仍有未读入站 body 时可能以
+    // RST 结束 socket，reqwest 会把本来完整的 SSE 响应误报成“网络错误”。
+    let header_end = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("循环结束时请求头应完整")
+        + 4;
+    let header_text = String::from_utf8_lossy(&request[..header_end]);
+    let content_length = header_text
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    while request.len().saturating_sub(header_end) < content_length {
+        let count = stream.read(&mut buffer).await?;
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "request body truncated",
+            ));
+        }
+        request.extend_from_slice(&buffer[..count]);
+        if request.len() > 64 * 1024 + content_length {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "HTTP request body too large",
             ));
         }
     }

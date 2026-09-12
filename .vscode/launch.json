@@ -17,6 +17,7 @@
       ],
       "cwd": "${workspaceFolder}",
       "terminal": "integrated",
+      "expressions": "native",
       "env": { "RUST_BACKTRACE": "1" }
     },
     {
@@ -29,6 +30,7 @@
       "args": ["--home", "D:\\sagent-smoke"],
       "cwd": "${workspaceFolder}",
       "terminal": "integrated",
+      "expressions": "native",
       "env": { "RUST_BACKTRACE": "1" }
     },
     {
@@ -37,7 +39,8 @@
       "request": "attach",
       "program": "${workspaceFolder}\\target\\debug\\sagent-rpc.exe",
       "pid": "${command:pickMyProcess}",
-      "stopOnEntry": false
+      "stopOnEntry": false,
+      "expressions": "native"
     },
     {
       "name": "调试 sagent-tui 测试",
@@ -48,6 +51,7 @@
       },
       "args": ["--nocapture", "--test-threads=1"],
       "cwd": "${workspaceFolder}",
+      "expressions": "native",
       "env": { "RUST_BACKTRACE": "1" }
     },
     {
@@ -59,7 +63,32 @@
       },
       "args": ["--nocapture", "--test-threads=1"],
       "cwd": "${workspaceFolder}",
+      "expressions": "native",
       "env": { "RUST_BACKTRACE": "1" }
+    },
+    {
+      "name": "调试 TUI（MSVC PDB）",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "preLaunchTask": "构建 TUI 与 RPC（MSVC）",
+      "program": "${workspaceFolder}\\target\\debug\\sagent-tui.exe",
+      "args": [
+        "--home",
+        "D:\\sagent-smoke",
+        "--rpc-bin",
+        "${workspaceFolder}\\target\\debug\\sagent-rpc.exe"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "environment": [
+        { "name": "RUST_BACKTRACE", "value": "1" }
+      ]
+    },
+    {
+      "name": "附加到 TUI 创建的 sagent-rpc（MSVC PDB）",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
     }
   ]
 }

@@ -25,6 +25,13 @@ pub enum ApprovalPolicyDecision {
 pub fn classify_tool(tool_name: &str, arguments: &Value) -> ApprovalPolicyDecision {
     match tool_name {
         "read_file" => ApprovalPolicyDecision::Allow,
+        "session_search" => ApprovalPolicyDecision::Allow,
+        // 文件写入没有像 terminal 那样可由命令文本细分的风险等级；所有写入均须由
+        // Runtime 创建审批记录，避免模型通过 overwrite 静默改变已有工作区内容。
+        "write_file" => ApprovalPolicyDecision::RequireApproval {
+            policy_key: "write_file:workspace".into(),
+            summary: "该 write_file 操作需要用户审批".into(),
+        },
         "terminal" => {
             let Some(command) = arguments.get("command").and_then(Value::as_str) else {
                 return ApprovalPolicyDecision::Deny {
@@ -67,6 +74,15 @@ mod tests {
         assert!(matches!(
             classify_tool("terminal", &json!({"command": "rm -rf build"})),
             ApprovalPolicyDecision::RequireApproval { .. }
+        ));
+    }
+
+    #[test]
+    fn write_file_always_requires_explicit_approval() {
+        assert!(matches!(
+            classify_tool("write_file", &json!({"path": "note.txt", "content": "secret"})),
+            ApprovalPolicyDecision::RequireApproval { ref policy_key, .. }
+                if policy_key == "write_file:workspace"
         ));
     }
 

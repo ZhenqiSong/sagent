@@ -3,7 +3,11 @@
 //! 非秘密字段来自当前 Profile 的 `config.yaml`，API key 只从当前 Profile 的 `.env`
 //! 或进程环境读取。解析器不写数据库，也不把密钥放进可序列化配置结构。
 
-use std::{collections::BTreeMap, env, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use sagent_provider::OpenAiCompatibleProvider;
@@ -25,6 +29,11 @@ pub struct ProviderConfig {
     /// 与 Python `providers:` 配置保持兼容：每个 key 描述一个自定义 OpenAI endpoint。
     #[serde(default)]
     pub providers: BTreeMap<String, UserProviderConfig>,
+    /// 工具可访问的 workspace 根；相对路径锚定当前 Profile，而不是进程当前目录。
+    ///
+    /// 该字段放在 Profile 配置中，使 RPC bootstrap 能在启动时固定工具边界；请求参数
+    /// 不能覆盖它，因而重连或恶意客户端都不会把工具移到另一个目录。
+    pub workspace: Option<PathBuf>,
 }
 
 /// 可经 RPC 返回的非秘密配置摘要。
@@ -177,7 +186,13 @@ pub fn read_public_config(paths: &SagentPaths) -> Result<PublicConfig> {
             for key in mapping.keys().filter_map(serde_yaml::Value::as_str) {
                 if !matches!(
                     key,
-                    "provider" | "model" | "base_url" | "api_key_env" | "key_env" | "providers"
+                    "provider"
+                        | "model"
+                        | "base_url"
+                        | "api_key_env"
+                        | "key_env"
+                        | "providers"
+                        | "workspace"
                 ) {
                     unknown_fields.push(key.to_owned());
                 }
@@ -196,6 +211,30 @@ pub fn read_public_config(paths: &SagentPaths) -> Result<PublicConfig> {
         provider_names: config.providers.into_keys().collect(),
         unknown_fields,
     })
+}
+
+/// 解析当前 Profile 的 workspace 根目录。
+///
+/// 未配置时使用 Profile 下的 `workspace` 子目录；该默认值只依赖固定 Profile 路径，
+/// 不读取当前工作目录。目录必须预先存在，避免 daemon 在用户没有明确授权时创建或
+/// 访问任意路径；workspace 不可用时由 RPC bootstrap 关闭相关工具。
+pub fn resolve_workspace(paths: &SagentPaths) -> Result<PathBuf> {
+    let config = read_provider_config(paths)?;
+    let configured = config
+        .workspace
+        .unwrap_or_else(|| PathBuf::from("workspace"));
+    let candidate = if configured.is_absolute() {
+        configured
+    } else {
+        paths.sagent_home.join(configured)
+    };
+    let metadata = fs::metadata(&candidate)
+        .with_context(|| format!("workspace 不可用：{}", candidate.display()))?;
+    if !metadata.is_dir() {
+        bail!("workspace 不是目录：{}", candidate.display());
+    }
+    fs::canonicalize(&candidate)
+        .with_context(|| format!("无法规范化 workspace：{}", candidate.display()))
 }
 
 /// 只解析当前 Profile 的 `.env`，并让文件值优先于同名进程环境变量。
@@ -355,7 +394,9 @@ pub fn resolve_openai_provider(
 
 #[cfg(test)]
 mod tests {
-    use super::{read_public_config, resolve_openai_provider, resolve_provider_config};
+    use super::{
+        read_public_config, resolve_openai_provider, resolve_provider_config, resolve_workspace,
+    };
     use crate::{normalize_profile_name, resolve_paths};
     use std::{fs, path::PathBuf};
 
@@ -497,6 +538,32 @@ mod tests {
         assert_eq!(result.base_url, "http://127.0.0.1:1/v1");
         assert_eq!(result.api_key, "local-key");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_is_profile_anchored_and_not_reported_as_unknown() {
+        let root = test_root("workspace");
+        let workspace = root.join("project");
+        fs::create_dir_all(&workspace).expect("应能创建 workspace fixture");
+        fs::write(
+            root.join("config.yaml"),
+            "workspace: project\nprovider: openai-compatible\n",
+        )
+        .expect("应能写入 workspace 配置");
+        let paths = crate::resolve_paths(Some(&root), None).expect("应能解析 Profile 路径");
+
+        assert_eq!(
+            resolve_workspace(&paths).expect("相对 workspace 应锚定 Profile"),
+            fs::canonicalize(workspace).expect("fixture workspace 应可 canonicalize")
+        );
+        assert!(
+            read_public_config(&paths)
+                .expect("公开配置应可读取")
+                .unknown_fields
+                .is_empty(),
+            "workspace 是已知配置字段，不应误报 unknown"
+        );
+        fs::remove_dir_all(root).expect("应能清理 workspace fixture");
     }
 
     #[test]

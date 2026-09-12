@@ -15,11 +15,11 @@ use sagent_provider::{
     ProviderRequest, ProviderRole, StopReason,
 };
 use sagent_runtime::{RuntimeEventKind, SessionSupervisor, ToolDispatcher, ToolWorker};
-use sagent_store::{MessageQuery, NewSession, Store};
+use sagent_store::{EventQuery, MessageQuery, NewSession, Store};
 use sagent_tools::{
     ReadFileLimits, TerminalLimits, ToolDefinition, ToolPermission, ToolRegistry, WorkspaceRoot,
 };
-use sagent_types::SessionId;
+use sagent_types::{EventSequence, SessionId};
 use tokio_util::sync::CancellationToken;
 
 fn test_path(name: &str) -> PathBuf {
@@ -53,6 +53,27 @@ fn tool_registry() -> ToolRegistry {
                 ToolPermission::ReadOnly,
                 30_000,
                 32_768,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    registry
+        .register(
+            ToolDefinition::new(
+                "write_file",
+                "在工作区内原子写入文本文件",
+                serde_json::json!({
+                    "type": "object",
+                    "required": ["path", "content"],
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                        "overwrite": {"type": "boolean"}
+                    }
+                }),
+                ToolPermission::ApprovalRequired,
+                30_000,
+                4_096,
             )
             .unwrap(),
         )
@@ -149,6 +170,57 @@ struct ApprovalProvider {
 /// 请求一个会持续一段时间的安全 terminal 命令，用来验证 Turn interrupt 会取消
 /// ToolWorker，而迟到的结果不会写入 Store。
 struct LongTerminalProvider;
+
+/// 发起一次带敏感内容的写入调用，验证审批与审计只记录可恢复元数据而不复制内容。
+struct WriteFileProvider {
+    calls: AtomicUsize,
+}
+
+#[async_trait]
+impl ModelProvider for WriteFileProvider {
+    async fn stream(
+        &self,
+        _request: ProviderRequest,
+        sink: &mut dyn ProviderEventSink,
+        _cancellation: CancellationToken,
+    ) -> Result<ProviderFinish, ProviderError> {
+        match self.calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                sink.emit(ProviderEvent::ToolCallDelta {
+                    call_id: "call_write_audit".into(),
+                    name: Some("write_file".into()),
+                    arguments_delta: r#"{"path":"audit.txt","content":"不得进入审计事件"}"#.into(),
+                })
+                .await?;
+                sink.emit(ProviderEvent::Finished {
+                    reason: StopReason::ToolCalls,
+                })
+                .await?;
+                Ok(ProviderFinish {
+                    reason: StopReason::ToolCalls,
+                    usage: None,
+                    provider_request_id: None,
+                })
+            }
+            1 => {
+                sink.emit(ProviderEvent::TextDelta {
+                    text: "写入已完成".into(),
+                })
+                .await?;
+                sink.emit(ProviderEvent::Finished {
+                    reason: StopReason::Stop,
+                })
+                .await?;
+                Ok(ProviderFinish {
+                    reason: StopReason::Stop,
+                    usage: None,
+                    provider_request_id: None,
+                })
+            }
+            _ => Err(ProviderError::Protocol("write_file 不应启动第三轮".into())),
+        }
+    }
+}
 
 #[async_trait]
 impl ModelProvider for LongTerminalProvider {
@@ -639,6 +711,96 @@ async fn approval_denial_persists_a_tool_error_without_starting_terminal() {
         Some("call_terminal_approval")
     );
 
+    let _ = fs::remove_file(db_path);
+    let _ = fs::remove_dir_all(workspace_path);
+}
+
+#[tokio::test]
+async fn write_file_requires_approval_and_audit_event_excludes_content() {
+    let db_path = test_path("write-file-audit");
+    let _ = fs::remove_file(&db_path);
+    let workspace_path = std::env::temp_dir().join(format!(
+        "sagent-runtime-write-file-audit-workspace-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&workspace_path);
+    fs::create_dir_all(&workspace_path).expect("应能创建 workspace");
+    let session_id = SessionId::new("write-file-audit-session");
+    create_session(&db_path, &session_id);
+    let factory_path = db_path.clone();
+    let provider = Arc::new(WriteFileProvider {
+        calls: AtomicUsize::new(0),
+    });
+    let worker = ToolWorker::new(
+        WorkspaceRoot::new(&workspace_path).expect("workspace 应有效"),
+        ReadFileLimits::default(),
+        TerminalLimits::default(),
+    );
+    let supervisor = SessionSupervisor::new(move || {
+        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+    })
+    .with_provider(provider.clone(), "mock", "profile-v1")
+    .with_tool_dispatcher(ToolDispatcher::new(tool_registry()))
+    .with_tool_worker(worker);
+    let handle = supervisor
+        .get_or_start(session_id.clone())
+        .await
+        .expect("应能启动 actor");
+    let mut events = handle.subscribe();
+    handle
+        .submit(RequestId::new(), UserInput::new("写入审计文件").unwrap())
+        .await
+        .expect("提交应成功");
+
+    let approval_id = loop {
+        match events.recv().await.expect("事件通道应可用").kind {
+            RuntimeEventKind::ApprovalRequested {
+                approval_id,
+                ref tool_name,
+                ..
+            } => {
+                assert_eq!(tool_name, "write_file");
+                break approval_id;
+            }
+            RuntimeEventKind::ToolStarted { .. } => panic!("审批前不得启动 write_file"),
+            _ => {}
+        }
+    };
+    handle
+        .resolve_approval(approval_id, ApprovalDecision::Once)
+        .await
+        .expect("审批应被接受");
+    loop {
+        if matches!(
+            events.recv().await.expect("事件通道应可用").kind,
+            RuntimeEventKind::TurnCompleted
+        ) {
+            break;
+        }
+    }
+    assert_eq!(
+        fs::read_to_string(workspace_path.join("audit.txt")).unwrap(),
+        "不得进入审计事件"
+    );
+
+    let store = Store::open_readonly(&db_path).expect("应能读取数据库");
+    let audit = store
+        .events_since(&EventQuery {
+            session_id: session_id.clone(),
+            after_sequence: EventSequence::default(),
+            limit: 100,
+        })
+        .expect("应能读取审计事件");
+    let started = audit
+        .iter()
+        .find(|event| event.event_type == "tool.started")
+        .expect("应有工具启动审计");
+    assert_eq!(started.payload["write_file"]["path"], "audit.txt");
+    assert_eq!(
+        started.payload["write_file"]["content_bytes"],
+        "不得进入审计事件".len()
+    );
+    assert!(!started.payload.to_string().contains("不得进入审计事件"));
     let _ = fs::remove_file(db_path);
     let _ = fs::remove_dir_all(workspace_path);
 }

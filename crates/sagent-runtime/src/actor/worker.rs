@@ -120,7 +120,6 @@ impl SessionActor {
                 if let Some(active) = self.active.as_mut() {
                     active.state = TurnState::RunningTool;
                     active.tool_rounds += 1;
-                    active.provider_exit_credits += 1;
                     active.pending_tool_batch = Some(PendingToolBatch::new(plans.clone()));
                 }
                 for plan in &plans {
@@ -191,15 +190,6 @@ impl SessionActor {
         result: Result<(), crate::input::WorkerFailure>,
     ) {
         if !self.is_active_turn(turn_id) || self.is_cancelled(turn_id) {
-            return;
-        }
-        if result.is_ok()
-            && let Some(active) = self.active.as_mut()
-            && active.provider_exit_credits > 0
-        {
-            // Provider 已经把控制权交给 ToolWorker；该退出即使晚于下一轮
-            // Provider 启动，也只能消费自己的 credit，不能终止新一轮。
-            active.provider_exit_credits -= 1;
             return;
         }
         if let Err(error) = result {

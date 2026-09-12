@@ -186,6 +186,15 @@ cargo run -p sagent-rpc -- --home "$HOME/.sagent" --profile default
 
 RPC 使用 stdin/stdout 传输逐行 JSON（NDJSON）；诊断信息写入 stderr，避免污染协议流。正常使用时通常由 `sagent-tui` 自动启动，不需要手动运行。
 
+如需给本机调试客户端提供 WebSocket，可显式指定 loopback 地址：
+
+```bash
+cargo run -p sagent-rpc -- --home "$HOME/.sagent" --websocket-addr 127.0.0.1:8765
+```
+
+WebSocket 与 stdio 使用相同的 JSON-RPC 信封、`client.hello` capability 协商和事件顺序；
+每条连接独立保存协商状态。监听器拒绝非 loopback 地址，因为当前阶段没有远程认证层。
+
 ## VS Code 调试
 
 仓库提供 macOS 调试配置：

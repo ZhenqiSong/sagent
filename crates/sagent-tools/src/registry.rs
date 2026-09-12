@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::{RegistryError, ToolDefinition, canonical_tool_schema, tool_schema_hash};
+use crate::{
+    RegistryError, ToolDefinition, ToolPermission, canonical_tool_schema, tool_schema_hash,
+};
 
 /// 保存当前 generation 可见的工具定义。
 ///
@@ -71,9 +73,84 @@ impl ToolRegistry {
     }
 }
 
+/// 返回 Runtime 默认允许暴露给 Provider 的最小工具集合。
+///
+/// Registry 是唯一的工具元数据来源；RPC bootstrap 与测试都复用这组定义，避免模型
+/// schema、权限级别和执行器支持的工具名称发生漂移。具体 workspace、Store 和审批状态
+/// 仍由上层注入，不能在这里绑定用户路径或执行副作用。
+pub fn builtin_registry() -> Result<ToolRegistry, RegistryError> {
+    use serde_json::json;
+
+    let definitions = [
+        ToolDefinition::new(
+            "read_file",
+            "Read a file",
+            json!({
+                "properties": {"path": {"type": "string"}},
+                "type": "object",
+                "required": ["path"]
+            }),
+            ToolPermission::ReadOnly,
+            30_000,
+            4_096,
+        )?,
+        ToolDefinition::new(
+            "session_search",
+            "Search conversation messages in the current Profile",
+            json!({
+                "additionalProperties": false,
+                "properties": {
+                    "limit": {"minimum": 1, "type": "integer"},
+                    "query": {"type": "string"},
+                    "session_id": {"type": "string"}
+                },
+                "type": "object",
+                "required": ["query"]
+            }),
+            ToolPermission::ReadOnly,
+            30_000,
+            16_384,
+        )?,
+        ToolDefinition::new(
+            "terminal",
+            "Run a command",
+            json!({
+                "properties": {"command": {"type": "string"}},
+                "type": "object",
+                "required": ["command"]
+            }),
+            ToolPermission::ApprovalRequired,
+            30_000,
+            4_096,
+        )?,
+        ToolDefinition::new(
+            "write_file",
+            "Write a workspace text file atomically",
+            json!({
+                "additionalProperties": false,
+                "properties": {
+                    "content": {"type": "string"},
+                    "overwrite": {"type": "boolean"},
+                    "path": {"type": "string"}
+                },
+                "type": "object",
+                "required": ["path", "content"]
+            }),
+            ToolPermission::ApprovalRequired,
+            30_000,
+            4_096,
+        )?,
+    ];
+    let mut registry = ToolRegistry::new();
+    for definition in definitions {
+        registry.register(definition)?;
+    }
+    Ok(registry)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ToolRegistry;
+    use super::{ToolRegistry, builtin_registry};
     use crate::{RegistryError, ToolDefinition, ToolPermission};
     use serde_json::json;
 
@@ -132,5 +209,22 @@ mod tests {
         let schema = registry.model_schema().unwrap();
         assert!(schema.is_array());
         assert_eq!(schema[0]["function"]["name"], "read_file");
+    }
+
+    #[test]
+    fn builtin_registry_keeps_the_contract_tool_set_and_order() {
+        let registry = builtin_registry().expect("默认工具定义必须有效");
+
+        assert_eq!(
+            registry.names(),
+            vec!["read_file", "session_search", "terminal", "write_file"]
+        );
+        assert_eq!(
+            registry
+                .get("terminal")
+                .expect("terminal 应注册")
+                .permission,
+            ToolPermission::ApprovalRequired
+        );
     }
 }

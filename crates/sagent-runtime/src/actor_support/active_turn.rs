@@ -48,14 +48,11 @@ pub(crate) struct ActiveTurn {
     pub(crate) generation: i64,
     /// 同一 Turn 内已完成的工具调用批次；用于限制 Provider → Tool 回环。
     pub(crate) tool_rounds: u32,
-    /// 已收到 tool_calls 的 Provider 正常退出次数；用于丢弃交接给 ToolWorker 后
-    /// 可能迟到的 WorkerExited，避免它误伤下一轮 Provider。
-    pub(crate) provider_exit_credits: u32,
     /// 同一 Turn 必须保持 byte-stable 的系统提示词组成部分。
     pub(crate) system: SystemPromptParts,
     pub(crate) state: TurnState,
     pub(crate) cancellation: CancellationToken,
-    /// Actor 持有的是 worker 监控任务；监控任务结束时会回传 WorkerExited。
+    /// Actor 持有的是 worker 监控任务；只有 panic 等 JoinError 才回传 WorkerExited。
     pub(crate) worker: Option<JoinHandle<()>>,
     /// 指向实际 worker 的取消句柄。这样取消监控任务时不会遗留实际 worker。
     pub(crate) worker_abort: Option<AbortHandle>,

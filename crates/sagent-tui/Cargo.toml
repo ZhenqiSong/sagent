@@ -22,3 +22,10 @@ futures-util = "0.3"
 unicode-width = "0.2"
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+# 黑盒测试必须提供真实 PTY；普通 pipe 不会触发 raw mode/alternate screen 的终端路径。
+portable-pty = ">=0.9,<0.10"
+sagent-provider = { path = "../sagent-provider" }
+sagent-store = { path = "../sagent-store" }
+sysinfo = { version = ">=0.38,<0.40", default-features = false, features = ["system"] }

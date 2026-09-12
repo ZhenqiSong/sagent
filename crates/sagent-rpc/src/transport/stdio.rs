@@ -35,19 +35,21 @@ pub(crate) enum FrameClass {
     Transient,
 }
 
-/// 已经序列化完成的一条 stdout NDJSON 帧。
+/// 已序列化但尚未附加 transport 分隔符的一条 RPC 输出。
+///
+/// JSON 文本在连接内核中只生成一次；stdio writer 追加换行，WebSocket writer 则把它作为
+/// 单个 text message 发送。这样两种 transport 不会因各自重新序列化而产生不同信封。
 pub(crate) struct OutboundFrame {
-    bytes: Vec<u8>,
+    text: String,
     class: FrameClass,
 }
 
 impl OutboundFrame {
-    /// 序列化完整 JSON 后追加换行，确保 writer 每次处理一条协议记录。
+    /// 序列化完整 JSON；具体 transport 决定如何划分消息边界。
     fn from_value<T: Serialize>(value: &T, class: FrameClass) -> io::Result<Self> {
-        let mut bytes = serde_json::to_vec(value)
+        let text = serde_json::to_string(value)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        bytes.push(b'\n');
-        Ok(Self { bytes, class })
+        Ok(Self { text, class })
     }
 
     /// 创建不可丢弃的控制帧。
@@ -65,6 +67,11 @@ impl OutboundFrame {
             _ => FrameClass::Critical,
         };
         Self::from_value(&event_bridge::jsonrpc_event(event), class)
+    }
+
+    /// 返回不含 stdio 换行符的 JSON 文本，供 WebSocket 的单条 text message 使用。
+    pub(crate) fn text(&self) -> &str {
+        &self.text
     }
 }
 
@@ -108,7 +115,7 @@ fn runtime_error_for_session(
 }
 
 /// reader 送给 dispatcher 的输入；解析失败也排队，保持响应顺序。
-enum InboundFrame {
+pub(crate) enum InboundFrame {
     Request(JsonRpcRequest),
     Response(JsonRpcResponse<Value>),
 }
@@ -210,7 +217,7 @@ async fn reader_loop<R: AsyncBufRead + Unpin>(
 }
 
 /// dispatcher task：独占 ConnectionState，把 response 排队给唯一 writer。
-async fn dispatcher_loop<S: DispatchService + Send + 'static>(
+pub(crate) async fn dispatcher_loop<S: DispatchService + Send + 'static>(
     mut request_rx: mpsc::Receiver<InboundFrame>,
     outbound_tx: mpsc::Sender<OutboundFrame>,
     service: S,
@@ -521,7 +528,8 @@ async fn writer_loop<W: AsyncWrite + Unpin>(
         match frame.class {
             FrameClass::Critical | FrameClass::Transient => {}
         }
-        writer.write_all(&frame.bytes).await?;
+        writer.write_all(frame.text().as_bytes()).await?;
+        writer.write_all(b"\n").await?;
         writer.flush().await?;
     }
     Ok(())
@@ -621,7 +629,7 @@ where
     }
 }
 
-fn ready_frame() -> io::Result<OutboundFrame> {
+pub(crate) fn ready_frame() -> io::Result<OutboundFrame> {
     OutboundFrame::critical(&JsonRpcEvent {
         jsonrpc: "2.0".to_owned(),
         method: "event".to_owned(),

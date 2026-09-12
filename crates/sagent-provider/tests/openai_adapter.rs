@@ -190,6 +190,50 @@ async fn streams_openai_sse_and_returns_finish() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn streams_split_tool_call_with_one_stable_provider_id() {
+    // Arrange：fixture 将 arguments 拆成两个 SSE event，第二段故意省略 id，模拟真实流。
+    let server = MockSseServer::spawn(vec![MockSseChunk::text(include_str!(
+        "fixtures/provider/tool_call_split.sse"
+    ))])
+    .await
+    .expect("mock server");
+    let provider = OpenAiCompatibleProvider::from_endpoint(&server.url(), "test-key")
+        .expect("provider config");
+    let mut sink = Sink::default();
+
+    // Act：让完整 HTTP/SSE adapter 驱动 parser，而不是直接调用 parser 私有函数。
+    let finish = provider
+        .stream(request(server.url()), &mut sink, CancellationToken::new())
+        .await
+        .expect("分片 tool-call 应能完成");
+    server.wait().await.expect("server should complete");
+
+    // Assert：Runtime 的累加器必须能用同一个 id 拼回完整 JSON 参数。
+    let calls = sink
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderEvent::ToolCallDelta {
+                call_id,
+                name,
+                arguments_delta,
+            } => Some((call_id, name, arguments_delta)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].0, "call_split");
+    assert_eq!(calls[1].0, calls[0].0);
+    assert_eq!(calls[0].1.as_deref(), Some("read_file"));
+    assert!(calls[1].1.is_none());
+    assert_eq!(
+        calls[0].2.clone() + calls[1].2,
+        r#"{"path":"notes.txt","offset":1,"limit":1}"#
+    );
+    assert_eq!(finish.reason, StopReason::ToolCalls);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn sends_bearer_header_and_openai_request_body() {
     let server = TestServer::spawn(
         "200 OK",
@@ -242,6 +286,30 @@ async fn maps_rate_limit_and_non_sse_response() {
         .expect_err("429 should fail");
     server.wait().await.expect("server should complete");
     assert!(matches!(error, ProviderError::RateLimited { .. }));
+
+    // 5xx 不能被当作成功的空流；Runtime 需要看到稳定的远端失败类别并只收口一次。
+    let server = TestServer::spawn(
+        "503 Service Unavailable",
+        "application/json",
+        br#"{"error":"temporary"}"#.to_vec(),
+    )
+    .await
+    .expect("test server");
+    let provider = OpenAiCompatibleProvider::from_endpoint(&server.url, "key").unwrap();
+    let error = provider
+        .stream(
+            request(server.url.clone()),
+            &mut sink,
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("503 should fail");
+    server.wait().await.expect("server should complete");
+    assert_eq!(
+        error,
+        ProviderError::RemoteServer { status: 503 },
+        "5xx 应保留状态码但不暴露响应正文"
+    );
 
     let server = TestServer::spawn("200 OK", "application/json", br#"{}"#.to_vec())
         .await

@@ -39,6 +39,76 @@ const DEFAULT_MAX_TOOL_ROUNDS: u32 = 8;
 /// 打开失败时以可读原因返回，由调用方转换为 `RuntimeError::Persistence`。
 type StoreFactory = Arc<dyn Fn() -> Result<Store, String> + Send + Sync>;
 
+/// 创建 `SessionActor` 所需的不可变运行时配置。
+///
+/// 它拥有 Store 打开方式以及 actor 的可选能力依赖。配置只在 actor 创建时读取
+/// 一次并复制为快照，因此不会在活跃会话中途改变模型、工具或审批语义。
+struct SessionActorFactory {
+    store_factory: StoreFactory,
+    worker_factory: Option<WorkerFactory>,
+    provider: Option<Arc<dyn ModelProvider>>,
+    model: String,
+    profile_revision: String,
+    approval_timeout: Duration,
+    tool_dispatcher: Option<ToolDispatcher>,
+    tool_worker: Option<ToolWorker>,
+    max_tool_rounds: u32,
+}
+
+impl SessionActorFactory {
+    /// 使用运行时默认值创建 actor 配置。
+    fn new<F>(store_factory: F) -> Self
+    where
+        F: Fn() -> Result<Store, String> + Send + Sync + 'static,
+    {
+        Self {
+            store_factory: Arc::new(store_factory),
+            worker_factory: None,
+            provider: None,
+            model: "unconfigured".into(),
+            profile_revision: "runtime-v1".into(),
+            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
+            tool_dispatcher: None,
+            tool_worker: None,
+            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+        }
+    }
+
+    /// 创建一个拥有独占 Store 和固定配置快照的 actor。
+    fn create(
+        &self,
+        session_id: SessionId,
+        command_rx: mpsc::Receiver<ActorInput>,
+        command_tx: mpsc::Sender<ActorInput>,
+        event_tx: broadcast::Sender<RuntimeEvent>,
+    ) -> Result<SessionActor, RuntimeError> {
+        let store = (self.store_factory)().map_err(RuntimeError::Persistence)?;
+        let actor = SessionActor::new(session_id, store, command_rx, command_tx, event_tx);
+        let actor = match &self.worker_factory {
+            Some(factory) => actor.with_worker_factory(factory.clone(), utc_now),
+            None => actor,
+        };
+        let actor = actor.with_approval_timeout(self.approval_timeout);
+        let actor = actor.with_max_tool_rounds(self.max_tool_rounds);
+        let actor = match &self.provider {
+            Some(provider) => actor.with_provider(
+                provider.clone(),
+                self.model.clone(),
+                self.profile_revision.clone(),
+            ),
+            None => actor,
+        };
+        let actor = match &self.tool_dispatcher {
+            Some(dispatcher) => actor.with_tool_dispatcher(dispatcher.clone()),
+            None => actor,
+        };
+        Ok(match &self.tool_worker {
+            Some(worker) => actor.with_tool_worker(worker.clone()),
+            None => actor,
+        })
+    }
+}
+
 /// Supervisor 为每个正在运行的 Session 保存的托管状态。
 ///
 /// 只保存“投递 + 订阅 + 生命周期”三样东西；actor 的可变状态与 Store 都在
@@ -52,15 +122,7 @@ struct ManagedSession {
 /// 管理多个 SessionActor 的入口。
 pub struct SessionSupervisor {
     sessions: Mutex<HashMap<SessionId, ManagedSession>>,
-    store_factory: StoreFactory,
-    worker_factory: Option<WorkerFactory>,
-    provider: Option<Arc<dyn ModelProvider>>,
-    model: String,
-    profile_revision: String,
-    approval_timeout: Duration,
-    tool_dispatcher: Option<ToolDispatcher>,
-    tool_worker: Option<ToolWorker>,
-    max_tool_rounds: u32,
+    actor_factory: SessionActorFactory,
 }
 
 impl SessionSupervisor {
@@ -74,15 +136,7 @@ impl SessionSupervisor {
     {
         Self {
             sessions: Mutex::new(HashMap::new()),
-            store_factory: Arc::new(store_factory),
-            worker_factory: None,
-            provider: None,
-            model: "unconfigured".into(),
-            profile_revision: "runtime-v1".into(),
-            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
-            tool_dispatcher: None,
-            tool_worker: None,
-            max_tool_rounds: DEFAULT_MAX_TOOL_ROUNDS,
+            actor_factory: SessionActorFactory::new(store_factory),
         }
     }
 
@@ -149,7 +203,7 @@ impl SessionSupervisor {
     /// 为测试注入受控 worker 工厂；生产路径使用 `with_provider`。
     #[cfg(test)]
     fn with_worker_factory(mut self, worker_factory: WorkerFactory) -> Self {
-        self.worker_factory = Some(worker_factory);
+        self.actor_factory.worker_factory = Some(worker_factory);
         self
     }
 
@@ -160,33 +214,33 @@ impl SessionSupervisor {
         model: impl Into<String>,
         profile_revision: impl Into<String>,
     ) -> Self {
-        self.provider = Some(provider);
-        self.model = model.into();
-        self.profile_revision = profile_revision.into();
+        self.actor_factory.provider = Some(provider);
+        self.actor_factory.model = model.into();
+        self.actor_factory.profile_revision = profile_revision.into();
         self
     }
 
     /// 配置单个 pending approval 的最大等待时间。
     pub fn with_approval_timeout(mut self, timeout: Duration) -> Self {
-        self.approval_timeout = timeout;
+        self.actor_factory.approval_timeout = timeout;
         self
     }
 
     /// 配置当前 Supervisor 使用的工具 registry；工具 worker 仍由 Runtime 统一调度。
     pub fn with_tool_dispatcher(mut self, dispatcher: ToolDispatcher) -> Self {
-        self.tool_dispatcher = Some(dispatcher);
+        self.actor_factory.tool_dispatcher = Some(dispatcher);
         self
     }
 
     /// 配置具体工具执行器；实际工具仍由每个 SessionActor 监管。
     pub fn with_tool_worker(mut self, worker: ToolWorker) -> Self {
-        self.tool_worker = Some(worker);
+        self.actor_factory.tool_worker = Some(worker);
         self
     }
 
     /// 配置单个 Turn 最多可完成多少批工具调用。
     pub fn with_max_tool_rounds(mut self, limit: u32) -> Self {
-        self.max_tool_rounds = limit.max(1);
+        self.actor_factory.max_tool_rounds = limit.max(1);
         self
     }
 
@@ -201,41 +255,15 @@ impl SessionSupervisor {
         &self,
         session_id: &SessionId,
     ) -> Result<(ManagedSession, SessionHandle), RuntimeError> {
-        // Supervisor 的配置在 actor 启动时复制为快照。之后即使调用方更换 Provider
-        // 或工具 registry，也不会改变这个活跃会话的 generation/工具语义。
-        let store = (self.store_factory)().map_err(RuntimeError::Persistence)?;
         let (command_tx, command_rx) = mpsc::channel(MAILBOX_CAPACITY);
         let (event_tx, _) = broadcast::channel(EVENT_CAPACITY);
 
-        let actor = SessionActor::new(
+        let actor = self.actor_factory.create(
             session_id.clone(),
-            store,
             command_rx,
             command_tx.clone(),
             event_tx.clone(),
-        );
-        let actor = match &self.worker_factory {
-            Some(factory) => actor.with_worker_factory(factory.clone(), utc_now),
-            None => actor,
-        };
-        let actor = actor.with_approval_timeout(self.approval_timeout);
-        let actor = actor.with_max_tool_rounds(self.max_tool_rounds);
-        let actor = match &self.provider {
-            Some(provider) => actor.with_provider(
-                provider.clone(),
-                self.model.clone(),
-                self.profile_revision.clone(),
-            ),
-            None => actor,
-        };
-        let actor = match &self.tool_dispatcher {
-            Some(dispatcher) => actor.with_tool_dispatcher(dispatcher.clone()),
-            None => actor,
-        };
-        let actor = match &self.tool_worker {
-            Some(worker) => actor.with_tool_worker(worker.clone()),
-            None => actor,
-        };
+        )?;
         let join = tokio::spawn(actor.run());
 
         let handle = SessionHandle {

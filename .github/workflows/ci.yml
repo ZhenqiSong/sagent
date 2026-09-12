@@ -50,7 +50,7 @@ jobs:
 
       - name: Run workspace tests except TUI black-box
         # 先完成其他 crate，避免 workspace 测试编排影响 TUI 黑盒依赖的兄弟 binary。
-        run: cargo test --workspace -- --test-threads=1
+        run: cargo test --workspace --exclude sagent-tui -- --test-threads=1
 
       - name: Run TUI unit tests
         run: cargo test -p sagent-tui --bin sagent-tui -- --test-threads=1

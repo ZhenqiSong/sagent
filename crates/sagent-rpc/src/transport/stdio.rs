@@ -1,4 +1,7 @@
 //! 标准输入输出上的异步 NDJSON JSON-RPC transport。
+//!
+//! 本模块负责 NDJSON framing、连接任务、取消与输出顺序；业务方法由共享 dispatcher/service
+//! 处理，stdio 不得直接访问 Store、Provider 或 SessionActor 内部状态。
 
 use std::{any::Any, io};
 

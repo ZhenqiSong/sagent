@@ -82,6 +82,7 @@ impl ModelSetting {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+/// `model` 对象形式的可选覆盖字段。
 pub struct ModelDetail {
     /// 模型显示名或请求名。
     pub name: Option<String>,

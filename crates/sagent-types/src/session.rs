@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{SessionId, StoredMessage};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// 会话列表中使用的稳定摘要，不携带完整消息历史。
 pub struct SessionSummary {
     /// 会话唯一标识。
     pub id: SessionId,

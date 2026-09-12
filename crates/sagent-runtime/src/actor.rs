@@ -1,4 +1,8 @@
-//! SessionActor 的最小 submit 处理循环。
+//! SessionActor 的命令、Turn 状态转换与受监管 worker 编排。
+//!
+//! 本模块负责把 mailbox 输入按顺序转换为持久化事实和 RuntimeEvent；它不解析配置、
+//! 不创建 Provider/工具实现，也不允许 worker 直接写 Store。这样同一 Session 的状态
+//! 只会由一个 Actor 推进，取消和终态事件才能保持确定顺序。
 
 use std::sync::Arc;
 use std::time::Duration;

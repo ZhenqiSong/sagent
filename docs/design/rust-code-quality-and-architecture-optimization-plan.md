@@ -147,6 +147,12 @@ TUI / future Desktop/Web client
 
 ### R1：模块地图、公开文档与错误语义
 
+状态：已完成（2026-09-13）。已补齐当前识别出的公开 DTO、Store event/turn、terminal/
+process、Provider 配置与 Runtime tool-call 边界 Rustdoc；并为 Actor、Store event/turn、
+terminal 与 stdio transport 补充“负责/不负责”的模块地图。既有 `RuntimeError`、
+`ProviderError`、`ProtocolError`、`WorkspaceError` 与工具错误保持稳定公开类别，未改变
+任何 RPC 或持久化错误语义。
+
 **目的：** 不改变任何依赖结构，先降低阅读门槛。
 
 **工作：**

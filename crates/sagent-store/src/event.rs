@@ -1,4 +1,7 @@
-//! daemon event 的事务内写入辅助函数。
+//! daemon event 的事务内写入与可恢复读取。
+//!
+//! 本模块负责 event 的 SQLite 映射、单调 sequence 和分页上限；它不决定事件何时发生，
+//! 也不推进 Turn 状态机。调用者必须先决定合法状态转换，再通过 Store 原子提交事实。
 
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -6,19 +9,31 @@ use sagent_types::{EventSequence, SessionId, TurnId};
 
 use crate::Store;
 
+/// Turn 已持久化开始事实的事件类型。
 pub const EVENT_TURN_STARTED: &str = "turn.started";
+/// 一条消息已提交且可由恢复路径读取的事件类型。
 pub const EVENT_MESSAGE_COMMITTED: &str = "message.committed";
+/// 工具结果已持久化的事件类型。
 pub const EVENT_TOOL_COMPLETED: &str = "tool.completed";
+/// 工具开始执行前已持久化计划的事件类型。
 pub const EVENT_TOOL_STARTED: &str = "tool.started";
+/// Turn 正常完成的唯一终态事件类型。
 pub const EVENT_TURN_COMPLETED: &str = "turn.completed";
+/// Turn 被取消或中断的唯一终态事件类型。
 pub const EVENT_TURN_INTERRUPTED: &str = "turn.interrupted";
+/// Turn 因不可恢复错误失败的唯一终态事件类型。
 pub const EVENT_TURN_FAILED: &str = "turn.failed";
+/// 等待用户工具审批的事件类型。
 pub const EVENT_APPROVAL_REQUESTED: &str = "approval.requested";
+/// 审批被允许或拒绝后的事件类型。
 pub const EVENT_APPROVAL_RESOLVED: &str = "approval.resolved";
+/// 审批等待超时后的事件类型。
 pub const EVENT_APPROVAL_TIMED_OUT: &str = "approval.timed_out";
+/// 单次持久化事件查询允许返回的最大条数。
 pub const MAX_EVENT_LIMIT: i64 = 200;
 
 #[derive(Clone, Debug)]
+/// 将在调用方事务中追加的一条 daemon 事件输入。
 pub struct NewDaemonEvent {
     pub session_id: SessionId,
     pub turn_id: Option<TurnId>,
@@ -28,6 +43,7 @@ pub struct NewDaemonEvent {
 }
 
 #[derive(Clone, Debug)]
+/// 按 Session 和单调序号读取可恢复事件的分页条件。
 pub struct EventQuery {
     pub session_id: SessionId,
     pub after_sequence: EventSequence,
@@ -35,6 +51,7 @@ pub struct EventQuery {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// 已从 daemon event 表读取的稳定事件记录。
 pub struct StoredDaemonEvent {
     pub sequence: EventSequence,
     pub session_id: SessionId,
@@ -233,6 +250,7 @@ impl Store {
             .context("读取 Turn 恢复事件失败")
     }
 
+    /// 返回 Session 当前最大的持久化事件序号，不存在事件时返回 `None`。
     pub fn latest_event_sequence(&self, session_id: &SessionId) -> Result<Option<EventSequence>> {
         let value: Option<i64> = self
             .connection

@@ -4,6 +4,7 @@ use crate::prompt::{PromptMessage, PromptRole, PromptToolCall};
 use std::collections::HashSet;
 use thiserror::Error;
 
+/// Transcript 因 role 顺序、内容或工具调用关联不满足不变量而拒绝操作的原因。
 #[derive(Debug, Clone, Eq, Error, PartialEq)]
 pub enum TranscriptError {
     #[error("消息内容不能为空")]

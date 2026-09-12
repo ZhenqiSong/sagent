@@ -210,6 +210,7 @@ where
     BoundedOutput { content, truncated }
 }
 
+/// 受字符上限约束的 stdout 或 stderr 读取结果。
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct BoundedOutput {
     /// 已解码且受限的输出文本。
@@ -304,6 +305,7 @@ pub async fn terminate_pid_tree(pid: u32) {
 }
 
 #[cfg(unix)]
+/// 将 Unix shell 放入独立 session/process group，供取消时终止整棵子进程树。
 pub fn configure_process_group(process: &mut Command) {
     unsafe {
         process.pre_exec(|| {
@@ -316,6 +318,7 @@ pub fn configure_process_group(process: &mut Command) {
 }
 
 #[cfg(not(unix))]
+/// 非 Unix 平台不使用 process group；Windows 由 Job Object 和 taskkill 监督进程树。
 pub fn configure_process_group(_process: &mut Command) {}
 
 /// 结束时排空已退出进程的管道，避免子进程继承的 pipe 句柄造成任务悬挂。

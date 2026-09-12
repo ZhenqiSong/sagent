@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{MessageId, SessionId};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// 从持久化层读取并可安全传递给 Runtime、CLI 与协议层的消息记录。
 pub struct StoredMessage {
     /// SQLite messages.id，对外保留强类型边界。
     pub id: MessageId,
@@ -37,6 +38,7 @@ pub struct StoredMessage {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// 会话全文搜索的一条有界命中结果。
 pub struct SearchHit {
     /// 命中消息所属的会话。
     pub session_id: SessionId,

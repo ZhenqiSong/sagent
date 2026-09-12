@@ -1,4 +1,7 @@
-//! Turn generation 与开始回合的原子持久化。
+//! Turn generation、开始、工具结果和终态的原子持久化。
+//!
+//! 本模块负责将一个已决定的 Turn 生命周期步骤作为 SQLite 事务提交；它不调用 Provider、
+//! 不执行工具，也不发布 RuntimeEvent。Runtime 只能在这里成功提交后向客户端发布事实。
 
 use anyhow::{Context, Result, bail};
 use rusqlite::{OptionalExtension, params};
@@ -14,6 +17,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
+/// 开始 Turn 前需持久化的 generation 上下文快照。
 pub struct NewGeneration {
     /// 生成该上下文的会话。
     pub session_id: SessionId,
@@ -32,6 +36,7 @@ pub struct NewGeneration {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// 已持久化的 generation 上下文，用于恢复时重建一致 prompt。
 pub struct StoredGeneration {
     /// generation 所属会话。
     pub session_id: SessionId,
@@ -50,6 +55,7 @@ pub struct StoredGeneration {
 }
 
 #[derive(Clone, Debug)]
+/// 启动一个 Turn 所需的身份、generation 和时间输入。
 pub struct StartTurn {
     /// 新 Turn 的 UUID。
     pub turn_id: TurnId,

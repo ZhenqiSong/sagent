@@ -20,6 +20,7 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
+/// 聚合 Provider 工具调用增量时发现的稳定输入错误类别。
 #[derive(Debug, Clone, Eq, Error, PartialEq)]
 pub enum ToolCallError {
     #[error("tool call id 不能为空")]

@@ -1,4 +1,7 @@
 //! 安全的前台 terminal 执行器。
+//!
+//! 本模块负责 workspace 内 shell 的资源限制、进程树监督、取消和输出归一化；它不决定
+//! 用户是否已批准危险命令，也不写审计事件或 Store。这些策略由上层 Actor/Runtime 提供。
 
 use std::time::Duration;
 
@@ -22,6 +25,7 @@ const DEFAULT_OUTPUT_LIMIT: usize = 32_768;
 const MAX_OUTPUT_LIMIT: usize = 200_000;
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+/// 一次受 workspace、超时和输出限额约束的 terminal 调用请求。
 pub struct TerminalRequest {
     pub command: String,
     #[serde(default)]
@@ -52,6 +56,7 @@ fn default_output_limit() -> usize {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+/// terminal 执行器的默认值和硬性资源上限。
 pub struct TerminalLimits {
     pub default_timeout_ms: u64,
     pub max_timeout_ms: u64,
@@ -71,6 +76,7 @@ impl Default for TerminalLimits {
 }
 
 #[derive(Debug, Clone)]
+/// 执行 shell 命令并监督其进程树、输出、超时和取消的工具服务。
 pub struct TerminalExecutor {
     workspace: WorkspaceRoot,
     limits: TerminalLimits,

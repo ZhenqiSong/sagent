@@ -2,6 +2,10 @@
 
 本文件适用于 `sagent` 仓库中的所有 crate、二进制程序、测试和文档。子目录如果新增更具体的 `AGENTS.md`，可以补充本文件，但不得降低这里的要求。
 
+围绕 StorageManager、业务 Storage、单一职责和分层实现的完整代码规范见
+[`docs/design/rust-code-standards.md`](docs/design/rust-code-standards.md)；本文件中的强制
+约束优先级更高，详细规范用于解释和落实这些约束。
+
 ## 代码注释要求（强制）
 
 - 新增或修改生产代码时，必须同步补充准确的中文注释或 Rust 文档注释；不能只提交代码而省略说明。

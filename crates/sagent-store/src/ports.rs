@@ -5,12 +5,14 @@
 
 mod dependencies;
 mod factory;
+mod manager;
 mod query;
 mod search;
 mod session;
 
-pub use dependencies::{StorageDependencies, StorageReadDependencies};
+pub use dependencies::{StorageDependencies, StorageReadDependencies, StorageWriteDependencies};
 pub use factory::StorageFactory;
+pub use manager::StorageManager;
 pub use query::SessionQueryStorage;
 pub use search::SearchStorage;
 pub use session::SessionStorage;

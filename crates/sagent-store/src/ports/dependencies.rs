@@ -21,6 +21,32 @@ pub struct StorageReadDependencies {
     search: Box<dyn SearchStorage>,
 }
 
+/// 仅包含会话写入能力的领域依赖集合。
+///
+/// 短生命周期的写命令不需要查询和全文搜索能力；单独的聚合可以让 `StorageManager`
+/// 在申请依赖时表达最小权限。`SessionActor` 仍使用包含配套查询端口的
+/// `StorageDependencies`，以保持其单写和读取上下文的一致性。
+pub struct StorageWriteDependencies {
+    session: Box<dyn SessionStorage>,
+}
+
+impl StorageWriteDependencies {
+    /// 用一个会话写入端口创建最小可写依赖集合。
+    pub fn from_session(session: Box<dyn SessionStorage>) -> Self {
+        Self { session }
+    }
+
+    /// 取得可变会话写入端口；调用方负责维护其事务边界。
+    pub fn session_mut(&mut self) -> &mut dyn SessionStorage {
+        self.session.as_mut()
+    }
+
+    /// 拆出会话写入端口所有权，供领域对象接管其生命周期。
+    pub fn into_session(self) -> Box<dyn SessionStorage> {
+        self.session
+    }
+}
+
 impl StorageReadDependencies {
     /// 用会话查询和全文搜索端口创建只读依赖集合。
     pub fn new<Q, H>(query: Q, search: H) -> Self

@@ -1,22 +1,23 @@
-//! SQLite 存储端口的首个具体 adapter。
+//! SQLite 存储工厂与端口适配边界。
 //!
-//! 本模块是唯一负责把具体 `Store` 映射到领域端口的地方。上层只能持有
-//! `StorageFactory` 或 `StorageDependencies`，不能通过端口访问 SQLite 连接。
+//! 本模块保留兼容期 `StorageFactory`，并负责把具体 `Store` 映射到领域端口；新的运行
+//! 时组件应在 bootstrap 中将 Factory 转换为 `SqliteStorageManager`。上层不能通过端口
+//! 访问 SQLite 连接。
 
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use sagent_types::{
     EventSequence, MessageId, SearchHit, SessionId, SessionSummary, StoredMessage, TurnId,
 };
 
 use crate::{
     EventQuery, MessageQuery, MessageSearchQuery, MessageWindow, NewDaemonEvent, NewGeneration,
-    NewMessage, NewSession, SessionListQuery, StartTurn, Store, StoredDaemonEvent,
-    StoredGeneration, StoredRunningTurn,
+    NewMessage, NewSession, SessionListQuery, SqliteStorageManager, StartTurn, StorageManager,
+    Store, StoredDaemonEvent, StoredGeneration, StoredRunningTurn,
     ports::{
         SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageFactory,
         StorageReadDependencies, StorageResult,
@@ -25,17 +26,23 @@ use crate::{
 
 /// 使用同一个数据库文件创建独立领域存储端口的 SQLite Factory。
 pub struct SqliteStorageFactory {
-    database_path: PathBuf,
+    manager: SqliteStorageManager,
 }
 
 impl SqliteStorageFactory {
     /// 绑定一个 SQLite 数据库路径，但不创建文件或打开连接。
     pub fn new(database_path: impl Into<PathBuf>) -> Result<Self> {
-        let database_path = database_path.into();
-        if !database_path.is_absolute() {
-            bail!("SQLite 数据库路径必须是绝对路径");
-        }
-        Ok(Self { database_path })
+        Ok(Self {
+            manager: SqliteStorageManager::new(database_path)?,
+        })
+    }
+
+    /// 将兼容期 Factory 转换为 Profile 作用域的存储管理器。
+    ///
+    /// 新的 bootstrap 应在选择后尽早调用此方法，使 Factory 只停留在构造边界；旧的
+    /// `StorageFactory` 实现仍保留，便于现有调用方在 manager 迁移期间继续工作。
+    pub fn into_manager(self) -> SqliteStorageManager {
+        self.manager
     }
 }
 
@@ -45,26 +52,12 @@ impl StorageFactory for SqliteStorageFactory {
     /// 首次创建会打开读写 Store 并执行已有 migration；三个领域端口共享这一组受保护
     /// 的连接。每次调用都会重新打开 Store，避免 Actor 之间共享 SQLite 连接。
     fn create(&self) -> StorageResult<StorageDependencies> {
-        let writable = Store::open_readwrite(&self.database_path).with_context(|| {
-            format!("打开 SQLite 写入存储失败：{}", self.database_path.display())
-        })?;
-        writable
-            .verify_connection()
-            .context("检查 SQLite 写入存储失败")?;
-
-        Ok(StorageDependencies::from(writable))
+        self.manager.open_actor_storage()
     }
 
     /// 创建只读 SQLite 查询与搜索端口，不执行 migration 或创建缺失数据库。
     fn create_readonly(&self) -> StorageResult<StorageReadDependencies> {
-        let readonly = Store::open_readonly(&self.database_path).with_context(|| {
-            format!("打开 SQLite 只读存储失败：{}", self.database_path.display())
-        })?;
-        readonly
-            .verify_connection()
-            .context("检查 SQLite 只读存储失败")?;
-
-        Ok(StorageReadDependencies::from(readonly))
+        self.manager.open_read_storage()
     }
 }
 

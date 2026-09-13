@@ -211,7 +211,9 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 
 当前进度：R3.1 `StorageDescriptor`、R3.2 `provider.rs` 配置职责拆分、SQLite 默认路径
 降级、R3.3 最小领域存储端口与 `StorageFactory` 定义以及首个 SQLite adapter 已完成；R3.4
-Runtime/RPC/工具和 CLI 迁移已完成；R3.5 `StorageManager` 设计已确定，具体迁移待执行。
+Runtime/RPC/工具和 CLI 迁移已完成；R3.5 `StorageManager` 框架（管理端口、窄依赖聚合和
+`SqliteStorageManager`）已完成，调用方迁移待执行。R3.5 的分阶段执行拆分见
+[StorageManager 重构执行计划](rust-storage-manager-execution-plan.md)。
 Runtime Actor、RuntimeDependencies、RPC SessionService、RuntimeService、`session_search`
 以及 CLI 会话/Profile 管理命令均已通过工厂申请领域端口，不再直接依赖 `Store`。
 
@@ -274,6 +276,14 @@ RPC、CLI 和工具均不感知这种差异。
 方法如果需要异步获取连接，应在 R3 的同步/异步技术 spike 中统一决定，不能由各调用方
 自行 `spawn_blocking` 或复制连接生命周期。
 
+**R3.5 框架实现记录（本次）：** `sagent-store::ports` 新增 `StorageManager` 管理端口，
+统一提供 `open_actor_storage`、`open_read_storage`、`open_write_storage` 和
+`open_search_storage` 申请入口；`StorageWriteDependencies` 将短操作的写入能力与查询、
+搜索能力隔离。新增 `SqliteStorageManager` 作为首个实现，持有经过校验的绝对数据库路径，
+并由 `SqliteStorageFactory::into_manager` 提供 Factory 到 manager 的构造边界。当前 manager
+仍按次打开 SQLite Store，以保持既有事务和连接行为；Runtime、RPC、CLI 和工具的持有对象
+迁移，以及连接池/健康检查/migration 生命周期管理，留待 R3.5 后续工作包。
+
 **R3.4 Runtime/RPC/工具/CLI 迁移记录（已完成）：** SessionActor 的写入、查询和恢复路径已改为分别依赖
 `SessionStorage`/`SessionQueryStorage`，`RuntimeDependencies` 通过 `StorageFactory`
 为每个 Actor 创建端口集合；协议层 `SessionService` 只持有查询端口，RPC `RuntimeService`
@@ -285,9 +295,9 @@ RPC、CLI 和工具均不感知这种差异。
 同样通过 Factory 获取搜索端口，不再打开 SQLite 或保存数据库路径。CLI 的 Profile 索引由
 配置层 `Profile` 提供，目录和存储初始化由独立的 `ProfileService` 承担。CLI 的 Profile 创建、
 会话创建、列表、详情、搜索及生命周期管理命令也统一通过 `StorageFactory` 申请可写或只读
-端口；CLI 生产路径不再导入 `Store`。CLI 通过 `HandlerFactory` 为每条顶层命令创建一个
-拥有 `CommandContext` 的领域 handler；handler 复用上下文中的 `CliStorageContext`，并按操作
-申请职责匹配的端口，不重复读取配置或构造 Factory。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
+端口；CLI 生产路径不再导入 `Store`。CLI 通过 `HandlerFactory` 为每条顶层命令创建领域 handler；
+`SessionHandler` 由 `SessionService` 持有 `CommandContext`，会话创建、查询和生命周期操作均
+通过该服务的方法复用上下文中的 `CliStorageContext`，不重复读取配置或构造 Factory。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
 保留 `From<Store>` 到端口聚合的边界转换，但新的生产装配必须使用 Factory selector。上述
 是 R3.3/R3.4 的过渡实现；R3.5 完成后，Factory 只用于构造 `StorageManager`，其余运行时组件
 通过 manager 或已申请的窄领域端口协作。

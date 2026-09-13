@@ -445,6 +445,23 @@ mod tests {
     }
 
     #[test]
+    fn readonly_session_list_does_not_create_missing_database() {
+        let root = test_root("readonly-list");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("应能创建测试根目录");
+        let service = SessionService::new(CommandContext::new(
+            Some(root.clone()),
+            None,
+            OutputFormat::Text,
+        ));
+
+        // 会话列表是只读命令：缺失数据库应报告错误，而不是隐式创建或迁移它。
+        assert!(service.list_sessions(20, 0, false).is_err());
+        assert!(!root.join("state.db").exists());
+        fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
     fn show_hides_compaction_summary_and_search_hides_rewound_message() {
         let root = test_root("visibility");
         let _ = fs::remove_dir_all(&root);

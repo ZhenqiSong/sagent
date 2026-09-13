@@ -1,8 +1,9 @@
 //! Sagent 持久化领域端口与 SQLite 存储实现。
 //!
-//! 端口模块只表达业务持久化行为；`Store` 和 `sqlite_factory` 封装 SQLite 连接、事务
-//! 与 migration。上层 Runtime、RPC、CLI 和工具应通过 `StorageFactory` 获取端口，避免
-//! 把具体数据库路径或连接生命周期扩散到业务编排代码。
+//! 端口模块只表达业务持久化行为；`Store`、`sqlite_factory` 和 `sqlite_manager` 封装
+//! SQLite 连接、事务与 migration。上层 Runtime、RPC、CLI 和工具应通过
+//! `StorageManager` 按职责获取端口，`StorageFactory` 只停留在 bootstrap/selector 构造
+//! 边界，避免把具体数据库路径或连接生命周期扩散到业务编排代码。
 //!
 //! 作者：SongZQ
 //! 创建日期：2026-08-29
@@ -20,6 +21,7 @@ pub mod schema;
 pub mod search;
 pub mod session;
 pub mod sqlite_factory;
+pub mod sqlite_manager;
 pub mod turn;
 pub mod write;
 
@@ -33,12 +35,13 @@ pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use ports::{
     SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageFactory,
-    StorageReadDependencies, StorageResult,
+    StorageManager, StorageReadDependencies, StorageResult, StorageWriteDependencies,
 };
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
 pub use session::SessionListQuery;
 pub use sqlite_factory::SqliteStorageFactory;
+pub use sqlite_manager::SqliteStorageManager;
 pub use turn::{NewGeneration, StartTurn, StoredGeneration, StoredRunningTurn};
 pub use write::{
     NewMessage, NewSession, RestoreResult, RetryCheckpoint, RewindCheckpoint, RewindResult,

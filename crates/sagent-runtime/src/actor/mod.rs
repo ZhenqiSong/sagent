@@ -12,6 +12,9 @@ mod tool_runtime;
 mod tools;
 mod turn;
 mod worker;
+mod worker_stream;
+mod worker_terminal;
+mod worker_tools;
 
 #[cfg(test)]
 mod tests;

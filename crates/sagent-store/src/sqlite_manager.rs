@@ -10,7 +10,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{StorageDependencies, StorageManager, StorageReadDependencies, StorageResult, Store};
+use crate::{
+    ReadStorage, Storage, StorageDependencies, StorageManager, StorageReadDependencies,
+    StorageResult, StorageWriteDependencies, Store, WriteStorage,
+};
 
 /// 绑定单个 Profile SQLite 数据库的存储管理器。
 ///
@@ -31,7 +34,7 @@ impl SqliteStorageManager {
         Ok(Self { database_path })
     }
 
-    /// 以读写方式打开 Store，并验证连接可执行基本查询。
+    /// 以读写方式打开 SQLite 数据库，并验证连接可执行基本查询。
     fn open_writable_store(&self) -> Result<Store> {
         let store = Store::open_readwrite(&self.database_path).with_context(|| {
             format!("打开 SQLite 写入存储失败：{}", self.database_path.display())
@@ -42,7 +45,7 @@ impl SqliteStorageManager {
         Ok(store)
     }
 
-    /// 以只读方式打开已有 Store，并验证连接可执行基本查询。
+    /// 以只读方式打开已有 SQLite 数据库，并验证连接可执行基本查询。
     fn open_readonly_store(&self) -> Result<Store> {
         let store = Store::open_readonly(&self.database_path).with_context(|| {
             format!("打开 SQLite 只读存储失败：{}", self.database_path.display())
@@ -55,14 +58,37 @@ impl SqliteStorageManager {
 }
 
 impl StorageManager for SqliteStorageManager {
-    /// 为 SessionActor 创建独立的 SQLite 领域端口集合。
-    fn open_actor_storage(&self) -> StorageResult<StorageDependencies> {
-        Ok(StorageDependencies::from(self.open_writable_store()?))
+    /// 为 SessionActor 创建独立的 SQLite 完整业务存储。
+    fn open_actor_storage(&self) -> StorageResult<Storage> {
+        Ok(Storage::from_dependencies(StorageDependencies::from(
+            self.open_writable_store()?,
+        )))
     }
 
-    /// 为查询和搜索创建只读 SQLite 领域端口集合。
-    fn open_read_storage(&self) -> StorageResult<StorageReadDependencies> {
-        Ok(StorageReadDependencies::from(self.open_readonly_store()?))
+    /// 为查询和搜索创建只读 SQLite 业务存储。
+    fn open_read_storage(&self) -> StorageResult<ReadStorage> {
+        Ok(ReadStorage::from_dependencies(
+            StorageReadDependencies::from(self.open_readonly_store()?),
+        ))
+    }
+
+    /// 为短生命周期写命令创建只写 SQLite 业务存储。
+    fn open_write_storage(&self) -> StorageResult<WriteStorage> {
+        let dependencies = StorageDependencies::from(self.open_writable_store()?);
+        let (session, _query, _search) = dependencies.into_parts();
+        Ok(WriteStorage::from_dependencies(
+            StorageWriteDependencies::from_session(session),
+        ))
+    }
+
+    /// 初始化 SQLite 数据库并执行当前 schema migration。
+    fn initialize(&self) -> StorageResult<()> {
+        self.open_writable_store().map(|_| ())
+    }
+
+    /// 只读检查已有 SQLite 数据库，不创建文件或触发 schema migration。
+    fn health_check(&self) -> StorageResult<()> {
+        self.open_readonly_store().map(|_| ())
     }
 }
 
@@ -87,7 +113,7 @@ mod tests {
     }
 
     #[test]
-    fn manager_provides_narrow_write_and_read_dependencies() {
+    fn manager_provides_narrow_write_and_read_storage() {
         let path = test_path("narrow");
         remove(&path);
         let manager = SqliteStorageManager::new(&path).expect("绝对路径应能创建管理器");
@@ -97,7 +123,7 @@ mod tests {
             .open_write_storage()
             .expect("管理器应能提供可写依赖");
         write
-            .session_mut()
+            .session
             .create_session(&NewSession {
                 id: session_id.clone(),
                 source: Some("test".to_owned()),
@@ -108,9 +134,9 @@ mod tests {
             .expect("最小可写端口应能创建会话");
         drop(write);
 
-        let read = manager.open_read_storage().expect("管理器应能提供只读依赖");
+        let read = manager.open_read_storage().expect("管理器应能提供只读存储");
         assert!(
-            read.query()
+            read.session
                 .get_session(&session_id)
                 .expect("只读查询应能读取会话")
                 .is_some()
@@ -125,6 +151,45 @@ mod tests {
         let manager = SqliteStorageManager::new(&path).expect("绝对路径应能创建管理器");
 
         assert!(manager.open_read_storage().is_err());
+        assert!(manager.health_check().is_err());
         assert!(!path.exists(), "只读申请失败后不应创建数据库文件");
+    }
+
+    #[test]
+    fn initialize_creates_database_and_health_check_remains_readonly() {
+        let path = test_path("initialize");
+        remove(&path);
+        let manager = SqliteStorageManager::new(&path).expect("绝对路径应能创建管理器");
+
+        manager.initialize().expect("初始化应能创建 SQLite 数据库");
+        assert!(path.is_file());
+        manager
+            .health_check()
+            .expect("初始化后的数据库应能通过只读健康检查");
+        remove(&path);
+    }
+
+    #[test]
+    fn actor_storage_exposes_session_business_facade() {
+        let path = test_path("actor");
+        remove(&path);
+        let manager = SqliteStorageManager::new(&path).expect("绝对路径应能创建管理器");
+
+        let mut storage = manager
+            .open_actor_storage()
+            .expect("管理器应能提供 Actor 存储");
+        let session_id = SessionId::new("actor-session");
+        storage
+            .session
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: Some("test".to_owned()),
+                model: None,
+                title: None,
+                started_at: "2026-09-13T10:00:00Z".to_owned(),
+            })
+            .expect("Actor 存储应能创建会话");
+        assert!(manager.health_check().is_ok());
+        remove(&path);
     }
 }

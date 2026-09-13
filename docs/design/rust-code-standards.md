@@ -73,7 +73,7 @@ sagent-tui     →  protocol/types
 ```text
 StorageManager  →  管理 Profile 级后端资源和生命周期
 Storage         →  对外暴露的抽象业务存储对象
-SessionStorage  →  负责 Session 领域的表操作、查询和事务
+SessionStorage  →  负责 Session 领域的业务操作（可跨多个表）、查询和事务
 ```
 
 `StorageManager` 只负责：
@@ -103,7 +103,50 @@ SQLite Store 或数据库连接。
 未来只有在出现真实业务调用方后，才增加 `storage.event`、`storage.cron`、`storage.memory`
 等领域字段。不得提前创建空的万能 Storage。
 
-### 3.3 读写权限最小化
+### 3.3 领域 Storage 与表 Model 分离
+
+`Storage` 和具体表 Model 必须处于不同层次。`Storage` 表达业务领域能力，不表达数据库
+表结构；一个业务 Storage 可以跨越多个表，只要这些表属于同一领域的一致性边界。
+
+以 Session 为例：
+
+```text
+SessionStorage                  ← Session 领域业务外观
+├── sessions                    ← 会话状态
+├── messages                    ← 消息历史
+├── turns                       ← Turn 生命周期
+├── generations                 ← Generation 快照
+└── daemon_events               ← Session 审计/恢复事件
+```
+
+必须遵守以下边界：
+
+- `SessionStorage` 负责 Session 领域的业务操作、查询和事务边界，不对应单一数据库表；
+- `Storage` 只聚合 `session`、`memory`、`cron` 等真实业务领域对象，不直接聚合表对象；
+- `SessionRow`、`TurnRow`、`MessageRow`、`EventRow` 等表模型只能位于具体持久化 Adapter
+  （如 `sagent-store` 的 SQLite/PG 实现）内部，默认使用私有或 `pub(crate)` 可见性；
+- Row Model 只表达列、外键、索引和数据库编码，不得被 Runtime、RPC、CLI、工具或协议层
+  引用；
+- 领域模型和端口 DTO 只表达业务含义、不变量和稳定错误，不携带 SQL、连接、表名或
+  数据库专属字段；
+- Adapter 负责 Row Model ↔ 领域模型的转换、SQL 和连接细节；业务 Storage 不直接依赖
+  `rusqlite::Row`、`Connection` 或 PostgreSQL 行类型。
+
+当一次业务操作需要更新多个表时，必须由对应领域 Storage 提供一个有业务含义的高层
+原子方法，例如 `start_turn`、`complete_turn` 或 `rewind_to_message`。Service/Actor 负责
+校验和编排，不能将多个表更新拆成多次 CRUD 调用；顶层 `Storage` 和 `StorageManager`
+不能因为“方便调用”而承载这些表操作。
+
+如果操作跨越多个业务领域且确实要求原子提交，应定义明确的跨领域业务操作或应用级
+事务边界；禁止引入暴露数据库连接的通用事务闭包，也禁止把所有领域方法塞进万能
+`Storage`。只有出现真实一致性需求时才建立该边界，并配套行为契约测试。
+
+当前迁移期间，`NewSession`、`NewMessage`、`StoredMessage` 等可作为端口输入/输出 DTO
+暂留在 `sagent-store`；新增的数据库列映射类型不得沿用这些 DTO 的名义泄漏到上层。
+M3 整理 SQLite adapter 时，应优先将表模型收回 adapter，并保持领域 Storage 方法和
+错误语义不变。
+
+### 3.4 读写权限最小化
 
 不同调用边界使用不同能力对象：
 
@@ -119,7 +162,7 @@ pub struct WriteStorage { /* 只有短操作写入能力 */ }
 - 搜索工具不能因为查询而获得写入能力；
 - 每个 Actor 的可变写入端口必须独占，不能在 Actor 之间共享。
 
-### 3.4 事务和状态不变量
+### 3.5 事务和状态不变量
 
 跨表业务操作必须由一个高层 Storage 方法表达，不得在上层拆成多次写调用：
 
@@ -132,7 +175,7 @@ pub struct WriteStorage { /* 只有短操作写入能力 */ }
 Storage 成功提交后才允许发布对应事件。worker、Provider 和工具执行器不得绕过 Actor
 直接写 Storage 或发布最终状态事件。
 
-### 3.5 后端隔离
+### 3.6 后端隔离
 
 只有后端 Adapter 可以依赖以下类型：
 
@@ -314,15 +357,17 @@ session_search_hides_rewound_messages
 1. 每个新增对象是否只有一个主要职责？
 2. Manager 是否只管理资源，没有承载业务 CRUD？
 3. Session 操作是否统一通过 `storage.session`？
-4. 上层是否完全隐藏 `Store`、SQL、数据库路径和连接池？
-5. 是否只在 bootstrap/selector 读取配置和创建 Manager？
-6. 读写权限是否按最小能力分离？
-7. 跨表操作是否仍是一个高层原子 Storage 方法？
-8. 是否删除了重复的 Factory、配置读取和自由函数路径？
-9. 文件、函数、测试文件是否超过规模阈值？
-10. 新增 public item 是否有中文 Rustdoc？
-11. 测试是否验证行为契约而非源码形状？
-12. 是否运行格式化、工作区测试、Clippy 和 diff 检查？
+4. Storage 是否按业务领域组织，而不是按数据库表组织？
+5. 表 Row Model 是否只存在于具体 Adapter，未泄漏到上层？
+6. 上层是否完全隐藏 `Store`、SQL、数据库路径和连接池？
+7. 是否只在 bootstrap/selector 读取配置和创建 Manager？
+8. 读写权限是否按最小能力分离？
+9. 跨表操作是否仍是一个高层原子 Storage 方法？
+10. 是否删除了重复的 Factory、配置读取和自由函数路径？
+11. 文件、函数、测试文件是否超过规模阈值？
+12. 新增 public item 是否有中文 Rustdoc？
+13. 测试是否验证行为契约而非源码形状？
+14. 是否运行格式化、工作区测试、Clippy 和 diff 检查？
 
 ## 10. 必跑命令
 

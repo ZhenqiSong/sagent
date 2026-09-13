@@ -52,12 +52,16 @@ impl StorageFactory for SqliteStorageFactory {
     /// 首次创建会打开读写 Store 并执行已有 migration；三个领域端口共享这一组受保护
     /// 的连接。每次调用都会重新打开 Store，避免 Actor 之间共享 SQLite 连接。
     fn create(&self) -> StorageResult<StorageDependencies> {
-        self.manager.open_actor_storage()
+        let storage = self.manager.open_actor_storage()?;
+        let (session, query, search) = storage.into_parts();
+        Ok(StorageDependencies::from_parts(session, query, search))
     }
 
     /// 创建只读 SQLite 查询与搜索端口，不执行 migration 或创建缺失数据库。
     fn create_readonly(&self) -> StorageResult<StorageReadDependencies> {
-        self.manager.open_read_storage()
+        let storage = self.manager.open_read_storage()?;
+        let (query, search) = storage.into_parts();
+        Ok(StorageReadDependencies::from_parts(query, search))
     }
 }
 

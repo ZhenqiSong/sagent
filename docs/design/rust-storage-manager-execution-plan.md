@@ -1,18 +1,18 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0、M1 已完成；当前仅完成过渡框架，尚未开始业务调用方迁移
+状态：M0、M1、M2 已完成；当前仅完成过渡框架，尚未开始业务调用方迁移
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
 
-当前 `sagent-store` 已有 `StorageFactory`、`StorageDependencies` 和
+当前 `sagent-store` 已有 `StorageFactory`、旧依赖聚合和
 `SqliteStorageManager` 的过渡实现，但依赖聚合仍主要围绕 Session：
 
-- `StorageDependencies` 暴露 `SessionStorage`、`SessionQueryStorage` 和 `SearchStorage`；
+- 旧 `StorageDependencies` 暴露写端口、查询端口和搜索端口；
 - `StorageManager` 的申请入口直接返回这些 Session 端口；
 - Runtime、RPC、CLI 和工具仍有长期持有 `StorageFactory` 的路径；
-- SQLite 的具体 Store 适配虽然位于 `sagent-store`，但业务调用方仍按底层端口组织代码。
+- SQLite 的具体数据库对象虽然位于 `sagent-store`，但业务调用方仍按底层端口组织代码。
 
 这使“存储管理”和“Session 业务存储”两个层次混在一起。目标不是建立一个包含所有 CRUD
 的万能 `Storage`，而是建立清晰的三层边界：
@@ -26,7 +26,7 @@
 ### 2.1 目标
 
 - 每个 Profile 只创建一个长期存活的 `StorageManager`；
-- Runtime、RPC、CLI 和工具不持有数据库路径、连接、连接池、`Store` 或原始 Factory；
+- Runtime、RPC、CLI 和工具不持有数据库路径、连接、连接池、`SqliteDatabase` 或原始 Factory；
 - 上层通过稳定的抽象对象访问业务域，例如 `storage.session.search(...)`；
 - SQLite、PostgreSQL 或其它后端只在 Manager/adapter 内部选择资源和连接策略；
 - 业务 Storage 负责领域表操作和事务边界，Manager 不承载 Session/Turn 业务规则；
@@ -69,24 +69,26 @@ ProfileConfig / StorageDescriptor
     SqliteSessionStorage / SqliteEventStorage
                 │
                 ▼
-          Store / SQLite
+      SqliteDatabase / SQLite
 ```
 
-Manager 只负责资源和能力装配；具体 Session 表、Message 表、Turn 表和搜索索引的读写由
-`SessionStorage` 完成。上层代码不应出现 `match StorageKind`、`Store::open_*` 或 SQL。
+Manager 只负责 Profile 级资源和能力装配；具体 Session 表、Message 表、Turn 表和搜索
+索引的读写由 `SessionStorage` 完成。`SqliteDatabase` 只属于 SQLite adapter，用于连接、
+事务和 schema 管理。上层代码不应出现 `match StorageKind`、`SqliteDatabase::open_*` 或 SQL。
 
 ## 4. 职责边界
 
 ### 4.1 `StorageManager`
 
-唯一职责是管理一个 Profile 的持久化后端资源，并按访问边界创建抽象存储对象。
+唯一职责是管理一个 Profile 的持久化后端资源，并按访问边界创建抽象业务存储对象。
+它是长期存在的 Profile 级管理器，不是某个数据库连接，也不是 Session 业务 Storage。
 
 负责：
 
 - 保存已验证的 `StorageDescriptor` 或后端资源句柄；
 - 连接、连接池、文件句柄的生命周期；
 - 健康检查和 migration 入口；
-- 创建 Actor、只读、短写和搜索所需的 `Storage` 对象；
+- 创建 Actor、只读和短写所需的 `Storage` 对象；搜索能力随 `ReadStorage.session` 提供；
 - 将后端错误映射为稳定的 `StorageError`。
 
 不负责：
@@ -129,7 +131,8 @@ storage.session.search(...)?;
 
 它内部组合写入端口和统一的 `ReadOnlySessionStorage`，后者再收纳查询与搜索端口；这些
 底层端口不再向 Runtime、RPC、CLI 或工具扩散。SQLite 的 `SqliteSessionStorage` 可以使用
-`Store`，PG 的实现可以使用连接池，二者对外保持同一业务方法和错误语义。
+`SqliteDatabase`，PG 的实现可以使用连接池，二者对外保持同一业务方法和错误语义。
+`SqliteDatabase` 只负责 SQLite 资源，不再承载对外的 Session 业务 API。
 
 ### 4.4 权限聚合
 
@@ -148,7 +151,8 @@ pub struct WriteStorage {
 - `open_actor_storage()` 返回完整的 `Storage`，但每个 Actor 必须独占自己的写入能力；
 - `open_read_storage()` 返回 `ReadStorage`，不包含任何写入方法；
 - `open_write_storage()` 返回 `WriteStorage`，不包含查询和搜索能力；
-- `open_search_storage()` 只有在搜索工具确实需要独立能力时保留。
+- 搜索工具从 `ReadStorage.session` 申请搜索能力；`open_search_storage()` 不作为长期
+  Manager 接口，迁移期如保留只能是只读兼容入口。
 
 读写对象可以共享 Manager 内部的连接池或后端资源，但不能共享可变的业务写入句柄。
 
@@ -161,12 +165,12 @@ pub trait StorageManager: Send + Sync {
     fn open_actor_storage(&self) -> StorageResult<Storage>;
     fn open_read_storage(&self) -> StorageResult<ReadStorage>;
     fn open_write_storage(&self) -> StorageResult<WriteStorage>;
-    fn open_search_storage(&self) -> StorageResult<Box<dyn SearchStorage>>;
+    fn initialize(&self) -> StorageResult<()>;
     fn health_check(&self) -> StorageResult<()>;
 }
 ```
 
-其中 `StorageResult` 是稳定的存储错误结果；接口签名不得出现 `Store`、数据库路径、
+其中 `StorageResult` 是稳定的存储错误结果；接口签名不得出现 `SqliteDatabase`、数据库路径、
 `rusqlite::Connection`、连接池或远程连接字符串。
 
 ### 5.2 Session 外观
@@ -175,9 +179,8 @@ pub trait StorageManager: Send + Sync {
 
 ```text
 SessionStorage（对外业务外观）
-    ├── SessionWritePort（内部写入能力）
-    ├── SessionReadPort（内部查询能力）
-    └── SessionSearchPort（内部搜索能力）
+    ├── SessionWriteStorage（内部写入能力）
+    └── ReadOnlySessionStorage（查询 + 搜索能力）
 ```
 
 对外方法使用业务意图命名，例如 `create_session`、`list_sessions`、`search_messages`、
@@ -225,24 +228,43 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
 工作：
 
 1. 将 `StorageManager` 改为返回抽象 `Storage`/`ReadStorage`/`WriteStorage`；
-2. Manager 只保存 Profile 级后端资源，不保存 Session 业务状态；
-3. 增加 `health_check` 和后续 migration 的明确入口；
-4. 保留 `StorageFactory` 仅作为构造边界，禁止在 Runtime/RPC/CLI 中长期持有；
-5. 记录同步/异步模型、线程安全、连接生命周期和取消策略。
+2. 明确 Manager 是每个 Profile 一个的长期资源管理器；它只保存已验证 descriptor 或
+   后端资源句柄，不保存 Session/Turn 业务状态；
+3. 让 `SqliteStorageManager` 管理或申请 `SqliteDatabase`，并在 `open_*` 中组装业务
+   Storage；Manager 本身不执行 Session 表操作；
+4. 增加 `initialize` 和 `health_check` 两个明确入口：前者允许创建数据库和执行 migration，
+   后者必须只读、无副作用，不创建数据库、不执行 migration；
+5. 保留 `StorageFactory` 仅作为构造边界，禁止在 Runtime/RPC/CLI 中长期持有；
+6. 删除长期的 `open_search_storage` 平级入口，搜索统一通过 `ReadStorage.session`；
+7. 记录同步/异步模型、线程安全、连接生命周期和取消策略，并明确每次申请的资源释放
+   和 Actor 独占写入语义。
 
 完成条件：Manager 接口不出现 Session CRUD，也不泄漏数据库实现细节。
+
+**执行记录（2026-09-13）：** `StorageManager` 已改为返回 `Storage`、`ReadStorage` 和
+`WriteStorage`，并新增 `initialize`/`health_check` 生命周期入口。`SqliteStorageManager`
+现在在 Manager 边界组装业务聚合；`StorageFactory` 仅在兼容层将新聚合拆回旧依赖，未向
+Runtime/RPC/CLI 扩散。当前接口是同步阻塞模型：Manager 为 `Send + Sync`，每次 `open_*`
+重新申请独立 SQLite Store，Actor 之间不共享可变写句柄；没有隐藏后台任务，取消由调用方
+的任务边界负责。`health_check` 只读且不会创建文件，`initialize` 明确表示允许创建和
+迁移数据库。新增 Manager 的完整存储、窄读写、初始化和缺失库健康检查测试。
 
 ### M3：实现 SQLite 业务 Storage
 
 工作：
 
 1. 将当前 SQLite 端口实现整理为 `SqliteSessionStorage`；
-2. 将 Session、Message、Turn 和搜索操作集中到该业务 Storage 的清晰子模块；
-3. 保持 `complete_turn`、`commit_tool_result` 等高层原子操作；
-4. Manager 负责创建资源和组装 `SqliteSessionStorage`，不直接执行表操作；
-5. 保证只读对象不会获得 SQLite 写入句柄。
+2. 将当前 `Store` 重命名并收窄为 adapter 内部的 `SqliteDatabase`，只保留连接、事务、
+   schema/migration 和底层执行职责，不再对外导出；
+3. 将 Session、Message、Turn 和搜索操作集中到 `SqliteSessionStorage` 的清晰子模块，
+   `SessionRow`、`TurnRow`、`MessageRow`、`EventRow` 等表 Model 只存在于 adapter 内部；
+4. 保持 `complete_turn`、`commit_tool_result` 等高层原子操作，由业务 Storage 负责跨表
+   事务边界，不能退化为上层多次 CRUD；
+5. Manager 负责创建资源和组装 `SqliteSessionStorage`，不直接执行表操作；
+6. 保证只读对象不会获得 SQLite 写入句柄。
 
-完成条件：SQLite 与 fake 实现都能构造同一抽象 `Storage`，既有 Store 行为契约不变。
+完成条件：SQLite 与 fake 实现都能构造同一抽象 `Storage`，既有 `SqliteDatabase` 行为契约
+不变。
 
 ### M4：建立唯一 selector/bootstrap 入口
 
@@ -263,7 +285,7 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
 1. `RuntimeDependencies` 持有 `Arc<dyn StorageManager>`，不再持有原始 Factory；
 2. 每个 SessionActor 通过 `open_actor_storage()` 获得独占 `Storage`；
 3. RPC 查询通过 `open_read_storage()` 获取 `ReadStorage`；
-4. Supervisor 不保存路径、连接或 Store；
+4. Supervisor 不保存路径、连接或 `SqliteDatabase`；
 5. Actor 仍是 Session 状态唯一写入者，worker 不得绕过 `storage.session` 写库。
 
 完成条件：Runtime 的 Session、Turn、恢复和事件测试全部通过，且无生产代码 Factory 传播。
@@ -274,12 +296,12 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
 
 1. RPC `SessionService` 只依赖 `ReadStorage.session`；
 2. CLI `SessionService` 只依赖 `Storage`/`ReadStorage`/`WriteStorage`，命令 handler 不接触
-   Store 或 Factory；
+   `SqliteDatabase` 或 Factory；
 3. `session_search` 使用 `storage.session.search(...)`，不单独打开 SQLite；
 4. Profile 创建和其它命令都通过 Manager 的窄入口申请能力；
 5. 工具只获得自身职责需要的读、写或搜索能力。
 
-完成条件：Runtime、RPC、CLI 和工具的生产路径不再导入 `Store` 或 `rusqlite`。
+完成条件：Runtime、RPC、CLI 和工具的生产路径不再导入 `SqliteDatabase` 或 `rusqlite`。
 
 ### M7：删除过渡路径
 
@@ -322,7 +344,7 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
 |---|---|
 | 为统一 API 把所有业务方法塞进 Manager | Manager 只创建领域 Storage，CRUD 留在 `storage.session` |
 | 读写对象意外共享可变端口 | 使用 `ReadStorage`/`WriteStorage` 和 Actor 独占依赖 |
-| SQLite 实现细节泄漏到上层 | 在 adapter 组装边界封装 `Store`，contract 检查上层依赖 |
+| SQLite 实现细节泄漏到上层 | 在 adapter 组装边界封装 `SqliteDatabase`，contract 检查上层依赖 |
 | Factory 与 Manager 长期并存 | 先 selector 切换，再删除上层 Factory 字段和闭包 |
 | 为了抽象破坏事务边界 | 以高层业务方法为原子单元，禁止拆成多次上层调用 |
 | 未来领域尚未存在却提前建空模块 | 只有出现真实调用方时才增加 Event/Cron/Memory Storage |

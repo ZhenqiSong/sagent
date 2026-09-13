@@ -48,6 +48,14 @@ impl StorageWriteDependencies {
 }
 
 impl StorageReadDependencies {
+    /// 从已装箱的只读端口创建兼容期依赖，供 adapter 在聚合转换时使用。
+    pub(crate) fn from_parts(
+        query: Box<dyn SessionQueryStorage>,
+        search: Box<dyn SearchStorage>,
+    ) -> Self {
+        Self { query, search }
+    }
+
     /// 用会话查询和全文搜索端口创建只读依赖集合。
     pub fn new<Q, H>(query: Q, search: H) -> Self
     where
@@ -77,6 +85,19 @@ impl StorageReadDependencies {
 }
 
 impl StorageDependencies {
+    /// 从已装箱的端口创建兼容期依赖，供 adapter 在聚合转换时使用。
+    pub(crate) fn from_parts(
+        session: Box<dyn SessionWriteStorage>,
+        query: Box<dyn SessionQueryStorage>,
+        search: Box<dyn SearchStorage>,
+    ) -> Self {
+        Self {
+            session,
+            query,
+            search,
+        }
+    }
+
     /// 用会话写入、会话查询和全文搜索三个领域端口创建依赖聚合。
     pub fn new<S, Q, H>(session: S, query: Q, search: H) -> Self
     where

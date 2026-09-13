@@ -11,8 +11,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use crate::{
-    ReadStorage, SqliteDatabase, Storage, StorageDependencies, StorageManager,
-    StorageReadDependencies, StorageResult, StorageWriteDependencies, WriteStorage,
+    ReadStorage, SqliteDatabase, Storage, StorageManager, StorageResult, WriteStorage,
+    sqlite_session_storage::{
+        read_storage_from_database, storage_from_database, write_storage_from_database,
+    },
 };
 
 /// 绑定单个 Profile SQLite 数据库的存储管理器。
@@ -60,25 +62,17 @@ impl SqliteStorageManager {
 impl StorageManager for SqliteStorageManager {
     /// 为 SessionActor 创建独立的 SQLite 完整业务存储。
     fn open_actor_storage(&self) -> StorageResult<Storage> {
-        Ok(Storage::from_dependencies(StorageDependencies::from(
-            self.open_writable_database()?,
-        )))
+        Ok(storage_from_database(self.open_writable_database()?))
     }
 
     /// 为查询和搜索创建只读 SQLite 业务存储。
     fn open_read_storage(&self) -> StorageResult<ReadStorage> {
-        Ok(ReadStorage::from_dependencies(
-            StorageReadDependencies::from(self.open_readonly_database()?),
-        ))
+        Ok(read_storage_from_database(self.open_readonly_database()?))
     }
 
     /// 为短生命周期写命令创建只写 SQLite 业务存储。
     fn open_write_storage(&self) -> StorageResult<WriteStorage> {
-        let dependencies = StorageDependencies::from(self.open_writable_database()?);
-        let (session, _query, _search) = dependencies.into_parts();
-        Ok(WriteStorage::from_dependencies(
-            StorageWriteDependencies::from_session(session),
-        ))
+        Ok(write_storage_from_database(self.open_writable_database()?))
     }
 
     /// 初始化 SQLite 数据库并执行当前 schema migration。

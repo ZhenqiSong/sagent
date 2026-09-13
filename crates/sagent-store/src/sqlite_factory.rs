@@ -1,27 +1,18 @@
-//! SQLite 存储工厂与端口适配边界。
+//! SQLite 存储工厂的兼容构造边界。
 //!
-//! 本模块保留兼容期 `StorageFactory`，并负责把具体 `SqliteDatabase` 映射到领域端口；新的运行
-//! 时组件应在 bootstrap 中将 Factory 转换为 `SqliteStorageManager`。上层不能通过端口
-//! 访问 SQLite 连接。
+//! 本模块只负责把数据库路径绑定到 `SqliteStorageManager`，并保留旧
+//! `StorageFactory` 接口的过渡实现。具体端口适配位于 `sqlite_session_storage`，业务
+//! 调用方不应通过 Factory 直接接触 SQLite 连接。
+//!
+//! 作者：SongZQ
 
-use std::{
-    path::PathBuf,
-    sync::{Arc, Mutex, MutexGuard},
-};
+use std::path::PathBuf;
 
 use anyhow::Result;
-use sagent_types::{
-    EventSequence, MessageId, SearchHit, SessionId, SessionSummary, StoredMessage, TurnId,
-};
 
 use crate::{
-    EventQuery, MessageQuery, MessageSearchQuery, MessageWindow, NewDaemonEvent, NewGeneration,
-    NewMessage, NewSession, SessionListQuery, SqliteDatabase, SqliteStorageManager, StartTurn,
-    StorageManager, StoredDaemonEvent, StoredGeneration, StoredRunningTurn,
-    ports::{
-        SearchStorage, SessionQueryStorage, SessionWriteStorage, StorageDependencies,
-        StorageFactory, StorageReadDependencies, StorageResult,
-    },
+    SqliteStorageManager, StorageDependencies, StorageFactory, StorageManager,
+    StorageReadDependencies, StorageResult,
 };
 
 /// 使用同一个数据库文件创建独立领域存储端口的 SQLite Factory。
@@ -40,7 +31,7 @@ impl SqliteStorageFactory {
     /// 将兼容期 Factory 转换为 Profile 作用域的存储管理器。
     ///
     /// 新的 bootstrap 应在选择后尽早调用此方法，使 Factory 只停留在构造边界；旧的
-    /// `StorageFactory` 实现仍保留，便于现有调用方在 manager 迁移期间继续工作。
+    /// `StorageFactory` 实现仍保留，便于现有调用方在 Manager 迁移期间继续工作。
     pub fn into_manager(self) -> SqliteStorageManager {
         self.manager
     }
@@ -49,8 +40,7 @@ impl SqliteStorageFactory {
 impl StorageFactory for SqliteStorageFactory {
     /// 创建独立的 SQLite 写入、查询和搜索端口。
     ///
-    /// 首次创建会打开读写数据库并执行已有 migration；三个领域端口共享这一组受保护
-    /// 的连接。每次调用都会重新打开数据库，避免 Actor 之间共享 SQLite 连接。
+    /// 端口由 Manager 在边界内组装；这里仅拆出旧依赖结构，以保持迁移期调用方兼容。
     fn create(&self) -> StorageResult<StorageDependencies> {
         let storage = self.manager.open_actor_storage()?;
         let (session, query, search) = storage.into_parts();
@@ -63,265 +53,6 @@ impl StorageFactory for SqliteStorageFactory {
         let (query, search) = storage.into_parts();
         Ok(StorageReadDependencies::from_parts(query, search))
     }
-}
-
-type SharedDatabase = Arc<Mutex<SqliteDatabase>>;
-
-/// 将一个 SQLite 数据库句柄包装为三个共享同一连接生命周期的领域端口。
-fn storage_dependencies_from_database(database: SqliteDatabase) -> StorageDependencies {
-    let shared = Arc::new(Mutex::new(database));
-    StorageDependencies::new(
-        SqliteSessionStorage {
-            database: Arc::clone(&shared),
-        },
-        SqliteSessionQueryStorage {
-            database: Arc::clone(&shared),
-        },
-        SqliteSearchStorage { database: shared },
-    )
-}
-
-/// 将兼容期的具体 SQLite 数据库句柄转换为领域端口聚合。
-///
-/// 该转换只在 adapter 边界使用，便于 Runtime 测试继续注入 Factory；生产代码
-/// 应优先直接注入 `StorageManager`，不再让上层依赖具体 SQLite 数据库。
-impl From<SqliteDatabase> for StorageDependencies {
-    fn from(database: SqliteDatabase) -> Self {
-        storage_dependencies_from_database(database)
-    }
-}
-
-/// 将只读 SQLite 数据库转换为查询与搜索端口，避免只读调用获得写入能力。
-impl From<SqliteDatabase> for StorageReadDependencies {
-    fn from(database: SqliteDatabase) -> Self {
-        let shared = Arc::new(Mutex::new(database));
-        StorageReadDependencies::new(
-            SqliteSessionQueryStorage {
-                database: Arc::clone(&shared),
-            },
-            SqliteSearchStorage { database: shared },
-        )
-    }
-}
-
-/// 将 SQLite 数据库的写入操作映射为 SessionWriteStorage 端口。
-struct SqliteSessionStorage {
-    database: SharedDatabase,
-}
-
-impl SessionWriteStorage for SqliteSessionStorage {
-    fn create_session(&mut self, session: &NewSession) -> StorageResult<()> {
-        lock_database(&self.database)?.create_session(session)
-    }
-
-    fn update_session_title(
-        &mut self,
-        session_id: &SessionId,
-        title: Option<&str>,
-        updated_at: &str,
-    ) -> StorageResult<bool> {
-        lock_database(&self.database)?.update_session_title(session_id, title, updated_at)
-    }
-
-    fn finish_session(
-        &mut self,
-        session_id: &SessionId,
-        end_reason: &str,
-        ended_at: &str,
-    ) -> StorageResult<bool> {
-        lock_database(&self.database)?.finish_session(session_id, end_reason, ended_at)
-    }
-
-    fn set_session_archived(
-        &mut self,
-        session_id: &SessionId,
-        archived: bool,
-        updated_at: &str,
-    ) -> StorageResult<bool> {
-        lock_database(&self.database)?.set_session_archived(session_id, archived, updated_at)
-    }
-
-    fn rewind_to_message(
-        &mut self,
-        session_id: &SessionId,
-        target_message_id: MessageId,
-        updated_at: &str,
-    ) -> StorageResult<crate::RewindResult> {
-        lock_database(&self.database)?.rewind_to_message(session_id, target_message_id, updated_at)
-    }
-
-    fn restore_rewound_from(
-        &mut self,
-        session_id: &SessionId,
-        target_message_id: MessageId,
-        updated_at: &str,
-    ) -> StorageResult<crate::RestoreResult> {
-        lock_database(&self.database)?.restore_rewound_from(
-            session_id,
-            target_message_id,
-            updated_at,
-        )
-    }
-
-    fn create_generation(&mut self, generation: &NewGeneration) -> StorageResult<()> {
-        lock_database(&self.database)?.create_generation(generation)
-    }
-
-    fn start_turn(
-        &mut self,
-        turn: &StartTurn,
-        user_message: &NewMessage,
-    ) -> StorageResult<MessageId> {
-        lock_database(&self.database)?.begin_turn(turn, user_message)
-    }
-
-    fn commit_assistant_tool_calls(
-        &mut self,
-        turn_id: &TurnId,
-        message: &NewMessage,
-        committed_at: &str,
-    ) -> StorageResult<MessageId> {
-        lock_database(&self.database)?.commit_assistant_tool_calls(turn_id, message, committed_at)
-    }
-
-    fn commit_tool_result(
-        &mut self,
-        turn_id: &TurnId,
-        message: &NewMessage,
-        completed_at: &str,
-    ) -> StorageResult<MessageId> {
-        lock_database(&self.database)?.commit_tool_result(turn_id, message, completed_at)
-    }
-
-    fn complete_turn(
-        &mut self,
-        turn_id: &TurnId,
-        assistant_message: &NewMessage,
-        completed_at: &str,
-    ) -> StorageResult<MessageId> {
-        lock_database(&self.database)?.complete_turn(turn_id, assistant_message, completed_at)
-    }
-
-    fn interrupt_turn(
-        &mut self,
-        turn_id: &TurnId,
-        reason: &str,
-        completed_at: &str,
-    ) -> StorageResult<()> {
-        lock_database(&self.database)?.interrupt_turn(turn_id, reason, completed_at)
-    }
-
-    fn fail_turn(
-        &mut self,
-        turn_id: &TurnId,
-        category: &str,
-        message: &str,
-        completed_at: &str,
-    ) -> StorageResult<()> {
-        lock_database(&self.database)?.fail_turn(turn_id, category, message, completed_at)
-    }
-
-    fn append_event(&mut self, event: &NewDaemonEvent) -> StorageResult<EventSequence> {
-        lock_database(&self.database)?.append_event(event)
-    }
-}
-
-/// 将 SQLite 数据库的只读操作映射为 SessionQueryStorage 端口。
-///
-/// 查询连接通过 Mutex 保护，因为 `rusqlite::Connection` 不能跨线程共享；锁只覆盖
-/// 单次查询，不会跨越 Runtime 的 await 或业务回调。
-struct SqliteSessionQueryStorage {
-    database: SharedDatabase,
-}
-
-impl SessionQueryStorage for SqliteSessionQueryStorage {
-    fn list_sessions(&self, query: &SessionListQuery) -> StorageResult<Vec<SessionSummary>> {
-        lock_database(&self.database)?.list_sessions_with(query)
-    }
-
-    fn get_session(&self, session_id: &SessionId) -> StorageResult<Option<SessionSummary>> {
-        lock_database(&self.database)?.get_session(session_id)
-    }
-
-    fn get_messages_for_model(
-        &self,
-        session_id: &SessionId,
-        query: &MessageQuery,
-    ) -> StorageResult<Vec<StoredMessage>> {
-        lock_database(&self.database)?.get_messages_for_model(session_id, query)
-    }
-
-    fn get_messages_for_display(
-        &self,
-        session_id: &SessionId,
-        query: &MessageQuery,
-    ) -> StorageResult<Vec<StoredMessage>> {
-        lock_database(&self.database)?.get_messages_for_display(session_id, query)
-    }
-
-    fn get_messages_around(
-        &self,
-        session_id: &SessionId,
-        message_id: MessageId,
-        window: u32,
-        include_inactive: bool,
-    ) -> StorageResult<Option<MessageWindow>> {
-        lock_database(&self.database)?.get_messages_around(
-            session_id,
-            message_id,
-            window,
-            include_inactive,
-        )
-    }
-
-    fn get_running_turn(&self, session_id: &SessionId) -> StorageResult<Option<StoredRunningTurn>> {
-        lock_database(&self.database)?.get_running_turn(session_id)
-    }
-
-    fn get_generation(
-        &self,
-        session_id: &SessionId,
-        generation: i64,
-    ) -> StorageResult<Option<StoredGeneration>> {
-        lock_database(&self.database)?.get_generation(session_id, generation)
-    }
-
-    fn events_since(&self, query: &EventQuery) -> StorageResult<Vec<StoredDaemonEvent>> {
-        lock_database(&self.database)?.events_since(query)
-    }
-
-    fn events_for_turn(
-        &self,
-        turn_id: &TurnId,
-        after_sequence: EventSequence,
-    ) -> StorageResult<Vec<StoredDaemonEvent>> {
-        lock_database(&self.database)?.events_for_turn(turn_id, after_sequence)
-    }
-
-    fn latest_event_sequence(
-        &self,
-        session_id: &SessionId,
-    ) -> StorageResult<Option<EventSequence>> {
-        lock_database(&self.database)?.latest_event_sequence(session_id)
-    }
-}
-
-/// 将 SQLite FTS 查询映射为 SearchStorage 端口。
-struct SqliteSearchStorage {
-    database: SharedDatabase,
-}
-
-impl SearchStorage for SqliteSearchStorage {
-    fn search_messages(&self, query: &MessageSearchQuery) -> StorageResult<Vec<SearchHit>> {
-        lock_database(&self.database)?.search_messages(query)
-    }
-}
-
-/// 将 Mutex 中毒转换成不泄漏实现细节的存储错误。
-fn lock_database(database: &SharedDatabase) -> StorageResult<MutexGuard<'_, SqliteDatabase>> {
-    database
-        .lock()
-        .map_err(|_| anyhow::anyhow!("SQLite 存储锁已中毒"))
 }
 
 #[cfg(test)]

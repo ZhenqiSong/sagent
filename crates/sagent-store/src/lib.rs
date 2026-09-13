@@ -8,18 +8,19 @@
 //! 作者：SongZQ
 //! 创建日期：2026-08-29
 
-pub mod event;
-pub mod message;
-pub mod migration;
+mod event;
+mod message;
+mod migration;
 pub mod ports;
-pub mod schema;
-pub mod search;
-pub mod session;
+mod schema;
+mod search;
+mod session;
 mod sqlite_database;
 pub mod sqlite_factory;
 pub mod sqlite_manager;
-pub mod turn;
-pub mod write;
+mod sqlite_session_storage;
+mod turn;
+mod write;
 
 pub use event::{
     EVENT_APPROVAL_REQUESTED, EVENT_APPROVAL_RESOLVED, EVENT_APPROVAL_TIMED_OUT,

@@ -1,7 +1,7 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0、M1、M2 已完成；M3.1（数据库句柄改名与基础模块拆分）已完成，业务 Storage 迁移仍未开始
+状态：M0、M1、M2、M3 已完成；Runtime/RPC/CLI/工具的长期依赖迁移仍属于 M5/M6
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
@@ -255,7 +255,8 @@ Runtime/RPC/CLI 扩散。当前接口是同步阻塞模型：Manager 为 `Send +
 
 1. 将当前 SQLite 端口实现整理为 `SqliteSessionStorage`；
 2. 将当前 `Store` 重命名并收窄为 adapter 内部的 `SqliteDatabase`，只保留连接、事务、
-   schema/migration 和底层执行职责，不再对外导出；
+   schema/migration 和底层执行职责，不向业务调用方导出；迁移期仅允许 fixture/兼容适配器
+   使用临时根导出；
 3. 将 Session、Message、Turn 和搜索操作集中到 `SqliteSessionStorage` 的清晰子模块，
    `SessionRow`、`TurnRow`、`MessageRow`、`EventRow` 等表 Model 只存在于 adapter 内部；
 4. 保持 `complete_turn`、`commit_tool_result` 等高层原子操作，由业务 Storage 负责跨表
@@ -266,11 +267,14 @@ Runtime/RPC/CLI 扩散。当前接口是同步阻塞模型：Manager 为 `Send +
 完成条件：SQLite 与 fake 实现都能构造同一抽象 `Storage`，既有 `SqliteDatabase` 行为契约
 不变。
 
-**执行记录（2026-09-14，M3.1）：** 已将原 `Store` 重命名为 `SqliteDatabase`，并把连接
-打开、访问模式、migration、健康检查和只读写入保护从 `lib.rs` 拆到独立的
-`sqlite_database.rs`。所有生产代码、契约测试和集成测试已更新为新名称，行为未迁移或改变。
-`SqliteDatabase` 暂时仍通过 crate 根导出，便于当前 fixture 和兼容适配器继续工作；业务
-Storage 迁移、表 Row Model 收敛及最终隐藏该类型仍属于 M3 后续事项。
+**执行记录（2026-09-14）：** 已将原 `Store` 重命名为 `SqliteDatabase`，并把连接打开、
+访问模式、migration、健康检查和只读写入保护从 `lib.rs` 拆到独立的
+`sqlite_database.rs`。SQLite 业务端口已进一步拆为 `sqlite_session_storage/` 下的写入、
+查询和搜索子模块；`SqliteStorageFactory` 只保留兼容构造职责，`SqliteStorageManager` 直接
+通过 adapter 组装 `Storage`、`ReadStorage` 和 `WriteStorage`，不再经由旧依赖聚合创建新对象。
+Session、Message、Turn、Event 和 FTS 的 SQL 实现模块已收回 crate 内部可见性，外部只看到
+领域 DTO 与业务 Storage 外观；既有高层原子操作和只读边界保持不变。`SqliteDatabase` 根导出
+暂为 fixture/兼容适配器保留，待 M5/M6 完成上层测试与工具迁移后删除该过渡导出。
 
 ### M4：建立唯一 selector/bootstrap 入口
 

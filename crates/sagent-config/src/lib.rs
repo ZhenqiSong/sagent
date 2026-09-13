@@ -6,6 +6,7 @@
 pub mod paths;
 pub mod profile;
 pub mod provider;
+pub mod storage;
 
 pub use paths::{SagentPaths, resolve_active_paths, resolve_paths};
 pub use profile::{
@@ -14,5 +15,7 @@ pub use profile::{
 };
 pub use provider::{
     ProviderConfig, PublicConfig, ResolvedProvider, ResolvedProviderConfig, read_public_config,
-    resolve_openai_provider, resolve_provider_config, resolve_workspace,
+    resolve_openai_provider, resolve_provider_config, resolve_storage_descriptor,
+    resolve_workspace,
 };
+pub use storage::{StorageDescriptor, StorageKind};

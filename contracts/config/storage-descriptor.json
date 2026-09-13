@@ -1,0 +1,15 @@
+{
+  "contract_version": 1,
+  "kind": "storage_descriptor",
+  "input": {
+    "yaml": "kind: sqlite\npath: data/state.db\n"
+  },
+  "expected": {
+    "kind": "sqlite",
+    "path": "data/state.db",
+    "has_connection_env": false,
+    "schema": null,
+    "namespace": null,
+    "read_only": false
+  }
+}

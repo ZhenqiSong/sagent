@@ -14,10 +14,14 @@ use sagent_provider::OpenAiCompatibleProvider;
 use serde::{Deserialize, Serialize};
 
 use crate::SagentPaths;
+use crate::storage::StorageDescriptor;
 
 /// 当前 Profile 中 Provider 配置的 YAML 表示。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProviderConfig {
+    /// Profile 的持久化后端描述；缺省时由 StorageDescriptor 使用本地 SQLite。
+    #[serde(default)]
+    pub storage: Option<StorageDescriptor>,
     /// 例如 `openai-compatible`，也可以是 `providers` 下的自定义 key。
     pub provider: Option<String>,
     /// 可以是简单字符串，也可以是包含 `name`/`model` 等字段的对象。
@@ -165,6 +169,16 @@ pub fn read_provider_config(paths: &SagentPaths) -> Result<ProviderConfig> {
         .with_context(|| format!("解析 Provider 配置失败：{}", paths.config_yaml.display()))
 }
 
+/// 读取并校验 Profile 的存储意图，不打开数据库或读取连接串内容。
+///
+/// 当前 Runtime 仍使用既有 SQLite bootstrap；在远程 StorageFactory 接入前，Bootstrap
+/// 必须显式处理 `StorageKind::Remote`，不能因本函数成功而默默回退到本地数据库。
+pub fn resolve_storage_descriptor(paths: &SagentPaths) -> Result<StorageDescriptor> {
+    let descriptor = read_provider_config(paths)?.storage.unwrap_or_default();
+    descriptor.validate()?;
+    Ok(descriptor)
+}
+
 /// 读取并校验当前 Profile 的公开配置摘要。
 ///
 /// 先复用严格的 Provider 反序列化，以免 RPC 对损坏 YAML 伪造成功；再单独检查原始
@@ -188,6 +202,7 @@ pub fn read_public_config(paths: &SagentPaths) -> Result<PublicConfig> {
                 if !matches!(
                     key,
                     "provider"
+                        | "storage"
                         | "model"
                         | "base_url"
                         | "api_key_env"
@@ -396,7 +411,8 @@ pub fn resolve_openai_provider(
 #[cfg(test)]
 mod tests {
     use super::{
-        read_public_config, resolve_openai_provider, resolve_provider_config, resolve_workspace,
+        read_public_config, resolve_openai_provider, resolve_provider_config,
+        resolve_storage_descriptor, resolve_workspace,
     };
     use crate::{normalize_profile_name, resolve_paths};
     use std::{fs, path::PathBuf};
@@ -565,6 +581,25 @@ mod tests {
             "workspace 是已知配置字段，不应误报 unknown"
         );
         fs::remove_dir_all(root).expect("应能清理 workspace fixture");
+    }
+
+    #[test]
+    fn storage_descriptor_is_read_without_opening_a_database() {
+        let root = test_root("storage-descriptor");
+        // 远程 descriptor 只验证配置意图；解析过程不应因为旧 bootstrap 而创建 state.db。
+        fs::write(
+            root.join("config.yaml"),
+            "storage:\n  kind: remote\n  connection_env: SAGENT_DB_URL\n",
+        )
+        .expect("应能写入 storage descriptor 配置");
+        let paths = crate::resolve_paths(Some(&root), None).expect("应能解析 Profile 路径");
+
+        let descriptor = resolve_storage_descriptor(&paths).expect("descriptor 应能解析");
+
+        assert_eq!(descriptor.kind, crate::StorageKind::Remote);
+        assert_eq!(descriptor.connection_env.as_deref(), Some("SAGENT_DB_URL"));
+        assert!(!root.join("state.db").exists());
+        fs::remove_dir_all(root).expect("应能清理 storage descriptor fixture");
     }
 
     #[test]

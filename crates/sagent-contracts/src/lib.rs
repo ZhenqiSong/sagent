@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use sagent_agent::{PromptToolCall, Transcript};
-use sagent_config::normalize_profile_name;
+use sagent_config::{StorageDescriptor, StorageKind, normalize_profile_name};
 use sagent_protocol::{ClientHelloParams, negotiate_hello};
 use sagent_store::Store;
 use sagent_tools::{CommandRisk, ToolDefinition, ToolRegistry, classify_command};
@@ -84,6 +84,7 @@ fn run_fixture(path: &Path) -> Result<()> {
         "tool_registry" => tool_registry(fixture.input)?,
         "command_policy" => command_policy(fixture.input)?,
         "profile_name" => profile_name(fixture.input)?,
+        "storage_descriptor" => storage_descriptor(fixture.input)?,
         "store_schema" => store_schema(fixture.input)?,
         other => bail!("unknown contract kind {other:?}"),
     };
@@ -178,6 +179,29 @@ fn profile_name(input: Value) -> Result<Value> {
     }
     let input: Input = serde_json::from_value(input)?;
     Ok(json!({"normalized": normalize_profile_name(&input.value)?.as_str()}))
+}
+
+/// 验证存储 descriptor 的配置边界，并只输出不含秘密的规范化摘要。
+fn storage_descriptor(input: Value) -> Result<Value> {
+    #[derive(Deserialize)]
+    struct Input {
+        yaml: String,
+    }
+    let input: Input = serde_json::from_value(input)?;
+    let descriptor: StorageDescriptor = serde_yaml::from_str(&input.yaml)?;
+    descriptor.validate()?;
+    let kind = match descriptor.kind {
+        StorageKind::Sqlite => "sqlite",
+        StorageKind::Remote => "remote",
+    };
+    Ok(json!({
+        "kind": kind,
+        "path": descriptor.path.map(|path| path.to_string_lossy().into_owned()),
+        "has_connection_env": descriptor.connection_env.is_some(),
+        "schema": descriptor.schema,
+        "namespace": descriptor.namespace,
+        "read_only": descriptor.read_only,
+    }))
 }
 
 fn store_schema(input: Value) -> Result<Value> {

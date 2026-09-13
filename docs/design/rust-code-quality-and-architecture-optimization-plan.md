@@ -1,6 +1,6 @@
 # Sagent 代码可读性、职责边界与可替换性优化计划
 
-状态：待执行  
+状态：执行中（R0–R2 已完成；R3–R8 待执行）
 范围：独立 Rust 项目 `sagent` 的既有 Phase 0–2 实现  
 前置：Phase 0–2 已完成；本计划是进入 Phase 3 前的结构治理，不交付 MCP、memory、cron、delegation、Desktop/Web 或新 Provider 功能。
 
@@ -173,6 +173,20 @@ terminal 与 stdio transport 补充“负责/不负责”的模块地图。既�
 
 ### R2：Runtime 流程与对象职责整理
 
+状态：已完成（2026-09-13）。
+
+**完成记录：** `SessionSupervisor` 现在只负责 SessionActor 的生命周期、mailbox、事件
+订阅和收口；`RuntimeDependencies` 聚合 Store、模型、工具和策略依赖，并通过枚举消除
+Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、计划、持久化、worker
+启动、active state 安装和事件发布拆分；`handle_worker_event` 已按流式增量、用量、工具调用、
+工具结果和终态/失败拆分。Store 提交后发布事件、取消先传播 token 再收口任务、Actor 单写
+以及迟到事件丢弃等不变量均保留，Actor/Provider/tool/fault-matrix/recovery 测试和工作区
+格式、Clippy、Rustdoc 检查全部通过。
+
+本阶段的 resolution 使用启动时冻结的模型/工具运行模式和 generation 校验；更完整的
+`CapabilityResolver`、`GenerationResolution` 显式解析对象按计划移交 R4，避免在 R2 与能力
+解析重构重复建模。
+
 **目的：** 使 Runtime 的主路径可按业务步骤阅读，同时保持 Actor 单写和取消语义。
 
 **工作：**
@@ -191,7 +205,10 @@ terminal 与 stdio transport 补充“负责/不负责”的模块地图。既�
 迟到工具结果、interrupt 竞争、worker panic 和恢复路径仍有契约覆盖；核心编排函数不超过
 100 行，必要例外写明原子性理由。
 
-### R3：持久化端x口与 SQLite 实现隔离
+### R3：持久化端口与 SQLite 实现隔离
+
+当前进度：R3.1 `StorageDescriptor` 已完成；R3.2 `provider.rs` 配置职责拆分已纳入计划；
+`StorageFactory`、领域存储端口与 SQLite 迁移尚未开始。
 
 **目的：** 使所有业务持久化经由统一边界，并为本地/远程后端配置切换建立真实路径。
 
@@ -202,25 +219,31 @@ terminal 与 stdio transport 补充“负责/不负责”的模块地图。既�
 
 1. 定义 `StorageDescriptor`：至少支持 `sqlite` 与未来远程后端所需的 kind、连接引用、
    schema/namespace、只读策略；秘密只能引用环境变量或秘密提供者；
-2. 将 `SagentPaths.state_db` 降级为 SQLite 默认路径，不再视为唯一存储策略；
-3. 设计 `StorageFactory`、`SessionStorage`、`SessionQueryStorage`、`SearchStorage` 的最小
+2. 拆分当前 `sagent-config/src/provider.rs` 的混合职责，保持行为不变并保留中文 Rustdoc：
+   `config_reader.rs` 负责 YAML 反序列化，`provider_resolver.rs` 负责 Provider 解析与实例化，
+   `credentials.rs` 负责 `.env`/环境变量读取，`workspace.rs` 负责 workspace 路径解析，
+   `storage.rs` 负责 `StorageDescriptor`，公开配置摘要只保留在独立的 `public_config.rs`；
+   拆分期间不得让配置层打开数据库、创建 Provider/HTTP 客户端或启动后台任务；
+3. 将 `SagentPaths.state_db` 降级为 SQLite 默认路径，不再视为唯一存储策略；
+4. 设计 `StorageFactory`、`SessionStorage`、`SessionQueryStorage`、`SearchStorage` 的最小
    领域 API。`start_turn`、`commit_tool_result`、`complete_turn`、`interrupt_turn` 等必须
    保持单个高层原子操作；
-4. 先做技术 spike 决定接口的同步/异步模型：远程后端需要 async；SQLite 实现必须在不破坏
+5. 先做技术 spike 决定接口的同步/异步模型：远程后端需要 async；SQLite 实现必须在不破坏
    Actor 单写和事务期间无 await 的前提下适配。spike 记录线程安全、连接生命周期、取消和
    transaction boundary 的选择；
-5. 将现有 `Store` SQLite 逻辑迁为第一实现。可保留 `sagent-store` 作为端口 crate 并新增
+6. 将现有 `Store` SQLite 逻辑迁为第一实现。可保留 `sagent-store` 作为端口 crate 并新增
    `sagent-store-sqlite`，或将端口与实现置于清晰子模块；选择以依赖图最小、无循环依赖为准；
-6. 逐步迁移 Runtime、RPC session read service、CLI 管理命令与 `session_search`，禁止新的
+7. 逐步迁移 Runtime、RPC session read service、CLI 管理命令与 `session_search`，禁止新的
    上层代码直接导入 SQLite 类型；
-7. 以第二个测试实现验证边界：内存/recording storage 或独立 fake；它必须验证事务调用的
+8. 以第二个测试实现验证边界：内存/recording storage 或独立 fake；它必须验证事务调用的
    原子语义，而不是模拟 SQL 细节；
-8. 单独制定远程后端功能计划，涵盖 migration、全文搜索能力差异、连接池、重试、并发写、
+9. 单独制定远程后端功能计划，涵盖 migration、全文搜索能力差异、连接池、重试、并发写、
    session lease/乐观版本和数据导入；本工作包不承诺实现该后端。
 
 **验收：** Runtime、CLI、RPC 和工具不再直接依赖 `rusqlite` 或 `Store` 具体实现；SQLite
 行为契约不变；将 fake/recording storage 注入 actor 可覆盖 start/commit/complete/interrupt；
-`storage.kind = sqlite` 保持当前默认行为。
+`storage.kind = sqlite` 保持当前默认行为；配置解析、Provider 实例化、凭据读取、workspace
+解析和公开配置摘要均能从独立模块按职责定位，且配置解析不产生基础设施副作用。
 
 ### R4：配置、Provider 与每回合能力快照
 

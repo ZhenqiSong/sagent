@@ -11,6 +11,7 @@ use rusqlite::{Connection, OpenFlags};
 pub mod event;
 pub mod message;
 pub mod migration;
+pub mod ports;
 pub mod schema;
 pub mod search;
 pub mod session;
@@ -25,6 +26,9 @@ pub use event::{
 };
 pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
+pub use ports::{
+    SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageResult,
+};
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
 pub use session::SessionListQuery;

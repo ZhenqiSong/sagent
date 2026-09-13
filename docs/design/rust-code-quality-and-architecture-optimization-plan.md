@@ -207,9 +207,9 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 
 ### R3：持久化端口与 SQLite 实现隔离
 
-当前进度：R3.1 `StorageDescriptor`、R3.2 `provider.rs` 配置职责拆分以及 SQLite 默认路径
-降级已完成；
-`StorageFactory`、领域存储端口与 SQLite 迁移尚未开始。
+当前进度：R3.1 `StorageDescriptor`、R3.2 `provider.rs` 配置职责拆分、SQLite 默认路径
+降级以及 R3.3 最小领域存储端口定义已完成；`StorageFactory`、SQLite adapter 迁移和
+Runtime/RPC/CLI 上层切换尚未开始。
 
 **R3.2 完成记录：** 配置读取、Profile 聚合快照、Provider 数据模型、Provider resolver、
 凭据读取、workspace 解析和公开配置摘要分别位于独立 sibling；`lib.rs` 直接公开这些稳定
@@ -226,6 +226,12 @@ OpenAI-compatible client；后续 R4 的 ProviderFactory 将把该副作用移�
 根据同一 `ProfileConfig` 解析自定义 SQLite 路径，Runtime、CLI 和会话搜索均使用解析后的
 路径。远程、schema/namespace 和只读策略在 StorageFactory 接入前继续 fail-closed，不会静默
 回退到默认文件。
+
+**R3.3 初始定义记录：** `sagent-store::ports` 按职责拆分为 `SessionStorage`、
+`SessionQueryStorage` 和 `SearchStorage`，并以 `StorageDependencies` 聚合三个领域端口。
+端口只依赖业务 DTO 和强类型 ID，不暴露 SQLite 路径、连接、连接池或 `Store`；Turn 开始、
+工具结果提交、完成、中断和失败等方法保持高层原子操作。当前接口先保留同步调用模型以
+保持 Actor 单写和事务期间无 `await`，R3 后续技术 spike 再决定远程后端的异步适配方式。
 
 **目的：** 使所有业务持久化经由统一边界，并为本地/远程后端配置切换建立真实路径。
 

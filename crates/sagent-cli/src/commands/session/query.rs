@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use sagent_store::{MessageQuery, MessageSearchQuery, SessionListQuery, Store};
 use sagent_types::{SearchHit, SessionDetail, SessionId, SessionSummary};
 
-use super::current_paths;
+use super::current_database_path;
 /// 从当前 profile 读取会话列表，供文本和 JSON 输出共用。
 pub fn list(
     home: Option<&Path>,
@@ -18,9 +18,9 @@ pub fn list(
     offset: u32,
     include_archived: bool,
 ) -> Result<Vec<SessionSummary>> {
-    let paths = current_paths(home, profile_override)?;
-    let store = Store::open_readonly(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    let database_path = current_database_path(home, profile_override)?;
+    let store = Store::open_readonly(&database_path)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
     store.list_sessions_with(&SessionListQuery {
         include_archived,
         limit,
@@ -53,9 +53,9 @@ pub fn show(
     limit: u32,
     offset: u32,
 ) -> Result<SessionDetail> {
-    let paths = current_paths(home, profile_override)?;
-    let store = Store::open_readonly(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    let database_path = current_database_path(home, profile_override)?;
+    let store = Store::open_readonly(&database_path)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
     let session_id = SessionId::new(session_id);
     let session = store
         .get_session(&session_id)?
@@ -109,9 +109,9 @@ pub fn search(
     limit: u32,
     session_id: Option<&str>,
 ) -> Result<Vec<SearchHit>> {
-    let paths = current_paths(home, profile_override)?;
-    let store = Store::open_readonly(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    let database_path = current_database_path(home, profile_override)?;
+    let store = Store::open_readonly(&database_path)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
     let mut search = MessageSearchQuery::new(query);
     search.limit = limit;
     search.session_id = session_id.map(SessionId::new);

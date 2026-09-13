@@ -458,6 +458,34 @@ fn missing_database_is_initialized_for_the_runtime_daemon() {
 }
 
 #[test]
+fn configured_sqlite_path_replaces_default_database() {
+    let home = test_home("custom-sqlite-path");
+    remove(&home);
+    fs::create_dir_all(&home).expect("应能创建空 home");
+    fs::write(
+        home.join("config.yaml"),
+        "storage:\n  kind: sqlite\n  path: data/custom.db\n",
+    )
+    .expect("应能写入自定义 SQLite 配置");
+
+    let output = run_rpc(
+        &home,
+        None,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.list\",\"params\":{}}\n",
+    );
+    assert!(
+        output.status.success(),
+        "自定义 SQLite 路径应能启动 daemon，stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let frames = output_frames(&output.stdout);
+    assert_eq!(frames[1]["result"]["sessions"], json!([]));
+    assert!(home.join("data").join("custom.db").is_file());
+    assert!(!home.join("state.db").exists());
+    remove(&home);
+}
+
+#[test]
 fn named_profile_reads_its_own_database() {
     let root = test_home("named-profile");
     remove(&root);

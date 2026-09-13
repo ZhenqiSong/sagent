@@ -13,7 +13,7 @@ use sagent_store::{NewSession, Store};
 use sagent_types::SessionId;
 use uuid::Uuid;
 
-use super::current_paths;
+use super::current_database_path;
 /// 创建会话并返回写入数据库的 ID。
 pub fn create(
     home: Option<&Path>,
@@ -36,9 +36,9 @@ pub fn create_with_id(
     model: Option<String>,
     started_at: String,
 ) -> Result<SessionId> {
-    let paths = current_paths(home, profile_override)?;
-    let mut store = Store::open_readwrite(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    let database_path = current_database_path(home, profile_override)?;
+    let mut store = Store::open_readwrite(&database_path)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
     store.create_session(&NewSession {
         id: session_id.clone(),
         source: Some("cli".to_owned()),

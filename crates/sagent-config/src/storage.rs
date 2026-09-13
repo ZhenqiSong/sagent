@@ -8,7 +8,10 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
-use crate::profile_config::ProfileConfig;
+use crate::{SagentPaths, profile_config::ProfileConfig};
+
+/// SQLite 未显式配置文件路径时使用的 Profile 内默认文件名。
+pub const DEFAULT_SQLITE_DATABASE_FILE: &str = "state.db";
 
 /// 当前配置能够表达的存储后端类别。
 #[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq)]
@@ -57,22 +60,45 @@ pub fn resolve_storage_descriptor_from_config(config: &ProfileConfig) -> Result<
     Ok(config.storage.clone())
 }
 
+/// 根据 Profile 快照解析当前 SQLite 数据库文件。
+///
+/// 未显式配置 SQLite 文件时使用本模块的默认文件名；相对路径固定锚定当前 Profile，
+/// 绝对路径保留用户的明确选择。本函数只做路径计算，不创建目录、文件或数据库连接。
+pub fn resolve_sqlite_database_path(
+    paths: &SagentPaths,
+    config: &ProfileConfig,
+) -> Result<PathBuf> {
+    let descriptor = &config.storage;
+    descriptor.validate()?;
+    if descriptor.kind != StorageKind::Sqlite {
+        bail!("当前 bootstrap 只支持 sqlite storage")
+    }
+
+    Ok(descriptor.path.as_ref().map_or_else(
+        || paths.sagent_home.join(DEFAULT_SQLITE_DATABASE_FILE),
+        |path| {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                paths.sagent_home.join(path)
+            }
+        },
+    ))
+}
+
 /// 检查当前 SQLite bootstrap 是否能完整执行 Profile 的 storage 意图。
 ///
-/// StorageFactory 尚未接入前，Runtime 只能使用默认 `state.db` 的读写 SQLite；遇到远程、
-/// 自定义路径、schema/namespace 或只读策略时必须失败关闭，避免用户配置被静默忽略。
+/// StorageFactory 尚未接入前，Runtime 只能使用 SQLite 的读写模式；遇到远程、
+/// schema/namespace 或只读策略时必须失败关闭，避免用户配置被静默忽略。自定义 SQLite
+/// 路径由 `resolve_sqlite_database_path` 负责锚定和使用。
 pub fn ensure_legacy_bootstrap_supported(config: &ProfileConfig) -> Result<()> {
     let descriptor = &config.storage;
     descriptor.validate()?;
     if descriptor.kind != StorageKind::Sqlite {
         bail!("remote storage 后端尚未实现")
     }
-    if descriptor.path.is_some()
-        || descriptor.schema.is_some()
-        || descriptor.namespace.is_some()
-        || descriptor.read_only
-    {
-        bail!("当前 SQLite bootstrap 仅支持默认 state.db 的读写模式")
+    if descriptor.schema.is_some() || descriptor.namespace.is_some() || descriptor.read_only {
+        bail!("当前 SQLite bootstrap 仅支持读写模式，schema/namespace 尚未实现")
     }
     Ok(())
 }
@@ -103,13 +129,6 @@ impl StorageDescriptor {
             }
         }
         Ok(())
-    }
-
-    /// 返回 SQLite 使用的相对或绝对路径；未配置时保持默认文件名。
-    pub fn sqlite_path(&self) -> Option<&std::path::Path> {
-        (self.kind == StorageKind::Sqlite)
-            .then_some(self.path.as_deref())
-            .flatten()
     }
 }
 
@@ -256,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_storage_options_unsupported_by_legacy_bootstrap() {
+    fn accepts_custom_sqlite_path_for_legacy_bootstrap() {
         let config = ProfileConfig {
             storage: StorageDescriptor {
                 kind: StorageKind::Sqlite,
@@ -277,7 +296,43 @@ mod tests {
             unknown_fields: Vec::new(),
         };
 
-        assert!(super::ensure_legacy_bootstrap_supported(&config).is_err());
+        assert!(super::ensure_legacy_bootstrap_supported(&config).is_ok());
+    }
+
+    #[test]
+    fn resolves_default_and_profile_relative_sqlite_paths() {
+        let root = test_root("sqlite-path");
+        let paths = resolve_paths(Some(&root), None).expect("应能解析 Profile 路径");
+
+        let default_config = ProfileConfig {
+            storage: StorageDescriptor::default(),
+            provider: crate::provider_config::ProviderDescriptor {
+                provider: None,
+                model: None,
+                base_url: None,
+                api_key_env: None,
+                providers: std::collections::BTreeMap::new(),
+            },
+            workspace: crate::provider_config::WorkspaceDescriptor::default(),
+            unknown_fields: Vec::new(),
+        };
+        assert_eq!(
+            super::resolve_sqlite_database_path(&paths, &default_config).unwrap(),
+            root.join("state.db")
+        );
+
+        let custom_config = ProfileConfig {
+            storage: StorageDescriptor {
+                path: Some("data/custom.db".into()),
+                ..StorageDescriptor::default()
+            },
+            ..default_config
+        };
+        assert_eq!(
+            super::resolve_sqlite_database_path(&paths, &custom_config).unwrap(),
+            root.join("data/custom.db")
+        );
+        fs::remove_dir_all(root).expect("应能清理 storage path fixture");
     }
 
     #[test]
@@ -294,6 +349,7 @@ mod tests {
         let config = load_profile_config(&paths).expect("应能加载 storage 快照");
         let descriptor = super::resolve_storage_descriptor_from_config(&config)
             .expect("descriptor 应能从快照解析");
+        assert!(super::ensure_legacy_bootstrap_supported(&config).is_err());
 
         assert_eq!(descriptor.kind, StorageKind::Remote);
         assert_eq!(descriptor.connection_env.as_deref(), Some("SAGENT_DB_URL"));

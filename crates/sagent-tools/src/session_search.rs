@@ -64,21 +64,21 @@ impl Default for SessionSearchLimits {
     }
 }
 
-/// 绑定单个 Profile state.db 的只读搜索服务。
+/// 绑定单个 Profile SQLite 文件的只读搜索服务。
 ///
 /// 服务只保存绝对数据库路径，不保存可跨调用共享的 SQLite Connection；每次搜索短暂
 /// 打开只读 Store，使不同 Actor/连接不会共享非线程安全连接，也不能通过参数切换 Profile。
 #[derive(Debug, Clone)]
 pub struct SessionSearchService {
-    state_db: Arc<PathBuf>,
+    database_path: Arc<PathBuf>,
     limits: SessionSearchLimits,
 }
 
 impl SessionSearchService {
     /// 创建 Profile 固定的会话搜索服务。
-    pub fn new(state_db: impl Into<PathBuf>, limits: SessionSearchLimits) -> Self {
+    pub fn new(database_path: impl Into<PathBuf>, limits: SessionSearchLimits) -> Self {
         Self {
-            state_db: Arc::new(state_db.into()),
+            database_path: Arc::new(database_path.into()),
             limits,
         }
     }
@@ -108,7 +108,7 @@ impl SessionSearchService {
             include_inactive: false,
             limit,
         };
-        let path = (*self.state_db).clone();
+        let path = (*self.database_path).clone();
         let cancellation_for_query = cancellation.clone();
         let query_task = tokio::task::spawn_blocking(move || {
             if cancellation_for_query.is_cancelled() {

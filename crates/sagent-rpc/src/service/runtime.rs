@@ -24,7 +24,7 @@ use uuid::Uuid;
 /// `prompt.submit` 经 `SessionSupervisor` 启动，避免空会话占用 mailbox 或 Provider。
 pub struct RuntimeService {
     sessions: SessionService,
-    state_db: PathBuf,
+    database_path: PathBuf,
     model: String,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
@@ -39,7 +39,7 @@ pub struct RuntimeService {
 /// Store，Actor 则始终通过 Supervisor 获取自己的独占连接。
 #[derive(Clone)]
 pub struct RuntimePromptContext {
-    state_db: PathBuf,
+    database_path: PathBuf,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
 }
@@ -48,7 +48,7 @@ impl RuntimeService {
     /// 将已初始化的只读服务、Actor factory 和当前模型组合为 RPC 适配层。
     pub fn new(
         sessions: SessionService,
-        state_db: PathBuf,
+        database_path: PathBuf,
         model: String,
         supervisor: Arc<SessionSupervisor>,
         provider_ready: bool,
@@ -56,7 +56,7 @@ impl RuntimeService {
     ) -> Self {
         Self {
             sessions,
-            state_db,
+            database_path,
             model,
             supervisor,
             provider_ready,
@@ -72,7 +72,7 @@ impl RuntimeService {
     /// 提取不含共享 SQLite Connection 的 prompt 运行时快照。
     pub fn prompt_context(&self) -> RuntimePromptContext {
         RuntimePromptContext {
-            state_db: self.state_db.clone(),
+            database_path: self.database_path.clone(),
             supervisor: self.supervisor(),
             provider_ready: self.provider_ready,
         }
@@ -99,7 +99,7 @@ impl RuntimePromptContext {
 
     /// 在启动 Actor 前验证会话已持久化到当前 Profile。
     pub fn require_session(&self, session_id: &SessionId) -> Result<(), ProtocolError> {
-        let store = Store::open_readonly(&self.state_db).map_err(store_error)?;
+        let store = Store::open_readonly(&self.database_path).map_err(store_error)?;
         if store
             .get_session(session_id)
             .map_err(store_error)?
@@ -127,7 +127,7 @@ impl RuntimePromptContext {
 
         let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
         self.require_session(&params.session_id)?;
-        let store = Store::open_readonly(&self.state_db).map_err(store_error)?;
+        let store = Store::open_readonly(&self.database_path).map_err(store_error)?;
         let events = store
             .events_since(&EventQuery {
                 session_id: params.session_id.clone(),
@@ -202,7 +202,7 @@ impl SessionCreateService for RuntimeService {
 
         // 创建空会话不触碰 Supervisor：这里的短生命周期 Store 在提交后立即释放，
         // 之后首次 prompt.submit 才由该 session 唯一 Actor 打开独占读写连接。
-        let mut store = Store::open_readwrite(&self.state_db).map_err(store_error)?;
+        let mut store = Store::open_readwrite(&self.database_path).map_err(store_error)?;
         store
             .create_session(&NewSession {
                 id: session_id.clone(),

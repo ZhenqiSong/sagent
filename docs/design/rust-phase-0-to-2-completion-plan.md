@@ -207,8 +207,9 @@ limit 和明确的当前 Profile/权限范围。
 只调用现有 FTS repository；请求只接受 query、limit 和可选 session_id，未知字段被拒绝，
 结果上限收敛为服务限制。CJK/emoji 复用 Store 的 LIKE/FTS 分支，输出仅含稳定
 session/message 引用与最多 500 字符 snippet；空 query、预取消、缺失 Store/FTS 和工具未绑定
-均 fail-closed。Runtime 通过显式 `with_session_search(state_db)` 绑定当前 Profile，未绑定时
-不会隐式打开数据库；registry contract、工具层和 Runtime worker 测试已覆盖上述边界。
+均 fail-closed。Runtime 通过显式 `with_session_search(database_path)` 绑定当前 Profile 解析出的
+SQLite 路径，未绑定时不会隐式打开数据库；registry contract、工具层和 Runtime worker 测试
+已覆盖上述边界。
 
 ### P2.3 补齐 Provider 与工具回环故障矩阵
 

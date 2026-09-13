@@ -84,9 +84,9 @@ impl ToolWorker {
         &self.write_file
     }
 
-    /// 绑定当前 Profile 的只读搜索数据库；未绑定时 session_search fail-closed。
-    pub fn with_session_search(mut self, state_db: impl Into<std::path::PathBuf>) -> Self {
-        self.session_search = Some(SessionSearchService::new(state_db, Default::default()));
+    /// 绑定当前 Profile 解析出的只读搜索数据库；未绑定时 session_search fail-closed。
+    pub fn with_session_search(mut self, database_path: impl Into<std::path::PathBuf>) -> Self {
+        self.session_search = Some(SessionSearchService::new(database_path, Default::default()));
         self
     }
 

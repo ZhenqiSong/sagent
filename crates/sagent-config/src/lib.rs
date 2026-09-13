@@ -35,7 +35,8 @@ pub use provider_resolver::{
 };
 pub use public_config::{PublicConfig, read_public_config_from_config};
 pub use storage::{
-    StorageDescriptor, StorageKind, ensure_legacy_bootstrap_supported,
+    DEFAULT_SQLITE_DATABASE_FILE, StorageDescriptor, StorageKind,
+    ensure_legacy_bootstrap_supported, resolve_sqlite_database_path,
     resolve_storage_descriptor_from_config,
 };
 pub use workspace::resolve_workspace_from_config;

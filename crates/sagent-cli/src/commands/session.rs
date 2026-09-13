@@ -6,7 +6,10 @@ use std::{path::Path, time::SystemTime};
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use sagent_config::{SagentPaths, normalize_profile_name, resolve_active_paths};
+use sagent_config::{
+    SagentPaths, ensure_legacy_bootstrap_supported, load_profile_config, normalize_profile_name,
+    resolve_active_paths, resolve_sqlite_database_path,
+};
 use sagent_store::Store;
 use sagent_types::MessageId;
 
@@ -201,14 +204,25 @@ fn current_paths(home: Option<&Path>, profile_override: Option<&str>) -> Result<
     resolve_active_paths(home, profile.as_ref())
 }
 
+/// 加载当前 Profile 配置并解析实际 SQLite 路径；默认文件名由 storage 模块决定。
+fn current_database_path(
+    home: Option<&Path>,
+    profile_override: Option<&str>,
+) -> Result<std::path::PathBuf> {
+    let paths = current_paths(home, profile_override)?;
+    let config = load_profile_config(&paths).context("读取当前 Profile 配置失败")?;
+    ensure_legacy_bootstrap_supported(&config).context("当前 Profile 存储配置不可用")?;
+    resolve_sqlite_database_path(&paths, &config).context("解析当前 Profile 数据库路径失败")
+}
+
 /// 打开当前 profile 的可写 Store；只供明确的生命周期命令使用。
 fn with_writable_store<T>(
     context: &CommandContext,
     operation: impl FnOnce(&mut Store) -> Result<T>,
 ) -> Result<T> {
-    let paths = current_paths(context.home.as_deref(), context.profile.as_deref())?;
-    let mut store = Store::open_readwrite(&paths.state_db)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", paths.state_db.display()))?;
+    let database_path = current_database_path(context.home.as_deref(), context.profile.as_deref())?;
+    let mut store = Store::open_readwrite(&database_path)
+        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
     operation(&mut store)
 }
 
@@ -321,6 +335,34 @@ mod tests {
             )
             .is_err()
         );
+        fs::remove_dir_all(root).expect("应能清理测试目录");
+    }
+
+    #[test]
+    fn session_commands_use_configured_sqlite_path() {
+        let root = test_root("custom-database");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("应能创建测试根目录");
+        fs::write(
+            root.join("config.yaml"),
+            "storage:\n  kind: sqlite\n  path: data/custom.db\n",
+        )
+        .expect("应能写入自定义 SQLite 配置");
+
+        let id = create_with_id(
+            Some(&root),
+            None,
+            SessionId::new("custom-database-session"),
+            None,
+            None,
+            "2026-08-30T13:30:00.000Z".to_owned(),
+        )
+        .expect("应能在自定义数据库中创建会话");
+        let sessions = list(Some(&root), None, 20, 0, false).expect("应能读取自定义数据库");
+
+        assert_eq!(sessions[0].id, id);
+        assert!(root.join("data").join("custom.db").is_file());
+        assert!(!root.join("state.db").exists());
         fs::remove_dir_all(root).expect("应能清理测试目录");
     }
 

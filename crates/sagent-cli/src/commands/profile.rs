@@ -10,8 +10,9 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use sagent_config::{
-    list_profile_names, normalize_profile_name, paths::platform_default_home, paths::profile_root,
-    read_active_profile, set_active_profile,
+    ensure_legacy_bootstrap_supported, list_profile_names, load_profile_config,
+    normalize_profile_name, paths::platform_default_home, paths::profile_root, read_active_profile,
+    resolve_paths, resolve_sqlite_database_path, set_active_profile,
 };
 use sagent_store::Store;
 
@@ -96,7 +97,7 @@ pub fn list_lines(home: Option<&Path>) -> Result<Vec<String>> {
         .collect())
 }
 
-/// 创建命名 profile 的目录、初始配置和 SQLite 状态库。
+/// 创建命名 profile 的目录、初始配置和配置选定的 SQLite 数据库。
 pub fn create(home: Option<&Path>, name: &str) -> Result<PathBuf> {
     let root = root(home)?;
     let profile = normalize_profile_name(name)?;
@@ -107,8 +108,17 @@ pub fn create(home: Option<&Path>, name: &str) -> Result<PathBuf> {
     create_with_initializer(&root, profile.as_str(), |profile_dir| {
         fs::write(profile_dir.join("config.yaml"), INITIAL_CONFIG_YAML)
             .context("写入初始 config.yaml 失败")?;
-        Store::open_readwrite(&profile_dir.join("state.db"))
-            .context("初始化 profile state.db 失败")?;
+        let paths = resolve_paths(Some(profile_dir), None).context("解析新 Profile 路径失败")?;
+        let config = load_profile_config(&paths).context("读取新 Profile 配置失败")?;
+        ensure_legacy_bootstrap_supported(&config).context("校验新 Profile 存储配置失败")?;
+        let database_path = resolve_sqlite_database_path(&paths, &config)
+            .context("解析新 Profile 数据库路径失败")?;
+        Store::open_readwrite(&database_path).with_context(|| {
+            format!(
+                "初始化 profile SQLite 数据库失败：{}",
+                database_path.display()
+            )
+        })?;
         Ok(())
     })
 }

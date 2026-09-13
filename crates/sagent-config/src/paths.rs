@@ -22,8 +22,6 @@ pub struct SagentPaths {
     pub profile: String,
     /// 当前 Profile 的根目录。
     pub sagent_home: PathBuf,
-    /// 会话数据库路径；open 时才会决定是否创建文件。
-    pub state_db: PathBuf,
     /// 非秘密 YAML 配置路径。
     pub config_yaml: PathBuf,
     /// 当前 Profile 的秘密配置文件；只用于读取 API key 等凭据。
@@ -71,7 +69,6 @@ pub fn resolve_paths(
 
     Ok(SagentPaths {
         profile: profile_name,
-        state_db: sagent_home.join("state.db"),
         config_yaml: sagent_home.join("config.yaml"),
         env_file: sagent_home.join(".env"),
         sagent_home,
@@ -221,7 +218,6 @@ mod tests {
         let paths = resolve_paths(Some(&root), Some(&default)).expect("应能解析 default profile");
 
         assert_eq!(paths.sagent_home, root);
-        assert_eq!(paths.state_db, paths.sagent_home.join("state.db"));
         assert_eq!(paths.config_yaml, paths.sagent_home.join("config.yaml"));
 
         fs::remove_dir_all(paths.sagent_home).expect("应能清理测试目录");

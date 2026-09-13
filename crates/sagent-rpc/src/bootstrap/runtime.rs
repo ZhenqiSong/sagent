@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use sagent_config::{
     SagentPaths, ensure_legacy_bootstrap_supported, load_profile_config,
     read_public_config_from_config, resolve_openai_provider_from_config,
-    resolve_workspace_from_config,
+    resolve_sqlite_database_path, resolve_workspace_from_config,
 };
 use sagent_provider::ModelProvider;
 use sagent_runtime::{RuntimeDependencies, SessionSupervisor, ToolDispatcher, ToolWorker};
@@ -20,7 +20,7 @@ use crate::service::RuntimeService;
 /// Bootstrap 在启动时固定路径与 Provider；RPC 请求不能传入 home、profile、model、
 /// endpoint 或 API key，因而不会在同一个 daemon 内跨越 Profile 或凭据边界。
 pub struct RuntimeBootstrap {
-    state_db: std::path::PathBuf,
+    database_path: std::path::PathBuf,
     model: String,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
@@ -34,22 +34,23 @@ impl RuntimeBootstrap {
         // 和 storage 校验都复用同一快照，避免同一 Runtime 看到不一致的文件内容。
         let profile_config = load_profile_config(&paths).context("读取 Profile 配置失败")?;
         ensure_legacy_bootstrap_supported(&profile_config).context("校验 Profile 存储配置失败")?;
+        let database_path = resolve_sqlite_database_path(&paths, &profile_config)
+            .context("解析 Profile SQLite 数据库路径失败")?;
 
-        // 首次启动允许创建 Sagent 自有 state.db 并执行加性 migration；随后读服务和
+        // 首次启动允许创建 Sagent 自有 SQLite 文件并执行加性 migration；随后读服务和
         // 每个 Actor 都各自打开连接，绝不跨 Actor 共享 rusqlite Connection。
-        let initialization_store = Store::open_readwrite(&paths.state_db)
-            .with_context(|| format!("初始化 RPC 数据库失败：{}", paths.state_db.display()))?;
+        let initialization_store = Store::open_readwrite(&database_path)
+            .with_context(|| format!("初始化 RPC 数据库失败：{}", database_path.display()))?;
         initialization_store
             .verify_connection()
             .context("RPC 数据库连接检查失败")?;
         drop(initialization_store);
 
-        let state_db = paths.state_db.clone();
         // 公开配置在 bootstrap 时冻结；读取失败不能降级为“空配置”，否则客户端会把
         // 损坏 YAML 误认为未配置。
         let public_config = read_public_config_from_config(&paths, &profile_config)
             .context("读取公开 Profile 配置失败")?;
-        let store_factory_path = state_db.clone();
+        let store_factory_path = database_path.clone();
         let dependencies = RuntimeDependencies::new(move || {
             Store::open_readwrite(&store_factory_path)
                 .map_err(|error| format!("无法打开 actor 数据库：{error}"))
@@ -70,7 +71,7 @@ impl RuntimeBootstrap {
                         ReadFileLimits::default(),
                         TerminalLimits::default(),
                     )
-                    .with_session_search(state_db.clone());
+                    .with_session_search(database_path.clone());
                     dependencies.with_tools(dispatcher, worker)
                 }
                 Err(_) => dependencies,
@@ -96,7 +97,7 @@ impl RuntimeBootstrap {
         };
 
         Ok(Self {
-            state_db,
+            database_path,
             model,
             supervisor: Arc::new(SessionSupervisor::new(dependencies)),
             provider_ready,
@@ -116,11 +117,12 @@ impl RuntimeBootstrap {
     /// 同一 Profile 的重连客户端继续控制既有 Actor。因此每条连接新建读服务、复用同一
     /// Actor 注册表和启动期配置快照。
     pub fn open_service(&self) -> Result<RuntimeService> {
-        let read_store = Store::open_readonly(&self.state_db)
-            .with_context(|| format!("打开 RPC 只读数据库失败：{}", self.state_db.display()))?;
+        let read_store = Store::open_readonly(&self.database_path).with_context(|| {
+            format!("打开 RPC 只读数据库失败：{}", self.database_path.display())
+        })?;
         Ok(RuntimeService::new(
             sagent_protocol::SessionService::new(read_store),
-            self.state_db.clone(),
+            self.database_path.clone(),
             self.model.clone(),
             Arc::clone(&self.supervisor),
             self.provider_ready,

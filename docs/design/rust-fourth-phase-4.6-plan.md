@@ -214,14 +214,16 @@ notification、超大帧和多响应顺序测试已迁移到异步 transport 并
 2. 用 `load_profile_config` 加载一次快照，再用 `resolve_openai_provider_from_config` 构造
    `Arc<dyn ModelProvider>`；key 只能留在 bootstrap 内存；
 3. 从 Profile 明确配置解析 model、workspace root、terminal limits、approval timeout；workspace 不可用时关闭相应工具或返回配置错误，不能放宽路径策略；
-4. `Store::open_readwrite(state.db)` factory 注入 `SessionSupervisor`，每 Actor 独占 Store；
+4. 通过 `resolve_sqlite_database_path` 解析实际 SQLite 文件，再由 `Store::open_readwrite`
+   factory 注入 `SessionSupervisor`，每 Actor 独占 Store；
 5. 注入 ToolDispatcher、ToolWorker、tool round 与 approval timeout；
 6. `session.create` 写 `NewSession`，source 为 `rpc`，创建空会话时不启动 Actor。
 
 **验收**：临时 Profile + Mock SSE 可启动 binary；stdout/stderr 均不泄露 API key；Profile 之间不共享 DB。
 
-完成记录：新增 `runtime_bootstrap.rs` 与 `service/runtime.rs`。启动时固定
-`SagentPaths`，初始化当前 Profile 的可写 state.db，并为每个未来 SessionActor 注入独占
+完成记录：新增 `runtime_bootstrap.rs` 与 `service/runtime.rs`。启动时固定 `SagentPaths` 和
+`ProfileConfig`，仅在 SQLite 未配置路径时使用 storage 模块的 `state.db` 默认文件名，再初始化
+配置解析出的实际 SQLite 文件，并为每个未来 SessionActor 注入独占
 `Store::open_readwrite` factory；Provider resolver 成功时配置 `SessionSupervisor`，失败时保留
 只读浏览和空会话创建，供步骤 4 返回稳定 `runtime_unavailable`。`session.create` 已加入真实
 feature 注册表和状态化 dispatch，必须先 hello；它以 `source = "rpc"`、当前模型和 RFC 3339

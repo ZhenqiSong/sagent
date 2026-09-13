@@ -16,7 +16,8 @@ use std::{
 use anyhow::{Result, bail};
 use sagent_agent::{RequestId, UserInput};
 use sagent_config::{
-    load_profile_config, normalize_profile_name, resolve_openai_provider_from_config, resolve_paths,
+    ensure_legacy_bootstrap_supported, load_profile_config, normalize_profile_name,
+    resolve_openai_provider_from_config, resolve_paths, resolve_sqlite_database_path,
 };
 use sagent_runtime::{
     RuntimeDependencies, RuntimeEventKind, RuntimeEventSubscription, SessionHandle,
@@ -32,7 +33,7 @@ static LIVE_SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static LIVE_TEST_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 struct LiveSession {
-    state_db: PathBuf,
+    database_path: PathBuf,
     session_id: SessionId,
     model: String,
     profile_revision: String,
@@ -66,6 +67,8 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
     let profile = normalize_profile_name(&profile_name)?;
     let paths = resolve_paths(Some(&home), Some(&profile))?;
     let config = load_profile_config(&paths)?;
+    ensure_legacy_bootstrap_supported(&config)?;
+    let database_path = resolve_sqlite_database_path(&paths, &config)?;
     let resolved = resolve_openai_provider_from_config(&paths, &config, None, None)?;
     let model = resolved.model.clone();
     let profile_revision = format!("live:{}", profile.as_str());
@@ -79,7 +82,7 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
             .as_nanos(),
         LIVE_SESSION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut store = Store::open_readwrite(&paths.state_db)?;
+    let mut store = Store::open_readwrite(&database_path)?;
     store.create_session(&NewSession {
         id: session_id.clone(),
         source: Some("live-provider-smoke".into()),
@@ -89,17 +92,17 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
     })?;
     drop(store);
 
-    let state_db = paths.state_db.clone();
+    let database_path_for_factory = database_path.clone();
     let provider = Arc::new(resolved.client);
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&state_db).map_err(|error| error.to_string())
+        Store::open_readwrite(&database_path_for_factory).map_err(|error| error.to_string())
     })
     .with_provider(provider, model.clone(), profile_revision.clone());
     let supervisor = SessionSupervisor::new(dependencies);
     let handle = supervisor.get_or_start(session_id.clone()).await?;
 
     Ok(Some(LiveSession {
-        state_db: paths.state_db,
+        database_path,
         session_id,
         model,
         profile_revision,
@@ -154,7 +157,7 @@ async fn live_provider_round_trip_persists_assistant_message() -> Result<()> {
         .await?;
     wait_for_completion(&mut events).await?;
 
-    let store = Store::open_readonly(&live.state_db)?;
+    let store = Store::open_readonly(&live.database_path)?;
     let messages = store.get_messages_for_display(&live.session_id, &MessageQuery::default())?;
     let assistant = messages
         .last()
@@ -208,7 +211,7 @@ async fn live_provider_cancel_stops_active_turn() -> Result<()> {
         bail!("真实 Provider 在取消请求前已经完成回合，无法验证取消路径");
     }
 
-    let store = Store::open_readonly(&live.state_db)?;
+    let store = Store::open_readonly(&live.database_path)?;
     let messages = store.get_messages_for_display(&live.session_id, &MessageQuery::default())?;
     assert!(messages.iter().all(|message| message.role != "assistant"));
 

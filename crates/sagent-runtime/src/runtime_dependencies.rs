@@ -151,7 +151,7 @@ impl RuntimeDependencies {
     /// 从抽象 `StorageFactory` 创建运行时依赖集合。
     ///
     /// Factory 会在每个 Actor 创建时生成新的端口集合；Runtime 只保存 Factory 的
-    /// 抽象句柄，不保存数据库路径、连接或具体 Store。
+    /// 抽象句柄，不保存数据库路径、连接或具体 SQLite 数据库句柄。
     pub fn from_storage_factory(factory: Arc<dyn StorageFactory>) -> Self {
         Self {
             storage: RuntimeStorageDependencies::from_storage_factory(factory),

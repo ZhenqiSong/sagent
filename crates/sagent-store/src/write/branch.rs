@@ -1,4 +1,4 @@
-//! Store 的会话分支回退与恢复事务。
+//! SQLite 数据库句柄的会话分支回退与恢复事务。
 //!
 //! 回退与恢复必须比较活动消息头，避免旧分支在新输入已出现后被静默合并；所有改变
 //! 都在事务中同时更新消息可见性和会话计数。
@@ -8,9 +8,9 @@ use rusqlite::{OptionalExtension, params};
 use sagent_types::{MessageId, SessionId};
 
 use super::{RestoreResult, RewindCheckpoint, RewindResult};
-use crate::{Store, message::map_stored_message};
+use crate::{SqliteDatabase, message::map_stored_message};
 
-impl Store {
+impl SqliteDatabase {
     /// 回退到一条用户消息，将目标消息本身及其后的活动消息软删除。
     ///
     /// 被回退消息仅变为 active=0，仍保留在数据库与 FTS 索引中，以便审计模式

@@ -8,7 +8,7 @@ use sagent_agent::{RequestId, UserInput};
 use sagent_provider::mock::{MockAction, MockProvider, MockSseChunk, MockSseServer};
 use sagent_provider::{OpenAiCompatibleProvider, ProviderError, StopReason};
 use sagent_runtime::{RuntimeDependencies, RuntimeError, RuntimeEventKind, SessionSupervisor};
-use sagent_store::{MessageQuery, NewSession, Store};
+use sagent_store::{MessageQuery, NewSession, SqliteDatabase};
 use sagent_types::{EventSequence, SessionId};
 
 fn test_path(name: &str) -> PathBuf {
@@ -19,7 +19,7 @@ fn test_path(name: &str) -> PathBuf {
 }
 
 fn create_session(path: &Path, id: &SessionId) {
-    let mut store = Store::open_readwrite(path).expect("应能打开测试数据库");
+    let mut store = SqliteDatabase::open_readwrite(path).expect("应能打开测试数据库");
     store
         .create_session(&NewSession {
             id: id.clone(),
@@ -44,7 +44,7 @@ async fn provider_events_are_bridged_and_final_text_is_persisted() {
         MockAction::Finish(StopReason::Stop),
     ]));
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "test-model", "profile-v1");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -87,7 +87,7 @@ async fn provider_events_are_bridged_and_final_text_is_persisted() {
         RuntimeEventKind::TurnCompleted
     ));
 
-    let store = Store::open_readonly(&path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能读取数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -120,7 +120,7 @@ async fn openai_sse_is_driven_through_provider_worker_and_actor() {
     );
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "sse-model", "sse-profile");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -155,7 +155,7 @@ async fn openai_sse_is_driven_through_provider_worker_and_actor() {
     assert!(completed);
     server.wait().await.expect("SSE server 应完成");
 
-    let store = Store::open_readonly(&path).expect("应能打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能打开数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -183,7 +183,7 @@ async fn provider_usage_is_published_without_polluting_assistant_message() {
     );
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "usage-model", "usage-profile");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -214,7 +214,7 @@ async fn provider_usage_is_published_without_polluting_assistant_message() {
     assert_eq!(usage.total_tokens, 12);
     server.wait().await.expect("SSE server 应完成");
 
-    let store = Store::open_readonly(&path).unwrap();
+    let store = SqliteDatabase::open_readonly(&path).unwrap();
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .unwrap();
@@ -236,7 +236,7 @@ async fn provider_failure_does_not_create_assistant_message() {
     )]));
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "test-model", "profile-v1");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -256,7 +256,7 @@ async fn provider_failure_does_not_create_assistant_message() {
         }
     }
     assert!(failed);
-    let store = Store::open_readonly(&path).unwrap();
+    let store = SqliteDatabase::open_readonly(&path).unwrap();
     assert_eq!(
         store
             .get_messages_for_display(&session_id, &MessageQuery::default())
@@ -276,7 +276,7 @@ async fn cancellation_during_provider_worker_does_not_create_assistant_message()
     let provider = Arc::new(MockProvider::new([MockAction::WaitForCancel]));
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "test-model", "profile-v1");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -295,7 +295,7 @@ async fn cancellation_during_provider_worker_does_not_create_assistant_message()
         interrupted.kind,
         RuntimeEventKind::TurnInterrupted
     ));
-    let store = Store::open_readonly(&path).unwrap();
+    let store = SqliteDatabase::open_readonly(&path).unwrap();
     assert_eq!(
         store
             .get_messages_for_display(&session_id, &MessageQuery::default())
@@ -315,7 +315,7 @@ async fn late_interrupt_cannot_overwrite_a_completed_turn() {
     let provider = Arc::new(MockProvider::new([MockAction::Finish(StopReason::Stop)]));
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "test-model", "profile-v1");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -337,7 +337,7 @@ async fn late_interrupt_cannot_overwrite_a_completed_turn() {
         Err(RuntimeError::NoActiveTurn)
     ));
 
-    let store = Store::open_readonly(&path).unwrap();
+    let store = SqliteDatabase::open_readonly(&path).unwrap();
     let terminal_events = store
         .events_for_turn(&receipt.turn_id, EventSequence::default())
         .unwrap()
@@ -371,7 +371,7 @@ async fn incomplete_sse_stream_fails_turn_without_empty_assistant_message() {
     );
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "eof-model", "profile-v1");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -392,7 +392,7 @@ async fn incomplete_sse_stream_fails_turn_without_empty_assistant_message() {
     }
     assert!(failed);
     server.wait().await.expect("SSE server 应完成");
-    let store = Store::open_readonly(&path).unwrap();
+    let store = SqliteDatabase::open_readonly(&path).unwrap();
     assert_eq!(
         store
             .get_messages_for_display(&session_id, &MessageQuery::default())

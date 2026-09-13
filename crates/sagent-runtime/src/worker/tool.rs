@@ -223,7 +223,7 @@ fn parse_request<T: serde::de::DeserializeOwned>(
 mod tests {
     use super::ToolWorker;
     use crate::{ToolCall, ToolDispatcher};
-    use sagent_store::{NewMessage, NewSession, Store};
+    use sagent_store::{NewMessage, NewSession, SqliteDatabase};
     use sagent_tools::{
         ReadFileLimits, TerminalLimits, ToolDefinition, ToolPermission, ToolRegistry, WorkspaceRoot,
     };
@@ -373,7 +373,7 @@ mod tests {
         let (worker, dispatcher, root) = worker();
         let database = root.join("state.db");
         let session_id = sagent_types::SessionId::new("search-worker-session");
-        let mut store = Store::open_readwrite(&database).expect("应能创建搜索数据库");
+        let mut store = SqliteDatabase::open_readwrite(&database).expect("应能创建搜索数据库");
         store
             .create_session(&NewSession {
                 id: session_id.clone(),

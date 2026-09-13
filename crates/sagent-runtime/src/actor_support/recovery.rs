@@ -175,12 +175,12 @@ fn turn_events(
 mod tests {
     use super::plan_recovery;
     use sagent_store::{
-        NewDaemonEvent, NewGeneration, NewMessage, NewSession, StartTurn, StorageDependencies,
-        Store,
+        NewDaemonEvent, NewGeneration, NewMessage, NewSession, SqliteDatabase, StartTurn,
+        StorageDependencies,
     };
     use sagent_types::{SessionId, TurnId};
 
-    fn store_with_turn() -> (Store, std::path::PathBuf, SessionId, TurnId) {
+    fn store_with_turn() -> (SqliteDatabase, std::path::PathBuf, SessionId, TurnId) {
         let path = std::env::temp_dir().join(format!(
             "sagent-runtime-recovery-{}-{}.db",
             std::process::id(),
@@ -191,7 +191,7 @@ mod tests {
         ));
         let session_id = SessionId::new("recovery-session");
         let turn_id = TurnId::new();
-        let mut store = Store::open_readwrite(&path).expect("应能打开 Store");
+        let mut store = SqliteDatabase::open_readwrite(&path).expect("应能打开 SQLite 数据库");
         store
             .create_session(&NewSession {
                 id: session_id.clone(),

@@ -29,7 +29,7 @@ pub enum RuntimeError {
     #[error("session actor has stopped")]
     ActorStopped,
 
-    /// Store 原子操作失败。
+    /// 领域存储原子操作失败。
     #[error("persistence failed: {0}")]
     Persistence(String),
 

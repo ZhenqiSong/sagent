@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use sagent_agent::RequestId;
 use sagent_runtime::{RuntimeDependencies, RuntimeError, RuntimeEventKind, SessionSupervisor};
-use sagent_store::{MessageQuery, NewSession, Store};
+use sagent_store::{MessageQuery, NewSession, SqliteDatabase};
 use sagent_types::SessionId;
 
 fn test_path(name: &str) -> PathBuf {
@@ -14,7 +14,7 @@ fn test_path(name: &str) -> PathBuf {
 }
 
 fn create_session(path: &Path, id: &SessionId) {
-    let mut store = Store::open_readwrite(path).expect("应能打开测试数据库");
+    let mut store = SqliteDatabase::open_readwrite(path).expect("应能打开测试数据库");
     store
         .create_session(&NewSession {
             id: id.clone(),
@@ -34,7 +34,7 @@ async fn public_handle_serializes_submit_and_persists_interrupt() {
     create_session(&path, &session_id);
     let factory_path = path.clone();
     let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     }));
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -75,7 +75,7 @@ async fn public_handle_serializes_submit_and_persists_interrupt() {
         RuntimeEventKind::TurnInterrupted
     ));
 
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -100,7 +100,7 @@ async fn different_sessions_are_isolated_through_public_supervisor() {
     create_session(&path, &session_b);
     let factory_path = path.clone();
     let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     }));
     let handle_a = supervisor
         .get_or_start(session_a.clone())
@@ -124,7 +124,7 @@ async fn different_sessions_are_isolated_through_public_supervisor() {
     assert!(a.is_ok());
     assert!(b.is_ok());
 
-    let store = Store::open_readonly(&path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能读取数据库");
     let messages_a = store
         .get_messages_for_display(&session_a, &MessageQuery::default())
         .expect("应能读取 A");
@@ -149,7 +149,7 @@ async fn closed_handle_is_stale_and_session_can_restart() {
     create_session(&path, &session_id);
     let factory_path = path.clone();
     let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     }));
     let old_handle = supervisor
         .get_or_start(session_id.clone())
@@ -181,10 +181,9 @@ async fn closed_handle_is_stale_and_session_can_restart() {
 
 #[tokio::test]
 async fn store_open_failure_is_exposed_without_leaking_sqlite_error_type() {
-    let supervisor =
-        SessionSupervisor::new(RuntimeDependencies::new(|| -> Result<Store, String> {
-            Err("测试数据库不可用".to_owned())
-        }));
+    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(
+        || -> Result<SqliteDatabase, String> { Err("测试数据库不可用".to_owned()) },
+    ));
     let result = supervisor
         .get_or_start(SessionId::new("integration-error"))
         .await;
@@ -207,10 +206,10 @@ async fn separate_profile_databases_do_not_share_actor_data() {
     let factory_a = path_a.clone();
     let factory_b = path_b.clone();
     let supervisor_a = SessionSupervisor::new(RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_a).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_a).map_err(|error| error.to_string())
     }));
     let supervisor_b = SessionSupervisor::new(RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_b).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_b).map_err(|error| error.to_string())
     }));
     let handle_a = supervisor_a
         .get_or_start(session_id.clone())
@@ -235,11 +234,11 @@ async fn separate_profile_databases_do_not_share_actor_data() {
         .await
         .expect("B 应能提交");
 
-    let messages_a = Store::open_readonly(&path_a)
+    let messages_a = SqliteDatabase::open_readonly(&path_a)
         .expect("应能读取 profile A")
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取 A 消息");
-    let messages_b = Store::open_readonly(&path_b)
+    let messages_b = SqliteDatabase::open_readonly(&path_b)
         .expect("应能读取 profile B")
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取 B 消息");

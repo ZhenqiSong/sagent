@@ -1,7 +1,7 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0、M1、M2 已完成；当前仅完成过渡框架，尚未开始业务调用方迁移
+状态：M0、M1、M2 已完成；M3.1（数据库句柄改名与基础模块拆分）已完成，业务 Storage 迁移仍未开始
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
@@ -245,7 +245,7 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
 `WriteStorage`，并新增 `initialize`/`health_check` 生命周期入口。`SqliteStorageManager`
 现在在 Manager 边界组装业务聚合；`StorageFactory` 仅在兼容层将新聚合拆回旧依赖，未向
 Runtime/RPC/CLI 扩散。当前接口是同步阻塞模型：Manager 为 `Send + Sync`，每次 `open_*`
-重新申请独立 SQLite Store，Actor 之间不共享可变写句柄；没有隐藏后台任务，取消由调用方
+重新申请独立 SQLite 数据库句柄，Actor 之间不共享可变写句柄；没有隐藏后台任务，取消由调用方
 的任务边界负责。`health_check` 只读且不会创建文件，`initialize` 明确表示允许创建和
 迁移数据库。新增 Manager 的完整存储、窄读写、初始化和缺失库健康检查测试。
 
@@ -265,6 +265,12 @@ Runtime/RPC/CLI 扩散。当前接口是同步阻塞模型：Manager 为 `Send +
 
 完成条件：SQLite 与 fake 实现都能构造同一抽象 `Storage`，既有 `SqliteDatabase` 行为契约
 不变。
+
+**执行记录（2026-09-14，M3.1）：** 已将原 `Store` 重命名为 `SqliteDatabase`，并把连接
+打开、访问模式、migration、健康检查和只读写入保护从 `lib.rs` 拆到独立的
+`sqlite_database.rs`。所有生产代码、契约测试和集成测试已更新为新名称，行为未迁移或改变。
+`SqliteDatabase` 暂时仍通过 crate 根导出，便于当前 fixture 和兼容适配器继续工作；业务
+Storage 迁移、表 Row Model 收敛及最终隐藏该类型仍属于 M3 后续事项。
 
 ### M4：建立唯一 selector/bootstrap 入口
 

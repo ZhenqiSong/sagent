@@ -1,11 +1,11 @@
-//! Store 打开、只读边界和基础写入契约。
+//! SQLite 数据库打开、只读边界和基础写入契约。
 
 use super::*;
 
 #[test]
 fn rejects_relative_database_path() {
     // 相对路径会随当前工作目录变化，不能作为持久化数据库的安全边界。
-    let result = Store::open_readonly(std::path::Path::new("state.db"));
+    let result = SqliteDatabase::open_readonly(std::path::Path::new("state.db"));
 
     assert!(result.is_err());
     let error = result.expect_err("相对路径必须失败");
@@ -17,7 +17,7 @@ fn rejects_missing_database_without_creating_it() {
     let path = test_path("missing");
     remove_if_exists(&path);
 
-    let result = Store::open_readonly(&path);
+    let result = SqliteDatabase::open_readonly(&path);
 
     assert!(result.is_err());
     // 这是只读打开最重要的副作用契约：缺失文件不能被自动初始化。
@@ -30,7 +30,7 @@ fn opens_existing_database_in_readonly_mode() {
     remove_if_exists(&path);
 
     {
-        // 仅测试准备阶段使用可写连接创建 fixture；被测 Store 始终使用只读连接。
+        // 仅测试准备阶段使用可写连接创建 fixture；被测数据库句柄始终使用只读连接。
         let connection = Connection::open(&path).expect("应能创建测试数据库");
         connection
             .execute("CREATE TABLE marker (value INTEGER NOT NULL)", [])
@@ -40,7 +40,7 @@ fn opens_existing_database_in_readonly_mode() {
             .expect("应能写入测试数据");
     }
 
-    let store = Store::open_readonly(&path).expect("已有数据库应能只读打开");
+    let store = SqliteDatabase::open_readonly(&path).expect("已有数据库应能只读打开");
     store.verify_connection().expect("基本查询应成功");
 
     // 直接通过私有字段验证 SQLite 层面的写保护，而不仅仅是验证 SELECT 成功。
@@ -59,7 +59,7 @@ fn readwrite_store_migrates_and_persists_messages_with_fts() {
     remove_if_exists(&path);
     let session_id = SessionId::new("write-session");
     {
-        let mut store = Store::open_readwrite(&path).expect("应能创建并迁移数据库");
+        let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建并迁移数据库");
         let info = store.inspect_schema().expect("应能读取迁移后的结构");
         assert_eq!(info.schema_version, Some(SCHEMA_VERSION));
         assert!(info.tables.iter().any(|table| table == "sessions"));
@@ -91,7 +91,7 @@ fn readwrite_store_migrates_and_persists_messages_with_fts() {
         );
     }
 
-    let store = Store::open_readonly(&path).expect("应能重新以只读方式打开");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新以只读方式打开");
     let session = store
         .get_session(&session_id)
         .expect("应能读取已保存会话")
@@ -117,7 +117,7 @@ fn failed_message_append_rolls_back_without_changing_session_count() {
     let path = test_path("write-rollback");
     remove_if_exists(&path);
     let session_id = SessionId::new("existing-session");
-    let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),
@@ -156,7 +156,7 @@ fn batch_append_is_atomic_and_updates_the_session_once() {
     let path = test_path("batch-append");
     remove_if_exists(&path);
     let session_id = SessionId::new("batch-session");
-    let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),

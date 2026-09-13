@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, Row, params};
 use sagent_types::{SessionId, SessionSummary};
 
-use crate::Store;
+use crate::SqliteDatabase;
 
 /// 会话列表的可见性与分页条件。
 ///
@@ -40,7 +40,7 @@ fn map_session_summary(row: &Row<'_>) -> rusqlite::Result<SessionSummary> {
     })
 }
 
-impl Store {
+impl SqliteDatabase {
     /// 按最后活动时间倒序读取未归档、未隐藏的会话摘要。
     ///
     /// limit 与 offset 用于 TUI 会话选择器的分页。预览取第一条用户消息的前
@@ -161,7 +161,7 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use crate::{SessionListQuery, Store};
+    use crate::{SessionListQuery, SqliteDatabase};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sagent-sessions-{name}-{}.db", std::process::id()))
@@ -223,7 +223,7 @@ mod tests {
         remove(&path);
         create_fixture(&path);
 
-        let sessions = Store::open_readonly(&path)
+        let sessions = SqliteDatabase::open_readonly(&path)
             .expect("应能只读打开 fixture")
             .list_sessions(20, 0)
             .expect("应能读取会话列表");
@@ -249,7 +249,7 @@ mod tests {
         remove(&path);
         create_fixture(&path);
 
-        let sessions = Store::open_readonly(&path)
+        let sessions = SqliteDatabase::open_readonly(&path)
             .expect("应能只读打开 fixture")
             .list_sessions(1, 1)
             .expect("应能读取会话列表");
@@ -266,7 +266,7 @@ mod tests {
         remove(&path);
         create_fixture(&path);
 
-        let sessions = Store::open_readonly(&path)
+        let sessions = SqliteDatabase::open_readonly(&path)
             .expect("应能只读打开 fixture")
             .list_sessions_with(&SessionListQuery {
                 include_archived: true,
@@ -286,7 +286,7 @@ mod tests {
         let path = test_path("get");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         let session = store
             .get_session(&sagent_types::SessionId::new("archived"))
@@ -306,7 +306,7 @@ mod tests {
         let path = test_path("missing");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         let session = store
             .get_session(&sagent_types::SessionId::new("does-not-exist"))

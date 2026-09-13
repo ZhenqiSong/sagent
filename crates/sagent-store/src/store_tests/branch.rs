@@ -1,4 +1,4 @@
-//! Store 会话生命周期、上下文分支与回退恢复契约。
+//! SQLite 数据库会话生命周期、上下文分支与回退恢复契约。
 
 use super::*;
 
@@ -7,7 +7,7 @@ fn manages_session_lifecycle_and_list_visibility() {
     let path = test_path("lifecycle");
     remove_if_exists(&path);
     let session_id = SessionId::new("lifecycle-session");
-    let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),
@@ -99,7 +99,7 @@ fn rewinds_a_user_turn_and_preserves_auditable_history() {
     let path = test_path("rewind");
     remove_if_exists(&path);
     let session_id = SessionId::new("rewind-session");
-    let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),
@@ -263,7 +263,7 @@ fn replaces_active_messages_without_losing_auditable_history() {
     let path = test_path("replace-active");
     remove_if_exists(&path);
     let session_id = SessionId::new("replace-session");
-    let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),
@@ -383,7 +383,7 @@ fn retries_only_the_latest_assistant_message_with_a_checkpoint() {
     let path = test_path("retry");
     remove_if_exists(&path);
     let session_id = SessionId::new("retry-session");
-    let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),
@@ -502,7 +502,7 @@ fn archives_compacted_history_but_keeps_it_searchable() {
     let path = test_path("compact");
     remove_if_exists(&path);
     let session_id = SessionId::new("compact-session");
-    let mut store = Store::open_readwrite(&path).expect("应能创建数据库");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),

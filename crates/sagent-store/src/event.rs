@@ -1,13 +1,13 @@
 //! daemon event 的事务内写入与可恢复读取。
 //!
 //! 本模块负责 event 的 SQLite 映射、单调 sequence 和分页上限；它不决定事件何时发生，
-//! 也不推进 Turn 状态机。调用者必须先决定合法状态转换，再通过 Store 原子提交事实。
+//! 也不推进 Turn 状态机。调用者必须先决定合法状态转换，再通过领域存储原子提交事实。
 
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, Transaction, params};
 use sagent_types::{EventSequence, SessionId, TurnId};
 
-use crate::Store;
+use crate::SqliteDatabase;
 
 /// Turn 已持久化开始事实的事件类型。
 pub const EVENT_TURN_STARTED: &str = "turn.started";
@@ -67,7 +67,7 @@ pub(crate) fn insert_event(
 ) -> Result<EventSequence> {
     let payload_json =
         serde_json::to_string(&event.payload).context("序列化 daemon event payload 失败")?;
-    // sequence 由 SQLite rowid 分配，而不是由调用方传入；这样同一 Store 写入者
+    // sequence 由 SQLite rowid 分配，而不是由调用方传入；这样同一数据库写入者
     // 可以把它当作断线续传和恢复扫描的单调游标。
     transaction
         .execute(
@@ -85,8 +85,8 @@ pub(crate) fn insert_event(
     EventSequence::new(transaction.last_insert_rowid()).context("解析 daemon event sequence 失败")
 }
 
-impl Store {
-    /// 追加一个独立的 daemon event。调用方仍必须是 SessionActor，Store 不负责
+impl SqliteDatabase {
+    /// 追加一个独立的 daemon event。调用方仍必须是 SessionActor，数据库句柄不负责
     /// 事件顺序或审批状态机；事务只保证该事件完整写入。
     pub fn append_event(&mut self, event: &NewDaemonEvent) -> Result<EventSequence> {
         self.ensure_writable()?;

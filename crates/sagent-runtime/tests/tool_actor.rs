@@ -17,7 +17,7 @@ use sagent_provider::{
 use sagent_runtime::{
     RuntimeDependencies, RuntimeEventKind, SessionSupervisor, ToolDispatcher, ToolWorker,
 };
-use sagent_store::{EventQuery, MessageQuery, NewSession, Store};
+use sagent_store::{EventQuery, MessageQuery, NewSession, SqliteDatabase};
 use sagent_tools::{
     ReadFileLimits, TerminalLimits, ToolDefinition, ToolPermission, ToolRegistry, WorkspaceRoot,
 };
@@ -32,7 +32,7 @@ fn test_path(name: &str) -> PathBuf {
 }
 
 fn create_session(path: &Path, id: &SessionId) {
-    let mut store = Store::open_readwrite(path).expect("应能打开测试数据库");
+    let mut store = SqliteDatabase::open_readwrite(path).expect("应能打开测试数据库");
     store
         .create_session(&NewSession {
             id: id.clone(),
@@ -376,7 +376,7 @@ async fn tool_results_are_replayed_to_the_next_provider_round_before_final_text(
     );
     let dispatcher = ToolDispatcher::new(tool_registry());
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "mock", "profile-v1")
     .with_tools(dispatcher, worker);
@@ -419,7 +419,7 @@ async fn tool_results_are_replayed_to_the_next_provider_round_before_final_text(
     assert!(saw_completed);
     assert!(saw_completed_turn);
 
-    let store = Store::open_readonly(&db_path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&db_path).expect("应能读取数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -468,7 +468,7 @@ async fn tool_loop_stops_before_persisting_a_call_beyond_the_configured_limit() 
         TerminalLimits::default(),
     );
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "profile-v1")
     .with_tools(ToolDispatcher::new(tool_registry()), worker)
@@ -498,7 +498,7 @@ async fn tool_loop_stops_before_persisting_a_call_beyond_the_configured_limit() 
     assert_eq!(failure_reason.as_deref(), Some("工具调用超过最大回环次数"));
     assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
 
-    let store = Store::open_readonly(&db_path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&db_path).expect("应能读取数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -544,7 +544,7 @@ async fn approval_once_resumes_the_paused_terminal_call_and_replays_its_result()
         TerminalLimits::default(),
     );
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "profile-v1")
     .with_tools(ToolDispatcher::new(tool_registry()), worker);
@@ -605,7 +605,7 @@ async fn approval_once_resumes_the_paused_terminal_call_and_replays_its_result()
     assert!(saw_completed);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
 
-    let store = Store::open_readonly(&db_path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&db_path).expect("应能读取数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -644,7 +644,7 @@ async fn approval_denial_persists_a_tool_error_without_starting_terminal() {
         TerminalLimits::default(),
     );
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "profile-v1")
     .with_tools(ToolDispatcher::new(tool_registry()), worker);
@@ -701,7 +701,7 @@ async fn approval_denial_persists_a_tool_error_without_starting_terminal() {
     assert_eq!(failure_reason.as_deref(), Some("用户拒绝了工具执行"));
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
 
-    let store = Store::open_readonly(&db_path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&db_path).expect("应能读取数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -739,7 +739,7 @@ async fn write_file_requires_approval_and_audit_event_excludes_content() {
         TerminalLimits::default(),
     );
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "profile-v1")
     .with_tools(ToolDispatcher::new(tool_registry()), worker);
@@ -785,7 +785,7 @@ async fn write_file_requires_approval_and_audit_event_excludes_content() {
         "不得进入审计事件"
     );
 
-    let store = Store::open_readonly(&db_path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&db_path).expect("应能读取数据库");
     let audit = store
         .events_since(&EventQuery {
             session_id: session_id.clone(),
@@ -828,7 +828,7 @@ async fn interrupt_cancels_running_tool_without_persisting_a_late_result() {
     );
     let worker_probe = worker.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(Arc::new(LongTerminalProvider), "mock", "profile-v1")
     .with_tools(ToolDispatcher::new(tool_registry()), worker);
@@ -882,7 +882,7 @@ async fn interrupt_cancels_running_tool_without_persisting_a_late_result() {
     assert!(interrupted.is_ok(), "应在等待进程清理后发布 interrupted");
     assert_eq!(worker_probe.terminal().supervisor().active_count(), 0);
 
-    let store = Store::open_readonly(&db_path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&db_path).expect("应能读取数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -917,7 +917,7 @@ async fn approval_timeout_wins_without_starting_terminal_or_accepting_a_late_dec
         TerminalLimits::default(),
     );
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(
         Arc::new(ApprovalProvider {
@@ -978,7 +978,7 @@ async fn approval_timeout_wins_without_starting_terminal_or_accepting_a_late_dec
             .is_err()
     );
 
-    let store = Store::open_readonly(&db_path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&db_path).expect("应能读取数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");

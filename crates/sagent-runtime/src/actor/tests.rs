@@ -4,7 +4,7 @@
 
 use std::{fs, path::PathBuf, sync::Arc};
 
-use sagent_store::{EventQuery, MessageQuery, NewSession, Store};
+use sagent_store::{EventQuery, MessageQuery, NewSession, SqliteDatabase};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -29,8 +29,8 @@ fn test_path(name: &str) -> PathBuf {
     path
 }
 
-fn prepare_store(path: &std::path::Path, session_id: &SessionId) -> Store {
-    let mut store = Store::open_readwrite(path).expect("应能打开测试数据库");
+fn prepare_store(path: &std::path::Path, session_id: &SessionId) -> SqliteDatabase {
+    let mut store = SqliteDatabase::open_readwrite(path).expect("应能打开测试数据库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),
@@ -100,7 +100,7 @@ async fn submit_persists_before_publishing_acceptance() {
     ));
     actor_task.await.expect("Actor 不应 panic");
 
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -159,7 +159,7 @@ async fn second_submit_is_rejected_without_a_second_message() {
         .expect("关闭应成功");
     actor_task.await.expect("Actor 不应 panic");
 
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     assert_eq!(
         store
             .get_messages_for_display(&session_id, &MessageQuery::default())
@@ -211,8 +211,8 @@ async fn final_text_is_persisted_before_completion_events() {
         RuntimeEventKind::FinalMessagePersisted { .. }
     ));
 
-    // 收到完成消息确认时，Store 中的 assistant 消息和持久化事件已经可读。
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    // 收到完成消息确认时，数据库中的 assistant 消息和持久化事件已经可读。
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -305,7 +305,7 @@ async fn interrupt_marks_turn_without_creating_assistant_message() {
         RuntimeEventKind::TurnInterrupted
     ));
 
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -369,7 +369,7 @@ async fn failed_worker_marks_turn_failed_without_assistant_message() {
         RuntimeEventKind::TurnFailed { ref reason } if reason == "provider unavailable"
     ));
 
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -433,7 +433,7 @@ async fn worker_panic_is_converted_to_failed_turn() {
     .expect("panic 应在超时前转换为失败");
     assert!(matches!(failed.kind, RuntimeEventKind::TurnFailed { .. }));
 
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     assert_eq!(
         store
             .get_messages_for_display(&session_id, &MessageQuery::default())
@@ -484,8 +484,8 @@ async fn model_delta_is_realtime_only_and_not_persisted() {
     };
     let _ = event_receiver.recv().await;
     let _ = event_receiver.recv().await;
-    let before = Store::open_readonly(&path)
-        .expect("应能打开只读 Store")
+    let before = SqliteDatabase::open_readonly(&path)
+        .expect("应能打开只读数据库")
         .latest_event_sequence(&session_id)
         .expect("应能读取事件序号")
         .expect("提交后应有事件");
@@ -503,7 +503,7 @@ async fn model_delta_is_realtime_only_and_not_persisted() {
         RuntimeEventKind::ModelTextDelta { .. }
     ));
 
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     let after = store
         .latest_event_sequence(&session_id)
         .expect("应能读取事件序号")
@@ -593,7 +593,7 @@ async fn final_wins_over_a_later_interrupt_and_late_command_has_no_side_effect()
         Err(crate::RuntimeError::NoActiveTurn)
     ));
 
-    let store = Store::open_readonly(&path).expect("应能重新打开数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能重新打开数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");
@@ -689,7 +689,7 @@ async fn approval_request_keeps_actor_responsive_until_resolve() {
         RuntimeEventKind::ApprovalResolved { approval_id: id, decision: sagent_agent::ApprovalDecision::Once }
             if id == approval_id
     ));
-    let persisted = Store::open_readonly(&path)
+    let persisted = SqliteDatabase::open_readonly(&path)
         .expect("应能读取审批事件")
         .events_since(&EventQuery {
             session_id: session_id.clone(),

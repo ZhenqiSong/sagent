@@ -8,7 +8,7 @@ use rusqlite::{OptionalExtension, params};
 use sagent_types::{MessageId, SessionId, TurnId, TurnOutcome};
 
 use crate::{
-    Store,
+    SqliteDatabase,
     event::{
         EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TURN_COMPLETED, EVENT_TURN_FAILED,
         EVENT_TURN_INTERRUPTED, EVENT_TURN_STARTED, NewDaemonEvent, insert_event,
@@ -83,7 +83,7 @@ pub struct StoredRunningTurn {
     pub user_message_id: Option<MessageId>,
 }
 
-impl Store {
+impl SqliteDatabase {
     /// 查询一个 Session 当前遗留的 running Turn；同一 Session 出现多个 running
     /// Turn 代表历史状态损坏，恢复时必须显式失败而不能任意挑选一个。
     pub fn get_running_turn(&self, session_id: &SessionId) -> Result<Option<StoredRunningTurn>> {

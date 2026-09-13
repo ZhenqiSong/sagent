@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OpenFlags};
 use sagent_agent::{PromptMessage, PromptRole, PromptSnapshot, SystemPromptParts};
 use sagent_protocol::{ClientHelloCapabilities, ClientHelloParams, negotiate_hello};
-use sagent_store::{MessageSearchQuery, NewMessage, NewSession, Store};
+use sagent_store::{MessageSearchQuery, NewMessage, NewSession, SqliteDatabase};
 use sagent_types::{ClientId, ClientSurface, SessionId, TurnId};
 use serde::Serialize;
 
@@ -25,7 +25,7 @@ const BENCHMARK_VERSION: u32 = 1;
 /// 命令行显式控制的 fixture 规模和输出策略。
 #[derive(Debug)]
 struct Arguments {
-    /// 临时 Store 中生成的消息数；不使用用户历史数据，保证可重复。
+    /// 临时 SQLite 数据库中生成的消息数；不使用用户历史数据，保证可重复。
     messages: usize,
     /// 每个指标的采样次数；统计值只在同一环境中比较。
     iterations: usize,
@@ -295,19 +295,19 @@ fn benchmark_prompt_snapshot() -> Result<()> {
 
 /// 测量只读打开与连接探测，避免把 fixture 写入初始化算入读路径。
 fn benchmark_store_open(path: &Path) -> Result<()> {
-    let store = Store::open_readonly(path)?;
+    let store = SqliteDatabase::open_readonly(path)?;
     store.verify_connection()?;
     Ok(())
 }
 
 /// 测量常见的有限会话列表读取。
-fn benchmark_session_list(store: &Store) -> Result<()> {
+fn benchmark_session_list(store: &SqliteDatabase) -> Result<()> {
     let _ = store.list_sessions(20, 0)?;
     Ok(())
 }
 
 /// 测量固定 scope 下的 FTS 查询，确保命中集合不随用户数据变化。
-fn benchmark_fts_search(store: &Store, session_id: &SessionId) -> Result<()> {
+fn benchmark_fts_search(store: &SqliteDatabase, session_id: &SessionId) -> Result<()> {
     let mut query = MessageSearchQuery::new("benchmark");
     query.session_id = Some(session_id.clone());
     query.limit = 20;
@@ -315,9 +315,9 @@ fn benchmark_fts_search(store: &Store, session_id: &SessionId) -> Result<()> {
     Ok(())
 }
 
-/// 构造时间戳、内容和角色均固定的临时 Store，隔离真实 profile 与网络凭据。
-fn create_fixture_store(path: &Path, messages: usize) -> Result<Store> {
-    let mut store = Store::open_readwrite(path)?;
+/// 构造时间戳、内容和角色均固定的临时 SQLite 数据库，隔离真实 profile 与网络凭据。
+fn create_fixture_store(path: &Path, messages: usize) -> Result<SqliteDatabase> {
+    let mut store = SqliteDatabase::open_readwrite(path)?;
     let session_id = SessionId::new("benchmark-session");
     store.create_session(&NewSession {
         id: session_id.clone(),

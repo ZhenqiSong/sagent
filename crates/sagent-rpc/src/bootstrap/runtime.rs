@@ -35,7 +35,7 @@ impl RuntimeBootstrap {
         let storage_descriptor = profile_config.get_storage_descriptor();
 
         // 后端选择只发生在独立的 selector 中；Bootstrap 不根据 StorageKind 分支，
-        // 也不持有数据库路径、连接或具体 Store。Factory 的首次 create 负责初始化
+        // 也不持有数据库路径、连接或具体 SQLite 数据库句柄。Factory 的首次 create 负责初始化
         // migration 和连接检查，之后每个 Actor/请求都获取独立的端口集合。
         let storage_factory: Arc<dyn StorageFactory> =
             create_storage_factory(&paths, storage_descriptor)
@@ -51,7 +51,7 @@ impl RuntimeBootstrap {
         // 工具边界必须在 Profile bootstrap 时固定，不能接受来自 prompt.submit 的路径或
         // registry 覆盖。workspace 不可用时只关闭工具而不影响只读 RPC/空会话，让损坏的
         // 工具配置不会阻塞用户恢复已有 transcript；可用时每个 Actor 共享无状态 worker
-        // 配置，但实际 Store 写入仍由 Actor 独占连接完成。
+        // 配置，但实际数据库写入仍由 Actor 独占连接完成。
         let dependencies = match resolve_workspace_from_config(&paths, &profile_config)
             .and_then(|root| WorkspaceRoot::new(root).map_err(|error| anyhow::anyhow!(error)))
         {

@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 
-use crate::Store;
+use crate::SqliteDatabase;
 
 /// 数据库结构的只读快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,7 +19,7 @@ pub struct DatabaseInfo {
     pub has_fts5: bool,
 }
 
-impl Store {
+impl SqliteDatabase {
     /// 读取当前数据库的结构摘要。
     pub fn inspect_schema(&self) -> Result<DatabaseInfo> {
         // 所有探测都是 SELECT/PRAGMA，不会触发初始化或修改数据库。
@@ -87,7 +87,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::Store;
+    use super::SqliteDatabase;
     use rusqlite::Connection;
     use std::{fs, path::PathBuf, time::Duration};
 
@@ -110,7 +110,7 @@ mod tests {
         let path = test_path("empty");
         remove(&path);
         Connection::open(&path).unwrap();
-        let info = Store::open_readonly(&path)
+        let info = SqliteDatabase::open_readonly(&path)
             .unwrap()
             .inspect_schema()
             .unwrap();
@@ -132,7 +132,7 @@ mod tests {
         c.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY)", [])
             .unwrap();
         drop(c);
-        let info = Store::open_readonly(&path)
+        let info = SqliteDatabase::open_readonly(&path)
             .unwrap()
             .inspect_schema()
             .unwrap();
@@ -150,7 +150,7 @@ mod tests {
         c.execute("CREATE VIRTUAL TABLE messages_fts USING fts5(content)", [])
             .unwrap();
         drop(c);
-        let info = Store::open_readonly(&path)
+        let info = SqliteDatabase::open_readonly(&path)
             .unwrap()
             .inspect_schema()
             .unwrap();
@@ -169,7 +169,7 @@ mod tests {
         c.execute("CREATE TABLE unrelated (value TEXT)", [])
             .unwrap();
         drop(c);
-        let info = Store::open_readonly(&path)
+        let info = SqliteDatabase::open_readonly(&path)
             .unwrap()
             .inspect_schema()
             .unwrap();
@@ -184,7 +184,7 @@ mod tests {
         remove(&path);
         create_from_fixture(&path, include_str!("../tests/fixtures/historic_v1.sql"));
 
-        let info = Store::open_readonly(&path)
+        let info = SqliteDatabase::open_readonly(&path)
             .expect("应能只读打开历史 fixture")
             .inspect_schema()
             .expect("应能检查历史 schema");
@@ -200,7 +200,7 @@ mod tests {
         remove(&path);
         create_from_fixture(&path, include_str!("../tests/fixtures/no_fts.sql"));
 
-        let info = Store::open_readonly(&path)
+        let info = SqliteDatabase::open_readonly(&path)
             .expect("应能只读打开无 FTS fixture")
             .inspect_schema()
             .expect("应能检查无 FTS schema");
@@ -216,7 +216,7 @@ mod tests {
         // 仍必须以强制方式纳入版本控制，否则干净 checkout 会在这里找不到 fixture。
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/corrupt_state.db");
-        let store = Store::open_readonly(&path).expect("打开句柄本身可以延迟校验文件内容");
+        let store = SqliteDatabase::open_readonly(&path).expect("打开句柄本身可以延迟校验文件内容");
 
         assert!(
             store.inspect_schema().is_err(),
@@ -239,7 +239,7 @@ mod tests {
             .execute_batch("BEGIN EXCLUSIVE")
             .expect("应能取得 SQLite 独占锁");
 
-        let store = Store::open_readonly(&path).expect("锁定时仍可尝试只读打开");
+        let store = SqliteDatabase::open_readonly(&path).expect("锁定时仍可尝试只读打开");
         let error = store
             .inspect_schema()
             .expect_err("独占锁期间的 schema 读取必须失败");
@@ -263,7 +263,7 @@ mod tests {
         c.execute("CREATE TABLE marker (value INTEGER)", [])
             .unwrap();
         drop(c);
-        let store = Store::open_readonly(&path).unwrap();
+        let store = SqliteDatabase::open_readonly(&path).unwrap();
         store.inspect_schema().unwrap();
         assert!(
             store

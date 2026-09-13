@@ -8,7 +8,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use sagent_store::{NewMessage, Store};
+use sagent_store::{NewMessage, SqliteDatabase};
 use sagent_types::SessionId;
 use serde_json::Value;
 
@@ -225,7 +225,8 @@ fn rewind_hides_active_messages_but_keeps_auditable_history() {
         .as_str()
         .expect("创建结果必须包含会话 ID");
     let session_id_type = SessionId::new(session_id);
-    let mut store = Store::open_readwrite(&home.join("state.db")).expect("应能打开 state.db");
+    let mut store =
+        SqliteDatabase::open_readwrite(&home.join("state.db")).expect("应能打开 state.db");
     let user_message_id = store
         .append_message(&NewMessage::new(
             session_id_type.clone(),
@@ -273,7 +274,8 @@ fn rewind_hides_active_messages_but_keeps_auditable_history() {
     );
     assert_eq!(detail["session"]["message_count"], 0);
 
-    let store = Store::open_readonly(&home.join("state.db")).expect("应能只读打开 state.db");
+    let store =
+        SqliteDatabase::open_readonly(&home.join("state.db")).expect("应能只读打开 state.db");
     let mut audit_query = sagent_store::MessageSearchQuery::new("rewindtoken");
     audit_query.include_inactive = true;
     assert_eq!(

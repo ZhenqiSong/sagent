@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, Row, params_from_iter, types::Value};
 use sagent_types::{MessageId, SessionId, StoredMessage};
 
-use crate::Store;
+use crate::SqliteDatabase;
 use crate::write::HIDDEN_DISPLAY_KIND;
 
 /// 读取一段会话消息时使用的筛选与分页条件。
@@ -183,7 +183,7 @@ fn page_messages(mut messages: Vec<StoredMessage>, query: &MessageQuery) -> Vec<
     }
 }
 
-impl Store {
+impl SqliteDatabase {
     /// 为下一次模型调用加载活动上下文。
     ///
     /// 隐藏压缩摘要必须保留：它是模型理解早期对话的唯一压缩表示。
@@ -343,7 +343,7 @@ mod tests {
     use rusqlite::Connection;
     use sagent_types::{MessageId, SessionId};
 
-    use super::{MessageQuery, Store};
+    use super::{MessageQuery, SqliteDatabase};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sagent-messages-{name}-{}.db", std::process::id()))
@@ -403,7 +403,7 @@ mod tests {
         let path = test_path("default");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         let messages = store
             .get_messages(&SessionId::new("session-1"), &MessageQuery::default())
@@ -420,7 +420,7 @@ mod tests {
         let path = test_path("inactive");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
         let query = MessageQuery {
             include_inactive: true,
             ..MessageQuery::default()
@@ -439,7 +439,7 @@ mod tests {
         let path = test_path("compacted");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
         let query = MessageQuery {
             include_compacted: true,
             ..MessageQuery::default()
@@ -458,7 +458,7 @@ mod tests {
         let path = test_path("inactive-and-compacted");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
         let query = MessageQuery {
             include_inactive: true,
             include_compacted: true,
@@ -478,7 +478,7 @@ mod tests {
         let path = test_path("latest");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
         let query = MessageQuery {
             limit: Some(1),
             offset: 1,
@@ -499,7 +499,7 @@ mod tests {
         let path = test_path("after-id");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
         let query = MessageQuery {
             after_id: Some(MessageId::new(1)),
             limit: Some(2),
@@ -529,7 +529,7 @@ mod tests {
         let path = test_path("around-middle");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         let result = store
             .get_messages_around(&SessionId::new("session-1"), MessageId::new(4), 1, false)
@@ -547,7 +547,7 @@ mod tests {
         let path = test_path("around-boundary");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         let result = store
             .get_messages_around(&SessionId::new("session-1"), MessageId::new(1), 2, false)
@@ -565,7 +565,7 @@ mod tests {
         let path = test_path("around-visibility");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         assert!(
             store

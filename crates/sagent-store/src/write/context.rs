@@ -1,16 +1,16 @@
-//! Store 的上下文替换、压缩与重试事务。
+//! SQLite 数据库句柄的上下文替换、压缩与重试事务。
 //!
 //! 这些操作都在单个 SQLite transaction 中重写活动分支；拆到子模块仅为按生命周期
-//! 组织代码，仍通过 Store 的私有连接执行，不能绕开写保护或事务边界。
+//! 组织代码，仍通过数据库句柄的私有连接执行，不能绕开写保护或事务边界。
 
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
 use sagent_types::{MessageId, SessionId};
 
 use super::{NewMessage, RetryCheckpoint, insert_message};
-use crate::Store;
+use crate::SqliteDatabase;
 
-impl Store {
+impl SqliteDatabase {
     /// 软归档当前活动消息，并原子写入一组新的活动消息。
     ///
     /// replacements 必须全部属于 session_id。空替换集是合法操作，表示清空活动

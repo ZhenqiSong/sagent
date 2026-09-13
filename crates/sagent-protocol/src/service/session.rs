@@ -196,7 +196,8 @@ mod tests {
 
     fn create_store(path: &std::path::Path) {
         let session_id = SessionId::new("session-1");
-        let mut store = sagent_store::Store::open_readwrite(path).expect("应能创建测试数据库");
+        let mut store =
+            sagent_store::SqliteDatabase::open_readwrite(path).expect("应能创建测试数据库");
         store
             .create_session(&NewSession {
                 id: session_id.clone(),
@@ -225,7 +226,7 @@ mod tests {
     }
 
     fn query_service(path: &std::path::Path) -> SessionService {
-        let store = sagent_store::Store::open_readonly(path).expect("应能只读打开数据库");
+        let store = sagent_store::SqliteDatabase::open_readonly(path).expect("应能只读打开数据库");
         let (_session, query, _search) = StorageDependencies::from(store).into_parts();
         SessionService::new_boxed(query)
     }

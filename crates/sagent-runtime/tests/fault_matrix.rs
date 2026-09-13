@@ -1,6 +1,6 @@
 //! P2.3 Provider/Tool 回环故障矩阵。
 //!
-//! 这些测试只使用本地 Mock Provider、临时 Store 和临时 workspace；每个 fixture 都从
+//! 这些测试只使用本地 Mock Provider、临时 SQLite 数据库和临时 workspace；每个 fixture 都从
 //! submit 到持久化终态走真实 Runtime 路径，避免只测孤立 mock 而漏掉 Actor 的竞争窗口。
 
 use std::{
@@ -23,7 +23,7 @@ use sagent_provider::{
 use sagent_runtime::{
     RuntimeDependencies, RuntimeEventKind, SessionSupervisor, ToolDispatcher, ToolWorker,
 };
-use sagent_store::{EventQuery, MessageQuery, NewSession, Store};
+use sagent_store::{EventQuery, MessageQuery, NewSession, SqliteDatabase};
 use sagent_tools::{
     ReadFileLimits, TerminalLimits, ToolDefinition, ToolPermission, ToolRegistry, WorkspaceRoot,
 };
@@ -42,7 +42,7 @@ fn test_path(name: &str) -> PathBuf {
 }
 
 fn create_session(path: &Path, id: &SessionId) {
-    let mut store = Store::open_readwrite(path).expect("应能打开测试数据库");
+    let mut store = SqliteDatabase::open_readwrite(path).expect("应能打开测试数据库");
     store
         .create_session(&NewSession {
             id: id.clone(),
@@ -55,7 +55,7 @@ fn create_session(path: &Path, id: &SessionId) {
 }
 
 fn terminal_events(path: &Path, turn_id: &sagent_types::TurnId) -> Vec<String> {
-    Store::open_readonly(path)
+    SqliteDatabase::open_readonly(path)
         .expect("应能读取测试数据库")
         .events_for_turn(turn_id, EventSequence::default())
         .expect("应能读取 Turn 事件")
@@ -125,7 +125,7 @@ async fn slow_first_token_keeps_stream_order_and_completes() {
     );
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "mock", "fault-v1");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -170,7 +170,7 @@ async fn slow_first_token_keeps_stream_order_and_completes() {
         terminal_events(&path, &receipt.turn_id),
         vec!["turn.completed"]
     );
-    let messages = Store::open_readonly(&path)
+    let messages = SqliteDatabase::open_readonly(&path)
         .expect("应能读取消息")
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取 transcript");
@@ -196,7 +196,7 @@ async fn repeated_delta_is_transient_and_persists_one_final_message() {
     ]));
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "mock", "fault-v1");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -229,7 +229,7 @@ async fn repeated_delta_is_transient_and_persists_one_final_message() {
 
     // Assert：两次瞬态 delta 不进入 replay，assistant final 与 terminal event 各一条。
     assert_eq!(delta_count, 2);
-    let store = Store::open_readonly(&path).expect("应能读取数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能读取数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取 transcript");
@@ -273,7 +273,7 @@ async fn tool_call_eof_fails_once_without_assistant_tool_call_message() {
     );
     let factory_path = path.clone();
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider, "mock", "fault-v1");
     let supervisor = SessionSupervisor::new(dependencies);
@@ -307,7 +307,7 @@ async fn tool_call_eof_fails_once_without_assistant_tool_call_message() {
         terminal_events(&path, &receipt.turn_id),
         vec!["turn.failed"]
     );
-    let messages = Store::open_readonly(&path)
+    let messages = SqliteDatabase::open_readonly(&path)
         .expect("应能读取数据库")
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取 transcript");
@@ -410,7 +410,7 @@ async fn tool_timeout_is_replayed_once_and_does_not_repeat_execution() {
         TerminalLimits::default(),
     );
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     })
     .with_provider(provider.clone(), "mock", "fault-v1")
     .with_tools(ToolDispatcher::new(tool_registry()), worker);
@@ -456,7 +456,7 @@ async fn tool_timeout_is_replayed_once_and_does_not_repeat_execution() {
         terminal_events(&path, &receipt.turn_id),
         vec!["turn.completed"]
     );
-    let messages = Store::open_readonly(&path)
+    let messages = SqliteDatabase::open_readonly(&path)
         .expect("应能读取数据库")
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取 transcript");

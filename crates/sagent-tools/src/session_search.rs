@@ -229,7 +229,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use sagent_store::{NewMessage, NewSession, SqliteStorageFactory, Store};
+    use sagent_store::{NewMessage, NewSession, SqliteDatabase, SqliteStorageFactory};
     use sagent_types::{MessageId, SessionId, ToolCallId};
     use tokio_util::sync::CancellationToken;
 
@@ -245,7 +245,7 @@ mod tests {
                 .as_nanos()
         ));
         let session = SessionId::new("search-session");
-        let mut store = Store::open_readwrite(&path).unwrap();
+        let mut store = SqliteDatabase::open_readwrite(&path).unwrap();
         store
             .create_session(&NewSession {
                 id: session.clone(),

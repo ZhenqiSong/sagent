@@ -302,7 +302,7 @@ mod tests {
     use std::time::Duration;
 
     use sagent_agent::{RequestId, SessionCommand, UserInput};
-    use sagent_store::{NewSession, Store};
+    use sagent_store::{NewSession, SqliteDatabase};
     use sagent_types::SessionId;
     use tokio::sync::{Notify, broadcast, mpsc, oneshot};
 
@@ -320,7 +320,7 @@ mod tests {
     }
 
     fn create_sessions(path: &Path, sessions: &[&SessionId]) {
-        let mut store = Store::open_readwrite(path).expect("应能打开测试数据库");
+        let mut store = SqliteDatabase::open_readwrite(path).expect("应能打开测试数据库");
         for session in sessions {
             store
                 .create_session(&NewSession {
@@ -337,10 +337,10 @@ mod tests {
     fn counting_factory(
         path: PathBuf,
         opens: Arc<AtomicUsize>,
-    ) -> impl Fn() -> Result<Store, String> + Send + Sync + 'static {
+    ) -> impl Fn() -> Result<SqliteDatabase, String> + Send + Sync + 'static {
         move || {
             opens.fetch_add(1, Ordering::SeqCst);
-            Store::open_readwrite(&path).map_err(|error| error.to_string())
+            SqliteDatabase::open_readwrite(&path).map_err(|error| error.to_string())
         }
     }
 
@@ -765,7 +765,7 @@ mod tests {
 
     #[tokio::test]
     async fn store_open_failure_returns_persistence_without_actor() {
-        let dependencies = RuntimeDependencies::new(|| -> Result<Store, String> {
+        let dependencies = RuntimeDependencies::new(|| -> Result<SqliteDatabase, String> {
             Err("无法打开数据库".into())
         });
         let supervisor = SessionSupervisor::new(dependencies);

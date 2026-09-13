@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use sagent_agent::{PromptToolCall, Transcript};
 use sagent_config::{StorageDescriptor, StorageKind, normalize_profile_name};
 use sagent_protocol::{ClientHelloParams, negotiate_hello};
-use sagent_store::Store;
+use sagent_store::SqliteDatabase;
 use sagent_tools::{CommandRisk, ToolDefinition, ToolRegistry, classify_command};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -227,14 +227,14 @@ fn store_schema(input: Value) -> Result<Value> {
         _ => bail!("store_schema requires database_file or fresh: true"),
     };
     let store = if path == temporary {
-        Store::open_readwrite(&path)?
+        SqliteDatabase::open_readwrite(&path)?
     } else {
-        Store::open_readonly(&path)?
+        SqliteDatabase::open_readonly(&path)?
     };
     let info = store.inspect_schema()?;
     drop(store);
     if path == temporary {
-        // Store 持有 SQLite 连接时 Windows 无法删除文件，故在 drop 后清理临时状态。
+        // SQLite 数据库句柄持有连接时 Windows 无法删除文件，故在 drop 后清理临时状态。
         let _ = fs::remove_file(path);
     }
     Ok(json!({"schema_version": info.schema_version, "has_fts5": info.has_fts5}))

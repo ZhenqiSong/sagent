@@ -86,7 +86,7 @@ impl ProfileService {
 mod tests {
     use std::fs;
 
-    use sagent_store::Store;
+    use sagent_store::SqliteDatabase;
 
     use super::{INITIAL_CONFIG_YAML, ProfileService};
 
@@ -106,7 +106,7 @@ mod tests {
             fs::read_to_string(path.join("config.yaml")).unwrap(),
             INITIAL_CONFIG_YAML
         );
-        assert!(Store::open_readonly(&path.join("state.db")).is_ok());
+        assert!(SqliteDatabase::open_readonly(&path.join("state.db")).is_ok());
 
         let result = ProfileService::create_with_initializer(&root_dir, "broken", |_| {
             anyhow::bail!("模拟失败")

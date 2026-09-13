@@ -18,7 +18,7 @@ use std::{
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use sagent_provider::mock::{MockSseChunk, MockSseServer};
-use sagent_store::{MessageQuery, Store};
+use sagent_store::{MessageQuery, SqliteDatabase};
 use sagent_types::SessionId;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
@@ -323,7 +323,8 @@ fn screen_text(bytes: &[u8]) -> String {
 
 /// 返回临时 Profile 的唯一会话，并确认数据库中的消息投影可读取。
 fn only_session(home: &Path) -> (SessionId, Vec<sagent_types::StoredMessage>) {
-    let store = Store::open_readonly(&home.join("state.db")).expect("应能只读打开临时数据库");
+    let store =
+        SqliteDatabase::open_readonly(&home.join("state.db")).expect("应能只读打开临时数据库");
     let sessions = store.list_sessions(10, 0).expect("应能读取会话列表");
     assert_eq!(sessions.len(), 1, "fixture 应只有一个会话");
     let session_id = sessions[0].id.clone();
@@ -337,7 +338,7 @@ fn only_session(home: &Path) -> (SessionId, Vec<sagent_types::StoredMessage>) {
 async fn wait_for_no_running_turn(home: &Path, session_id: &SessionId) {
     let deadline = Instant::now() + INTERRUPT_WAIT;
     loop {
-        if let Ok(store) = Store::open_readonly(&home.join("state.db"))
+        if let Ok(store) = SqliteDatabase::open_readonly(&home.join("state.db"))
             && store
                 .get_running_turn(session_id)
                 .expect("running Turn 查询应稳定")
@@ -548,7 +549,7 @@ async fn tui_blackbox_reconnects_and_keeps_transcript_unique() {
         1
     );
     assert!(
-        Store::open_readonly(&home.join("state.db"))
+        SqliteDatabase::open_readonly(&home.join("state.db"))
             .expect("应能只读打开数据库")
             .get_running_turn(&session_id)
             .expect("running Turn 查询应稳定")

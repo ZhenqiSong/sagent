@@ -358,7 +358,7 @@ mod tests {
     use std::{fs, time::UNIX_EPOCH};
 
     use sagent_config::Profile;
-    use sagent_store::{NewMessage, NewSession, Store};
+    use sagent_store::{NewMessage, NewSession, SqliteDatabase};
     use sagent_types::SessionId;
 
     use super::super::service::SessionService;
@@ -480,7 +480,7 @@ mod tests {
             )
             .expect("应能创建会话");
         let database = root.join("state.db");
-        let mut store = Store::open_readwrite(&database).expect("应能打开数据库");
+        let mut store = SqliteDatabase::open_readwrite(&database).expect("应能打开数据库");
         store
             .append_message(&NewMessage::new(
                 id.clone(),
@@ -530,7 +530,7 @@ mod tests {
                 .all(|message| message.content != "内部摘要")
         );
         let search_id = SessionId::new("search-session");
-        let mut store = Store::open_readwrite(&database).expect("应能重新打开数据库");
+        let mut store = SqliteDatabase::open_readwrite(&database).expect("应能重新打开数据库");
         store
             .create_session(&NewSession {
                 id: search_id.clone(),

@@ -3,7 +3,7 @@ use std::{fs, path::PathBuf};
 use sagent_runtime::{RuntimeDependencies, SessionSupervisor};
 use sagent_store::{
     EVENT_TOOL_STARTED, MessageQuery, NewDaemonEvent, NewGeneration, NewMessage, NewSession,
-    StartTurn, Store,
+    SqliteDatabase, StartTurn,
 };
 use sagent_types::{SessionId, TurnId};
 
@@ -24,7 +24,7 @@ async fn startup_records_unknown_tool_result_without_reexecuting_and_allows_a_ne
     let session_id = SessionId::new("recovery-actor-session");
     let old_turn = TurnId::new();
     {
-        let mut store = Store::open_readwrite(&path).expect("应能创建测试数据库");
+        let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建测试数据库");
         store
             .create_session(&NewSession {
                 id: session_id.clone(),
@@ -86,7 +86,7 @@ async fn startup_records_unknown_tool_result_without_reexecuting_and_allows_a_ne
 
     let factory_path = path.clone();
     let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
-        Store::open_readwrite(&factory_path).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     }));
     let handle = supervisor
         .get_or_start(session_id.clone())
@@ -96,7 +96,7 @@ async fn startup_records_unknown_tool_result_without_reexecuting_and_allows_a_ne
     // 当作可继续执行的任务，也不会启动任何 Provider 或 ToolWorker。
     handle.close().await.expect("应能关闭测试 actor");
 
-    let store = Store::open_readonly(&path).expect("应能读取恢复后的数据库");
+    let store = SqliteDatabase::open_readonly(&path).expect("应能读取恢复后的数据库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取消息");

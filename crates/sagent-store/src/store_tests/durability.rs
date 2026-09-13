@@ -1,4 +1,4 @@
-//! Store 迁移、Turn 原子持久化和 Profile 隔离契约。
+//! SQLite 数据库迁移、Turn 原子持久化和 Profile 隔离契约。
 
 use super::*;
 
@@ -16,7 +16,7 @@ fn readwrite_store_upgrades_v1_schema_to_v3() {
         .expect("应能创建 v1 结构");
     drop(connection);
 
-    let store = Store::open_readwrite(&path).expect("应能升级 v1 数据库");
+    let store = SqliteDatabase::open_readwrite(&path).expect("应能升级 v1 数据库");
     assert_eq!(
         store.inspect_schema().expect("应能读取结构").schema_version,
         Some(3)
@@ -61,7 +61,7 @@ fn readwrite_store_upgrades_v2_schema_to_v3() {
             .expect("应能创建 v2 结构");
     drop(connection);
 
-    let store = Store::open_readwrite(&path).expect("应能升级 v2 数据库");
+    let store = SqliteDatabase::open_readwrite(&path).expect("应能升级 v2 数据库");
     assert_eq!(
         store.inspect_schema().expect("应能读取结构").schema_version,
         Some(3)
@@ -82,7 +82,7 @@ fn readwrite_store_upgrades_v2_schema_to_v3() {
 fn begin_turn_atomically_persists_user_message_turn_and_events() {
     let path = test_path("begin-turn");
     remove_if_exists(&path);
-    let mut store = Store::open_readwrite(&path).expect("应能创建 Store");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     let session_id = SessionId::new("session-begin");
     store
         .create_session(&NewSession {
@@ -154,7 +154,7 @@ fn begin_turn_atomically_persists_user_message_turn_and_events() {
 fn commit_tool_result_persists_message_and_events_atomically() {
     let path = test_path("tool-result");
     remove_if_exists(&path);
-    let mut store = Store::open_readwrite(&path).expect("应能创建 Store");
+    let mut store = SqliteDatabase::open_readwrite(&path).expect("应能创建数据库");
     let session_id = SessionId::new("session-tool");
     store
         .create_session(&NewSession {
@@ -246,7 +246,7 @@ fn commit_tool_result_persists_message_and_events_atomically() {
 fn events_since_filters_by_sequence_and_reports_latest() {
     let path = test_path("events-since");
     remove_if_exists(&path);
-    let mut store = Store::open_readwrite(&path).unwrap();
+    let mut store = SqliteDatabase::open_readwrite(&path).unwrap();
     let session_id = SessionId::new("session-events");
     store
         .create_session(&NewSession {
@@ -311,7 +311,7 @@ fn turn_persistence_survives_reopen_and_keeps_fts_and_replay_consistent() {
     let session_id = SessionId::new("session-e2e");
     let turn_id = TurnId::new();
     {
-        let mut store = Store::open_readwrite(&path).unwrap();
+        let mut store = SqliteDatabase::open_readwrite(&path).unwrap();
         store
             .create_session(&NewSession {
                 id: session_id.clone(),
@@ -380,7 +380,7 @@ fn turn_persistence_survives_reopen_and_keeps_fts_and_replay_consistent() {
             )
             .unwrap();
     }
-    let store = Store::open_readonly(&path).unwrap();
+    let store = SqliteDatabase::open_readonly(&path).unwrap();
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .unwrap();
@@ -428,7 +428,7 @@ fn event_queries_are_isolated_between_profile_databases() {
     remove_if_exists(&path_a);
     remove_if_exists(&path_b);
     for (path, id) in [(&path_a, "session-a"), (&path_b, "session-b")] {
-        let mut store = Store::open_readwrite(path).unwrap();
+        let mut store = SqliteDatabase::open_readwrite(path).unwrap();
         let session_id = SessionId::new(id);
         store
             .create_session(&NewSession {
@@ -463,7 +463,7 @@ fn event_queries_are_isolated_between_profile_databases() {
             )
             .unwrap();
     }
-    let store_b = Store::open_readonly(&path_b).unwrap();
+    let store_b = SqliteDatabase::open_readonly(&path_b).unwrap();
     assert!(
         store_b
             .events_since(&EventQuery {

@@ -61,7 +61,7 @@ fn migrate_v2_to_v3(transaction: &rusqlite::Transaction<'_>) -> Result<()> {
 /// 将数据库迁移到当前版本。
 ///
 /// v1 初始化 Sagent 自己的表与 FTS5 索引，v2 增加会话回退计数。它不尝试
-/// 兼容或修改 Hermes 的 state.db；读取 Hermes 数据仍应使用只读 Store。
+/// 兼容或修改 Hermes 的 state.db；读取 Hermes 数据仍应使用只读数据库句柄。
 pub(crate) fn migrate(connection: &mut Connection) -> Result<()> {
     let transaction = connection.transaction().context("开始数据库迁移事务失败")?;
     transaction

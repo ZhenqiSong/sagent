@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params_from_iter, types::Value};
 use sagent_types::{MessageId, SearchHit, SessionId};
 
-use crate::Store;
+use crate::SqliteDatabase;
 
 /// 消息全文搜索的范围与可见性条件。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,7 +66,7 @@ fn contains_cjk(query: &str) -> bool {
     })
 }
 
-impl Store {
+impl SqliteDatabase {
     /// 在 messages_fts 索引中搜索消息内容。
     ///
     /// 默认显示活动消息和压缩保留的历史消息，隐藏普通撤回消息；这与会话搜索
@@ -131,7 +131,7 @@ mod tests {
     use rusqlite::Connection;
     use sagent_types::SessionId;
 
-    use super::{MessageSearchQuery, Store};
+    use super::{MessageSearchQuery, SqliteDatabase};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sagent-search-{name}-{}.db", std::process::id()))
@@ -190,7 +190,7 @@ mod tests {
         let path = test_path("visibility");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         let hits = store
             .search_messages(&MessageSearchQuery::new("Rust"))
@@ -206,7 +206,7 @@ mod tests {
         let path = test_path("session");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
         let mut query = MessageSearchQuery::new("Rust");
         query.session_id = Some(SessionId::new("session-1"));
 
@@ -225,7 +225,7 @@ mod tests {
         let path = test_path("inactive");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
         let mut query = MessageSearchQuery::new("Rust");
         query.include_inactive = true;
 
@@ -242,7 +242,7 @@ mod tests {
         let path = test_path("invalid");
         remove(&path);
         create_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         assert!(
             store
@@ -262,7 +262,7 @@ mod tests {
         let path = test_path("unicode");
         remove(&path);
         create_cjk_fixture(&path);
-        let store = Store::open_readonly(&path).expect("应能只读打开 fixture");
+        let store = SqliteDatabase::open_readonly(&path).expect("应能只读打开 fixture");
 
         let hits = store
             .search_messages(&MessageSearchQuery::new("中文消息"))

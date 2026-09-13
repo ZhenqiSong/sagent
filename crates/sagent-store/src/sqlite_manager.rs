@@ -2,7 +2,7 @@
 //!
 //! `SqliteStorageManager` 持有 SQLite 后端的不可变绑定信息，并实现通用
 //! `StorageManager` 申请入口。它只负责连接打开、连接检查和端口聚合，不承担 Session
-//! 或 Turn 的业务规则；这些规则仍由 `Store` 和领域端口实现维护。
+//! 或 Turn 的业务规则；这些规则仍由 `SqliteDatabase` 和领域端口实现维护。
 //!
 //! 作者：SongZQ
 
@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 
 use crate::{
-    ReadStorage, Storage, StorageDependencies, StorageManager, StorageReadDependencies,
-    StorageResult, StorageWriteDependencies, Store, WriteStorage,
+    ReadStorage, SqliteDatabase, Storage, StorageDependencies, StorageManager,
+    StorageReadDependencies, StorageResult, StorageWriteDependencies, WriteStorage,
 };
 
 /// 绑定单个 Profile SQLite 数据库的存储管理器。
@@ -35,25 +35,25 @@ impl SqliteStorageManager {
     }
 
     /// 以读写方式打开 SQLite 数据库，并验证连接可执行基本查询。
-    fn open_writable_store(&self) -> Result<Store> {
-        let store = Store::open_readwrite(&self.database_path).with_context(|| {
+    fn open_writable_database(&self) -> Result<SqliteDatabase> {
+        let database = SqliteDatabase::open_readwrite(&self.database_path).with_context(|| {
             format!("打开 SQLite 写入存储失败：{}", self.database_path.display())
         })?;
-        store
+        database
             .verify_connection()
             .context("检查 SQLite 写入存储失败")?;
-        Ok(store)
+        Ok(database)
     }
 
     /// 以只读方式打开已有 SQLite 数据库，并验证连接可执行基本查询。
-    fn open_readonly_store(&self) -> Result<Store> {
-        let store = Store::open_readonly(&self.database_path).with_context(|| {
+    fn open_readonly_database(&self) -> Result<SqliteDatabase> {
+        let database = SqliteDatabase::open_readonly(&self.database_path).with_context(|| {
             format!("打开 SQLite 只读存储失败：{}", self.database_path.display())
         })?;
-        store
+        database
             .verify_connection()
             .context("检查 SQLite 只读存储失败")?;
-        Ok(store)
+        Ok(database)
     }
 }
 
@@ -61,20 +61,20 @@ impl StorageManager for SqliteStorageManager {
     /// 为 SessionActor 创建独立的 SQLite 完整业务存储。
     fn open_actor_storage(&self) -> StorageResult<Storage> {
         Ok(Storage::from_dependencies(StorageDependencies::from(
-            self.open_writable_store()?,
+            self.open_writable_database()?,
         )))
     }
 
     /// 为查询和搜索创建只读 SQLite 业务存储。
     fn open_read_storage(&self) -> StorageResult<ReadStorage> {
         Ok(ReadStorage::from_dependencies(
-            StorageReadDependencies::from(self.open_readonly_store()?),
+            StorageReadDependencies::from(self.open_readonly_database()?),
         ))
     }
 
     /// 为短生命周期写命令创建只写 SQLite 业务存储。
     fn open_write_storage(&self) -> StorageResult<WriteStorage> {
-        let dependencies = StorageDependencies::from(self.open_writable_store()?);
+        let dependencies = StorageDependencies::from(self.open_writable_database()?);
         let (session, _query, _search) = dependencies.into_parts();
         Ok(WriteStorage::from_dependencies(
             StorageWriteDependencies::from_session(session),
@@ -83,12 +83,12 @@ impl StorageManager for SqliteStorageManager {
 
     /// 初始化 SQLite 数据库并执行当前 schema migration。
     fn initialize(&self) -> StorageResult<()> {
-        self.open_writable_store().map(|_| ())
+        self.open_writable_database().map(|_| ())
     }
 
     /// 只读检查已有 SQLite 数据库，不创建文件或触发 schema migration。
     fn health_check(&self) -> StorageResult<()> {
-        self.open_readonly_store().map(|_| ())
+        self.open_readonly_database().map(|_| ())
     }
 }
 

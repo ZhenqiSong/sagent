@@ -1,4 +1,4 @@
-//! Store 的事务与只读边界测试。
+//! SQLite 数据库句柄的事务与只读边界测试。
 //!
 //! 测试保留 crate 私有可见性，以验证连接写保护而不把 SQLite connection 暴露给调用方。
 
@@ -8,7 +8,7 @@ use rusqlite::Connection;
 
 use super::{
     EventQuery, MessageQuery, MessageSearchQuery, NewGeneration, NewMessage, NewSession,
-    RestoreResult, SCHEMA_VERSION, StartTurn, Store,
+    RestoreResult, SCHEMA_VERSION, SqliteDatabase, StartTurn,
 };
 use sagent_types::{EventSequence, MessageId, SessionId, TurnId};
 
@@ -22,7 +22,7 @@ fn remove_if_exists(path: &std::path::Path) {
     // 清理函数允许目标不存在，便于在测试开始前消除上次异常留下的临时文件。
     let _ = fs::remove_file(path);
 }
-// 将不同生命周期的 fixture 分开，避免单个 Store 测试文件同时承载打开、分支和持久化语义。
+// 将不同生命周期的 fixture 分开，避免单个测试文件同时承载打开、分支和持久化语义。
 #[path = "store_tests/branch.rs"]
 mod branch;
 #[path = "store_tests/core.rs"]

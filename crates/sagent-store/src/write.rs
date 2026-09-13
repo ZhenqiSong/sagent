@@ -6,9 +6,9 @@ use anyhow::{Context, Result};
 use rusqlite::{Transaction, params};
 use sagent_types::{MessageId, SessionId, StoredMessage};
 
-use crate::Store;
+use crate::SqliteDatabase;
 
-// 这两个子模块仍属于 write：它们共享 Store 的事务与只读保护，只是分别承载“替换
+// 这两个子模块仍属于 write：它们共享数据库句柄的事务与只读保护，只是分别承载“替换
 // 活动上下文”和“回退旧分支”两种生命周期，避免常规追加接口演变成写入 god-file。
 #[path = "write/branch.rs"]
 mod branch;
@@ -178,7 +178,7 @@ pub(crate) fn insert_message(
     Ok(MessageId::new(transaction.last_insert_rowid()))
 }
 
-impl Store {
+impl SqliteDatabase {
     /// 新建一个空会话。
     pub fn create_session(&mut self, session: &NewSession) -> Result<()> {
         self.ensure_writable()?;

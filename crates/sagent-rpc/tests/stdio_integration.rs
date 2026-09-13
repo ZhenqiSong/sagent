@@ -8,7 +8,7 @@ use std::{
 };
 
 use sagent_provider::mock::{MockSseChunk, MockSseServer};
-use sagent_store::{MessageQuery, NewDaemonEvent, NewMessage, NewSession, Store};
+use sagent_store::{MessageQuery, NewDaemonEvent, NewMessage, NewSession, SqliteDatabase};
 use sagent_types::SessionId;
 use serde_json::{Value, json};
 
@@ -57,7 +57,7 @@ fn create_fixture(home: &Path) -> PathBuf {
     let database = home.join("state.db");
     let visible_id = SessionId::new("visible-session");
     let archived_id = SessionId::new("archived-session");
-    let mut store = Store::open_readwrite(&database).expect("应能创建 fixture 数据库");
+    let mut store = SqliteDatabase::open_readwrite(&database).expect("应能创建 fixture 数据库");
 
     store
         .create_session(&NewSession {
@@ -209,7 +209,7 @@ async fn stdio_real_runtime_reaches_terminal_approval_and_second_provider_round(
     .expect("应能写入 approval provider 配置");
     fs::write(home.join(".env"), "SAGE_APPROVAL_KEY=fixture-key\n").expect("应能写入 fixture 凭据");
     let session_id = SessionId::new("approval-blackbox-session");
-    let mut store = Store::open_readwrite(&home.join("state.db")).expect("应能创建状态库");
+    let mut store = SqliteDatabase::open_readwrite(&home.join("state.db")).expect("应能创建状态库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),
@@ -654,7 +654,7 @@ async fn mock_sse_drives_real_rpc_stream_and_persists_final_message() {
     // session id 在 create 响应后才知道；为在同一 stdin 批次中提交 prompt，测试先
     // 在同一 Profile 写入会话，实际 create → submit 串联由客户端状态机负责。
     let session_id = SessionId::new("mock-sse-session");
-    let mut store = Store::open_readwrite(&home.join("state.db")).expect("应能打开状态库");
+    let mut store = SqliteDatabase::open_readwrite(&home.join("state.db")).expect("应能打开状态库");
     store
         .create_session(&NewSession {
             id: session_id.clone(),
@@ -694,7 +694,7 @@ async fn mock_sse_drives_real_rpc_stream_and_persists_final_message() {
     );
 
     server.wait().await.expect("Mock SSE 应服务一次请求");
-    let store = Store::open_readonly(&home.join("state.db")).expect("应能重开状态库");
+    let store = SqliteDatabase::open_readonly(&home.join("state.db")).expect("应能重开状态库");
     let messages = store
         .get_messages_for_display(&session_id, &MessageQuery::default())
         .expect("应能读取持久化消息");
@@ -730,7 +730,8 @@ fn hello_then_session_create_persists_an_empty_rpc_session() {
     assert_eq!(frames[2]["result"]["session"]["source"], json!("rpc"));
     assert_eq!(frames[2]["result"]["session"]["title"], json!("RPC 空会话"));
 
-    let store = Store::open_readonly(&home.join("state.db")).expect("应能重新只读打开数据库");
+    let store =
+        SqliteDatabase::open_readonly(&home.join("state.db")).expect("应能重新只读打开数据库");
     let session = store
         .get_session(&SessionId::new(session_id))
         .expect("应能读取刚创建的会话")

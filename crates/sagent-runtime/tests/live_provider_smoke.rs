@@ -22,7 +22,7 @@ use sagent_runtime::{
     RuntimeDependencies, RuntimeEventKind, RuntimeEventSubscription, SessionHandle,
     SessionSupervisor,
 };
-use sagent_store::{MessageQuery, NewSession, Store};
+use sagent_store::{MessageQuery, NewSession, SqliteDatabase};
 use sagent_types::SessionId;
 
 const LIVE_SWITCH: &str = "SAGENT_RUN_LIVE_TESTS";
@@ -82,7 +82,7 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
             .as_nanos(),
         LIVE_SESSION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut store = Store::open_readwrite(&database_path)?;
+    let mut store = SqliteDatabase::open_readwrite(&database_path)?;
     store.create_session(&NewSession {
         id: session_id.clone(),
         source: Some("live-provider-smoke".into()),
@@ -95,7 +95,8 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
     let database_path_for_factory = database_path.clone();
     let provider = Arc::new(resolved.client);
     let dependencies = RuntimeDependencies::new(move || {
-        Store::open_readwrite(&database_path_for_factory).map_err(|error| error.to_string())
+        SqliteDatabase::open_readwrite(&database_path_for_factory)
+            .map_err(|error| error.to_string())
     })
     .with_provider(provider, model.clone(), profile_revision.clone());
     let supervisor = SessionSupervisor::new(dependencies);
@@ -157,7 +158,7 @@ async fn live_provider_round_trip_persists_assistant_message() -> Result<()> {
         .await?;
     wait_for_completion(&mut events).await?;
 
-    let store = Store::open_readonly(&live.database_path)?;
+    let store = SqliteDatabase::open_readonly(&live.database_path)?;
     let messages = store.get_messages_for_display(&live.session_id, &MessageQuery::default())?;
     let assistant = messages
         .last()
@@ -211,7 +212,7 @@ async fn live_provider_cancel_stops_active_turn() -> Result<()> {
         bail!("真实 Provider 在取消请求前已经完成回合，无法验证取消路径");
     }
 
-    let store = Store::open_readonly(&live.database_path)?;
+    let store = SqliteDatabase::open_readonly(&live.database_path)?;
     let messages = store.get_messages_for_display(&live.session_id, &MessageQuery::default())?;
     assert!(messages.iter().all(|message| message.role != "assistant"));
 

@@ -22,12 +22,105 @@ use creation::session_id_from_clock;
 #[allow(unused_imports)]
 pub use creation::{create, create_with_id};
 use creation::{create_with_storage, rfc3339_now};
-use lifecycle::{
-    handle_archive, handle_finish, handle_rename, handle_restore, handle_rewind, handle_unarchive,
-};
 #[allow(unused_imports)]
 pub use query::{list, render_list, render_search, render_show, search, show};
 use query::{list_with_storage, search_with_storage, show_with_storage};
+
+/// Session 命令的统一编排器。
+///
+/// 处理器只借用一次命令级上下文，不持有数据库连接或领域存储依赖；这样同一条 CLI
+/// 命令仍可复用 `CommandContext` 缓存的存储装配，同时让各个处理方法共享输出格式、Profile
+/// 选择和错误上下文，而不会把存储生命周期延长到整个处理器。
+pub(super) struct SessionCommandHandler<'a> {
+    /// 当前 CLI 调用的共享参数与惰性存储装配；借用关系不拥有外部资源。
+    context: &'a CommandContext,
+}
+
+impl<'a> SessionCommandHandler<'a> {
+    /// 创建绑定当前 CLI 调用上下文的 session 处理器。
+    fn new(context: &'a CommandContext) -> Self {
+        Self { context }
+    }
+
+    /// 执行一个已解析的 session 子命令。
+    fn execute(&self, command: SessionCommand) -> Result<()> {
+        match command {
+            SessionCommand::Create { title, model } => self.handle_create(title, model),
+            SessionCommand::Show {
+                session_id,
+                limit,
+                offset,
+            } => self.handle_show(&session_id, limit, offset),
+            SessionCommand::Search {
+                query,
+                limit,
+                session_id,
+            } => self.handle_search(&query, limit, session_id.as_deref()),
+            SessionCommand::List {
+                limit,
+                offset,
+                include_archived,
+            } => self.handle_list(limit, offset, include_archived),
+            SessionCommand::Rename { session_id, title } => self.handle_rename(&session_id, &title),
+            SessionCommand::Archive { session_id } => self.handle_archive(&session_id),
+            SessionCommand::Unarchive { session_id } => self.handle_unarchive(&session_id),
+            SessionCommand::Finish { session_id, reason } => {
+                self.handle_finish(&session_id, &reason)
+            }
+            SessionCommand::Rewind {
+                session_id,
+                message_id,
+            } => self.handle_rewind(&session_id, &message_id),
+            SessionCommand::Restore {
+                session_id,
+                message_id,
+            } => self.handle_restore(&session_id, &message_id),
+        }
+    }
+
+    /// 返回命令级上下文，供按主题拆分的生命周期模块复用统一依赖。
+    pub(super) fn context(&self) -> &'a CommandContext {
+        self.context
+    }
+
+    /// 创建会话并输出新 ID。
+    fn handle_create(&self, title: Option<String>, model: Option<String>) -> Result<()> {
+        let session_id = create_with_storage(self.context.storage()?, title, model)?;
+        let value = serde_json::json!({ "session_id": session_id.as_str() });
+        print_output(
+            self.context.format,
+            &value,
+            vec![format!("已创建会话: {}", session_id.as_str())],
+        )
+    }
+
+    /// 读取并展示单个会话。
+    fn handle_show(&self, session_id: &str, limit: u32, offset: u32) -> Result<()> {
+        let detail = show_with_storage(self.context.storage()?, session_id, limit, offset)?;
+        print_output(self.context.format, &detail, render_show(&detail))
+    }
+
+    /// 搜索当前 profile 的消息。
+    fn handle_search(&self, query: &str, limit: u32, session_id: Option<&str>) -> Result<()> {
+        let hits = search_with_storage(self.context.storage()?, query, limit, session_id)?;
+        print_output(self.context.format, &hits, render_search(&hits))
+    }
+
+    /// 列出当前 profile 的会话。
+    fn handle_list(&self, limit: u32, offset: u32, include_archived: bool) -> Result<()> {
+        let sessions = list_with_storage(self.context.storage()?, limit, offset, include_archived)?;
+        print_output(self.context.format, &sessions, render_list(&sessions))
+    }
+
+    /// 为当前 Profile 申请可写领域端口；只供明确的生命周期命令使用。
+    pub(super) fn with_writable_storage<T>(
+        &self,
+        operation: impl FnOnce(&mut dyn SessionStorage) -> Result<T>,
+    ) -> Result<T> {
+        let mut dependencies = self.context.storage()?.open_write()?;
+        operation(dependencies.session_mut())
+    }
+}
 
 /// `session` 分组下的命令参数与处理器。
 #[derive(Debug, Subcommand)]
@@ -97,89 +190,8 @@ pub enum SessionCommand {
 impl SessionCommand {
     /// 执行 session 子命令并按用户选择的格式输出。
     pub fn execute(self, context: &CommandContext) -> Result<()> {
-        match self {
-            Self::Create { title, model } => handle_create(context, title, model),
-            Self::Show {
-                session_id,
-                limit,
-                offset,
-            } => handle_show(context, &session_id, limit, offset),
-            Self::Search {
-                query,
-                limit,
-                session_id,
-            } => handle_search(context, &query, limit, session_id.as_deref()),
-            Self::List {
-                limit,
-                offset,
-                include_archived,
-            } => handle_list(context, limit, offset, include_archived),
-            Self::Rename { session_id, title } => handle_rename(context, &session_id, &title),
-            Self::Archive { session_id } => handle_archive(context, &session_id),
-            Self::Unarchive { session_id } => handle_unarchive(context, &session_id),
-            Self::Finish { session_id, reason } => handle_finish(context, &session_id, &reason),
-            Self::Rewind {
-                session_id,
-                message_id,
-            } => handle_rewind(context, &session_id, &message_id),
-            Self::Restore {
-                session_id,
-                message_id,
-            } => handle_restore(context, &session_id, &message_id),
-        }
+        SessionCommandHandler::new(context).execute(self)
     }
-}
-
-/// 创建会话并输出新 ID。
-fn handle_create(
-    context: &CommandContext,
-    title: Option<String>,
-    model: Option<String>,
-) -> Result<()> {
-    let session_id = create_with_storage(context.storage()?, title, model)?;
-    let value = serde_json::json!({ "session_id": session_id.as_str() });
-    print_output(
-        context.format,
-        &value,
-        vec![format!("已创建会话: {}", session_id.as_str())],
-    )
-}
-
-/// 读取并展示单个会话。
-fn handle_show(context: &CommandContext, session_id: &str, limit: u32, offset: u32) -> Result<()> {
-    let detail = show_with_storage(context.storage()?, session_id, limit, offset)?;
-    print_output(context.format, &detail, render_show(&detail))
-}
-
-/// 搜索当前 profile 的消息。
-fn handle_search(
-    context: &CommandContext,
-    query: &str,
-    limit: u32,
-    session_id: Option<&str>,
-) -> Result<()> {
-    let hits = search_with_storage(context.storage()?, query, limit, session_id)?;
-    print_output(context.format, &hits, render_search(&hits))
-}
-
-/// 列出当前 profile 的会话。
-fn handle_list(
-    context: &CommandContext,
-    limit: u32,
-    offset: u32,
-    include_archived: bool,
-) -> Result<()> {
-    let sessions = list_with_storage(context.storage()?, limit, offset, include_archived)?;
-    print_output(context.format, &sessions, render_list(&sessions))
-}
-
-/// 为当前 Profile 申请可写领域端口；只供明确的生命周期命令使用。
-fn with_writable_storage<T>(
-    context: &CommandContext,
-    operation: impl FnOnce(&mut dyn SessionStorage) -> Result<T>,
-) -> Result<T> {
-    let mut dependencies = context.storage()?.open_write()?;
-    operation(dependencies.session_mut())
 }
 
 /// 生成生命周期写操作共用的 UTC 毫秒时间戳。

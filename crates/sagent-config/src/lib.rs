@@ -20,10 +20,7 @@ pub mod storage;
 
 pub use config_reader::load_profile_config;
 pub use paths::{SagentPaths, resolve_active_paths, resolve_paths};
-pub use profile::{
-    ProfileName, active_profile_path, list_profile_names, normalize_profile_name,
-    read_active_profile, set_active_profile,
-};
+pub use profile::{Profile, ProfileInfo, ProfileName, normalize_profile_name};
 pub use profile_config::ProfileConfig;
 pub use provider_config::{
     ModelDetail, ModelSetting, ProviderConfig, ProviderDescriptor, UserProviderConfig,

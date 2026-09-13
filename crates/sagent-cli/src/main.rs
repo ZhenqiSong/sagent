@@ -14,7 +14,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::{
-    commands::{Command, CommandContext},
+    commands::{Command, CommandContext, HandlerFactory},
     output::OutputFormat,
 };
 
@@ -43,7 +43,8 @@ fn run(cli: Cli) -> Result<()> {
     } = cli;
 
     let context = CommandContext::new(home, profile, format);
-    command.execute(&context)
+    let mut handler = HandlerFactory::create(&command, context)?;
+    handler.execute(command)
 }
 
 /// 将当前已知的 CLI 边界错误映射为稳定退出码。

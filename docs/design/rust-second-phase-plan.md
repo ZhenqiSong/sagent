@@ -38,8 +38,8 @@ sagent session restore <SESSION_ID> <MESSAGE_ID>
 
 | 能力 | 现有 Rust 文件 | 关键接口 |
 |---|---|---|
-| 命令分组与根分发 | `crates/sagent-cli/src/commands/mod.rs` | `Command::execute` |
-| session CLI | `crates/sagent-cli/src/commands/session.rs` | `SessionCommand::execute` |
+| 命令协议与根分发 | `crates/sagent-cli/src/commands/command.rs`、`handler.rs` | `Command`、`HandlerFactory`、`CommandHandler` |
+| session CLI | `crates/sagent-cli/src/commands/session/{command,handler,service}/` | `SessionCommand`、`SessionHandler`、会话服务 |
 | JSON/text 输出 | `crates/sagent-cli/src/output.rs` | `print_output` |
 | 会话读取 | `crates/sagent-store/src/session.rs` | `list_sessions`、`get_session` |
 | 消息读取 | `crates/sagent-store/src/message.rs` | `get_messages_for_display` |
@@ -181,15 +181,17 @@ pub fn restore_rewound_from(
 
 目标：避免每个新增命令继续携带 `home/profile/format` 三个参数，并统一退出状态。
 
-1. 在 `sagent-cli/src/commands/mod.rs` 新增 `CommandContext`：
+1. 在 `sagent-cli/src/commands/context.rs` 新增 `CommandContext`：
    `home: Option<PathBuf>`、`profile: Option<ProfileName>`、`format: OutputFormat`；
-2. `main.rs` 只构造一次 Context 并调用 `command.execute(&context)`；
-3. 将 `anyhow` 边界错误映射为 CLI 错误类别：
+2. `CommandHandler` 只拥有 `CommandContext`，`execute(command)` 显式接收已解析命令，不把命令
+   保存为 handler 成员；
+3. `main.rs` 只构造一次 Context，并通过 `HandlerFactory` 创建拥有该 Context 的命令 handler；
+4. 将 `anyhow` 边界错误映射为 CLI 错误类别：
    - `2`：参数/输入错误；
    - `3`：profile 或 state.db 不存在；
    - `4`：数据库、schema、事务错误；
    - `1`：未分类内部错误；
-4. stdout 始终只承载成功结果；错误诊断只写 stderr。
+5. stdout 始终只承载成功结果；错误诊断只写 stderr。
 
 验收：新增 CLI 集成测试覆盖错误类别与 stdout/stderr 分离。
 
@@ -200,7 +202,7 @@ pub fn restore_rewound_from(
 1. 在 `sagent-store/src/session.rs` 为 list 查询增加 `SessionListQuery`，包含
    `include_archived`、`include_hidden`、`limit`、`offset`；
 2. 保留当前 `list_sessions(limit, offset)` 作为默认可见性包装，避免破坏第一阶段调用方；
-3. 在 `commands/session.rs` 为 `List` 新增 `--include-archived`；
+3. 在 `commands/session/command.rs` 为 `List` 新增 `--include-archived`；
 4. 为默认列表、归档列表、精确 show 建立 Store 与 CLI 集成测试。
 
 ### 步骤 2.3：实现 rename、archive、unarchive、finish

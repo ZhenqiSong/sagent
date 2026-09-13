@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::{ProfileName, read_active_profile};
+use crate::{Profile, ProfileName};
 
 /// 一个已解析的 Sagent 数据目录及其第一阶段需要访问的文件路径。
 ///
@@ -98,7 +98,9 @@ pub fn resolve_active_paths(
     let profile = match profile_override {
         Some(profile) => profile,
         None => {
-            active_profile = read_active_profile(&root)?;
+            // Profile 在构造时读取 active-profile，并从同一份快照返回活动项，避免
+            // 路径解析层再次直接读取选择文件。
+            active_profile = Profile::from_root(&root)?.read_active_profile()?;
             &active_profile
         }
     };
@@ -163,7 +165,7 @@ mod tests {
     use super::{
         configured_home, platform_default_home, profile_root, resolve_active_paths, resolve_paths,
     };
-    use crate::{normalize_profile_name, set_active_profile};
+    use crate::{Profile, normalize_profile_name};
 
     #[test]
     fn profile_home_resolves_to_root() {
@@ -269,7 +271,8 @@ mod tests {
         let coder_home = root.join("profiles").join("coder");
         fs::create_dir_all(&coder_home).expect("应能创建命名 profile");
         let coder = normalize_profile_name("coder").expect("名称应合法");
-        set_active_profile(&root, &coder).expect("应能选择 coder");
+        let mut profile = Profile::from_root(&root).expect("应能创建 Profile 索引");
+        profile.select(coder.as_str()).expect("应能选择 coder");
 
         let active = resolve_active_paths(Some(&root), None).expect("应能解析保存的当前 profile");
         assert_eq!(active.sagent_home, coder_home);

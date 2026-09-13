@@ -221,6 +221,8 @@ API，不再保留只做转发的 `provider.rs`。`config_reader` 与 `ProfileCo
 读取、反序列化和不可变意图组合，不创建数据库、HTTP client 或后台任务。当前
 `resolve_openai_provider_from_config` 只接受已加载快照，仍暂时在 config crate 中实例化
 OpenAI-compatible client；后续 R4 的 ProviderFactory 将把该副作用移到 bootstrap。
+Profile 目录索引的 `Profile`/`ProfileInfo` 也位于 `sagent-config`，只保存按名称索引的
+快照和 active-profile 状态操作；CLI 的命令解析、输出及存储初始化不下沉到配置层。
 `ProfileConfig::get_storage_descriptor` 以及各主题的 `*_from_config` API 提供无 I/O 的已
 加载配置提取路径，供 bootstrap 复用同一份配置快照；`load_profile_config` 是当前唯一的
 `config.yaml` 文件读取入口。
@@ -280,11 +282,12 @@ RPC、CLI 和工具均不感知这种差异。
 仍只保存 Factory，不保存数据库路径或 `Store`。RPC bootstrap 的
 `create_storage_factory` 根据已解析 `StorageDescriptor.kind` 选择 adapter；CLI 的存储装配
 边界暂时复用同一 fail-closed 选择规则，待 R3.5 manager 收口为单一 selector。`session_search`
-同样通过 Factory 获取搜索端口，不再打开 SQLite 或保存数据库路径。CLI 的 Profile 创建、
+同样通过 Factory 获取搜索端口，不再打开 SQLite 或保存数据库路径。CLI 的 Profile 索引由
+配置层 `Profile` 提供，目录和存储初始化由独立的 `ProfileService` 承担。CLI 的 Profile 创建、
 会话创建、列表、详情、搜索及生命周期管理命令也统一通过 `StorageFactory` 申请可写或只读
-端口；CLI 生产路径不再导入 `Store`。CLI 在 `CommandContext` 中按命令作用域缓存一个
-`CliStorageContext`，同一条命令的各 handler 只从该上下文申请职责匹配的端口，不重复读取
-配置或构造 Factory。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
+端口；CLI 生产路径不再导入 `Store`。CLI 通过 `HandlerFactory` 为每条顶层命令创建一个
+拥有 `CommandContext` 的领域 handler；handler 复用上下文中的 `CliStorageContext`，并按操作
+申请职责匹配的端口，不重复读取配置或构造 Factory。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
 保留 `From<Store>` 到端口聚合的边界转换，但新的生产装配必须使用 Factory selector。上述
 是 R3.3/R3.4 的过渡实现；R3.5 完成后，Factory 只用于构造 `StorageManager`，其余运行时组件
 通过 manager 或已申请的窄领域端口协作。

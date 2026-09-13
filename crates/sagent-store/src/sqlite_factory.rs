@@ -19,8 +19,8 @@ use crate::{
     NewMessage, NewSession, SessionListQuery, SqliteStorageManager, StartTurn, StorageManager,
     Store, StoredDaemonEvent, StoredGeneration, StoredRunningTurn,
     ports::{
-        SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageFactory,
-        StorageReadDependencies, StorageResult,
+        SearchStorage, SessionQueryStorage, SessionWriteStorage, StorageDependencies,
+        StorageFactory, StorageReadDependencies, StorageResult,
     },
 };
 
@@ -100,12 +100,12 @@ impl From<Store> for StorageReadDependencies {
     }
 }
 
-/// 将 SQLite Store 的写入操作映射为 SessionStorage 端口。
+/// 将 SQLite Store 的写入操作映射为 SessionWriteStorage 端口。
 struct SqliteSessionStorage {
     store: SharedStore,
 }
 
-impl SessionStorage for SqliteSessionStorage {
+impl SessionWriteStorage for SqliteSessionStorage {
     fn create_session(&mut self, session: &NewSession) -> StorageResult<()> {
         lock_store(&self.store)?.create_session(session)
     }

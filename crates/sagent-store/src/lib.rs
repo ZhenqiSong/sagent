@@ -34,8 +34,10 @@ pub use event::{
 pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use ports::{
-    SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageFactory,
-    StorageManager, StorageReadDependencies, StorageResult, StorageWriteDependencies,
+    ReadOnlySessionStorage, ReadStorage, SearchStorage, SessionQueryStorage, SessionStorage,
+    SessionWriteStorage, Storage, StorageDependencies, StorageFactory, StorageManager,
+    StorageReadDependencies, StorageResult, StorageWriteDependencies, WriteOnlySessionStorage,
+    WriteStorage,
 };
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;

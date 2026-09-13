@@ -3,7 +3,7 @@
 //! 这些类型只保存 Actor 运行所需的稳定上下文，不实现命令处理或持久化流程，避免
 //! `SessionActor` 同时承担依赖装配、生命周期管理和业务编排等职责。
 
-use sagent_store::{SessionQueryStorage, SessionStorage};
+use sagent_store::{SessionQueryStorage, SessionWriteStorage};
 use sagent_types::SessionId;
 use tokio::sync::{broadcast, mpsc};
 
@@ -15,7 +15,7 @@ use crate::{approval::ApprovalManager, event::RuntimeEvent, input::ActorInput};
 /// 而 Actor 的业务策略和 Turn 状态不会因此耦合到存储实现。
 pub(crate) struct ActorSessionContext {
     pub(crate) session_id: SessionId,
-    pub(crate) session_storage: Box<dyn SessionStorage>,
+    pub(crate) session_storage: Box<dyn SessionWriteStorage>,
     pub(crate) query_storage: Box<dyn SessionQueryStorage>,
     pub(crate) clock: fn() -> String,
 }

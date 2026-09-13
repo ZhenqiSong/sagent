@@ -1,21 +1,21 @@
 //! 存储端口的运行时依赖聚合。
 
-use super::{SearchStorage, SessionQueryStorage, SessionStorage};
+use super::{SearchStorage, SessionQueryStorage, SessionWriteStorage};
 
 /// 一次运行时装配所需的领域存储依赖。
 ///
 /// 该聚合只保存端口对象，不保存数据库路径、连接、连接池或后端配置。Factory 负责
 /// 根据 `StorageDescriptor` 创建它；上层只能通过领域端口访问存储行为。
 pub struct StorageDependencies {
-    session: Box<dyn SessionStorage>,
+    session: Box<dyn SessionWriteStorage>,
     query: Box<dyn SessionQueryStorage>,
     search: Box<dyn SearchStorage>,
 }
 
 /// 只读调用所需的领域存储端口集合。
 ///
-/// CLI 查询、RPC 事件补读和全文搜索不应获得 `SessionStorage` 写入能力；独立的只读
-/// 聚合让后端可以使用只读连接、连接池中的只读事务或其它等价实现。
+/// CLI 查询、RPC 事件补读和全文搜索不应获得 `SessionWriteStorage` 写入能力；独立的
+/// 只读聚合让后端可以使用只读连接、连接池中的只读事务或其它等价实现。
 pub struct StorageReadDependencies {
     query: Box<dyn SessionQueryStorage>,
     search: Box<dyn SearchStorage>,
@@ -27,22 +27,22 @@ pub struct StorageReadDependencies {
 /// 在申请依赖时表达最小权限。`SessionActor` 仍使用包含配套查询端口的
 /// `StorageDependencies`，以保持其单写和读取上下文的一致性。
 pub struct StorageWriteDependencies {
-    session: Box<dyn SessionStorage>,
+    session: Box<dyn SessionWriteStorage>,
 }
 
 impl StorageWriteDependencies {
     /// 用一个会话写入端口创建最小可写依赖集合。
-    pub fn from_session(session: Box<dyn SessionStorage>) -> Self {
+    pub fn from_session(session: Box<dyn SessionWriteStorage>) -> Self {
         Self { session }
     }
 
     /// 取得可变会话写入端口；调用方负责维护其事务边界。
-    pub fn session_mut(&mut self) -> &mut dyn SessionStorage {
+    pub fn session_mut(&mut self) -> &mut dyn SessionWriteStorage {
         self.session.as_mut()
     }
 
     /// 拆出会话写入端口所有权，供领域对象接管其生命周期。
-    pub fn into_session(self) -> Box<dyn SessionStorage> {
+    pub fn into_session(self) -> Box<dyn SessionWriteStorage> {
         self.session
     }
 }
@@ -80,7 +80,7 @@ impl StorageDependencies {
     /// 用会话写入、会话查询和全文搜索三个领域端口创建依赖聚合。
     pub fn new<S, Q, H>(session: S, query: Q, search: H) -> Self
     where
-        S: SessionStorage + 'static,
+        S: SessionWriteStorage + 'static,
         Q: SessionQueryStorage + 'static,
         H: SearchStorage + 'static,
     {
@@ -92,12 +92,12 @@ impl StorageDependencies {
     }
 
     /// 取得只读的会话写入端口。
-    pub fn session(&self) -> &dyn SessionStorage {
+    pub fn session(&self) -> &dyn SessionWriteStorage {
         self.session.as_ref()
     }
 
     /// 取得可变的会话写入端口；Actor 应是该端口的唯一写入者。
-    pub fn session_mut(&mut self) -> &mut dyn SessionStorage {
+    pub fn session_mut(&mut self) -> &mut dyn SessionWriteStorage {
         self.session.as_mut()
     }
 
@@ -115,7 +115,7 @@ impl StorageDependencies {
     pub fn into_parts(
         self,
     ) -> (
-        Box<dyn SessionStorage>,
+        Box<dyn SessionWriteStorage>,
         Box<dyn SessionQueryStorage>,
         Box<dyn SearchStorage>,
     ) {

@@ -6,7 +6,7 @@
 //! 作者：SongZQ
 
 use anyhow::Result;
-use sagent_store::{RestoreResult, RewindResult, SessionStorage};
+use sagent_store::{RestoreResult, RewindResult, SessionWriteStorage};
 use sagent_types::{MessageId, SessionId};
 
 use super::SessionService;
@@ -85,7 +85,7 @@ impl SessionService {
     /// 在当前命令上下文的可写会话端口上执行一个原子业务操作。
     fn with_writable_storage<T>(
         &self,
-        operation: impl FnOnce(&mut dyn SessionStorage) -> Result<T>,
+        operation: impl FnOnce(&mut dyn SessionWriteStorage) -> Result<T>,
     ) -> Result<T> {
         let mut dependencies = self.storage()?.open_write()?;
         operation(dependencies.session_mut())

@@ -17,6 +17,6 @@ pub trait StorageFactory: Send + Sync {
     /// 创建只读查询与搜索端口，不得创建数据库或执行写入迁移。
     ///
     /// CLI/RPC 的查询路径通过此入口保持只读语义；后端可以使用独立只读连接，也可以
-    /// 从共享连接池申请只读句柄，但不能把可变的 `SessionStorage` 暴露给调用方。
+    /// 从共享连接池申请只读句柄，但不能把可变的 `SessionWriteStorage` 暴露给调用方。
     fn create_readonly(&self) -> StorageResult<StorageReadDependencies>;
 }

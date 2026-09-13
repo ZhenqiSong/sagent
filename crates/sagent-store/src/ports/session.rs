@@ -12,7 +12,7 @@ use super::StorageResult;
 ///
 /// 每个改变状态的方法都表达一个完整的业务操作。尤其是 Turn 相关方法必须由实现
 /// 在一次原子边界内完成消息、状态和事件写入，调用方不能将它们拆成数据库步骤。
-pub trait SessionStorage: Send {
+pub trait SessionWriteStorage: Send {
     /// 创建一个空会话。
     fn create_session(&mut self, session: &NewSession) -> StorageResult<()>;
 

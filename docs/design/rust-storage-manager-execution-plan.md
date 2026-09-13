@@ -1,7 +1,7 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0 已完成；当前仅完成过渡框架，尚未开始业务调用方迁移  
+状态：M0、M1 已完成；当前仅完成过渡框架，尚未开始业务调用方迁移
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
@@ -127,9 +127,9 @@ storage.session.search(...)?;
 - Session 范围的全文搜索；
 - 需要跨多张表的高层原子事务。
 
-它内部可以组合读端口、写端口和搜索端口，但这些端口不再向 Runtime、RPC、CLI 或工具
-扩散。SQLite 的 `SqliteSessionStorage` 可以使用 `Store`，PG 的实现可以使用连接池，二者
-对外保持同一业务方法和错误语义。
+它内部组合写入端口和统一的 `ReadOnlySessionStorage`，后者再收纳查询与搜索端口；这些
+底层端口不再向 Runtime、RPC、CLI 或工具扩散。SQLite 的 `SqliteSessionStorage` 可以使用
+`Store`，PG 的实现可以使用连接池，二者对外保持同一业务方法和错误语义。
 
 ### 4.4 权限聚合
 
@@ -212,6 +212,13 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
 4. 不改变 SQLite adapter 的行为，只增加适配层。
 
 完成条件：可以用 fake/recording Session Storage 构造 `Storage`，不需要 SQLite 类型。
+
+**执行记录（2026-09-13）：** 已新增 `Storage`、`ReadStorage`、`WriteStorage` 以及按
+职责拆分的 `SessionStorage`、`ReadOnlySessionStorage`、`WriteOnlySessionStorage`。完整
+外观统一通过 `storage.session` 暴露业务方法。只有 `SessionStorage` 负责组合 Session
+底层端口，顶层 `Storage`/`ReadStorage`/`WriteStorage` 只接收已组装的业务对象；窄对象在类型层面隔离读写能力；兼容期的
+`StorageDependencies` 仍保留为过渡适配层。新增不依赖 SQLite 的 recording 构造测试，
+验证三种聚合均可由领域端口装配。Runtime、RPC、CLI 和工具迁移留给 M5/M6。
 
 ### M2：重构 Manager 框架
 

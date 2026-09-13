@@ -7,15 +7,26 @@ mod dependencies;
 mod factory;
 mod manager;
 mod query;
+mod read_storage;
 mod search;
 mod session;
+mod session_storage;
+mod storage;
+mod write_storage;
+
+#[cfg(test)]
+mod storage_tests;
 
 pub use dependencies::{StorageDependencies, StorageReadDependencies, StorageWriteDependencies};
 pub use factory::StorageFactory;
 pub use manager::StorageManager;
 pub use query::SessionQueryStorage;
+pub use read_storage::ReadOnlySessionStorage;
 pub use search::SearchStorage;
-pub use session::SessionStorage;
+pub use session::SessionWriteStorage;
+pub use session_storage::SessionStorage;
+pub use storage::{ReadStorage, Storage, WriteStorage};
+pub use write_storage::WriteOnlySessionStorage;
 
 /// 存储端口使用的统一结果类型。
 ///

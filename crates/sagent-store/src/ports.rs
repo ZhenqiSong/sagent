@@ -4,11 +4,13 @@
 //! 具体数据库类型。不同后端应在各自 adapter 中实现这些端口。
 
 mod dependencies;
+mod factory;
 mod query;
 mod search;
 mod session;
 
 pub use dependencies::StorageDependencies;
+pub use factory::StorageFactory;
 pub use query::SessionQueryStorage;
 pub use search::SearchStorage;
 pub use session::SessionStorage;

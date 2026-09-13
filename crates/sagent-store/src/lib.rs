@@ -1,4 +1,8 @@
-//! Sagent SQLite 存储访问层。
+//! Sagent 持久化领域端口与 SQLite 存储实现。
+//!
+//! 端口模块只表达业务持久化行为；`Store` 和 `sqlite_factory` 封装 SQLite 连接、事务
+//! 与 migration。上层 Runtime、RPC、CLI 和工具应通过 `StorageFactory` 获取端口，避免
+//! 把具体数据库路径或连接生命周期扩散到业务编排代码。
 //!
 //! 作者：SongZQ
 //! 创建日期：2026-08-29
@@ -15,6 +19,7 @@ pub mod ports;
 pub mod schema;
 pub mod search;
 pub mod session;
+pub mod sqlite_factory;
 pub mod turn;
 pub mod write;
 
@@ -27,11 +32,13 @@ pub use event::{
 pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use ports::{
-    SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageResult,
+    SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageFactory,
+    StorageResult,
 };
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;
 pub use session::SessionListQuery;
+pub use sqlite_factory::SqliteStorageFactory;
 pub use turn::{NewGeneration, StartTurn, StoredGeneration, StoredRunningTurn};
 pub use write::{
     NewMessage, NewSession, RestoreResult, RetryCheckpoint, RewindCheckpoint, RewindResult,

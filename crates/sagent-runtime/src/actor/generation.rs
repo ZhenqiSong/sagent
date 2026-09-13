@@ -20,7 +20,7 @@ impl SessionActor {
     ) -> Result<(), RuntimeError> {
         match self
             .context
-            .store
+            .query_storage
             .get_generation(&self.context.session_id, self.lifecycle.generation)
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?
         {
@@ -30,7 +30,7 @@ impl SessionActor {
             Some(_) => return Err(RuntimeError::RequiresTransition),
             None => self
                 .context
-                .store
+                .session_storage
                 .create_generation(&NewGeneration {
                     session_id: self.context.session_id.clone(),
                     generation: self.lifecycle.generation,
@@ -76,7 +76,7 @@ impl SessionActor {
             .ok_or(RuntimeError::NoActiveTurn)?;
         let stored = self
             .context
-            .store
+            .query_storage
             .get_messages_for_model(&self.context.session_id, &MessageQuery::default())
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
         let mut messages = vec![PromptMessage::new(PromptRole::System, system.render())];

@@ -5,6 +5,7 @@
 //! - 用固定容量（32）的有界 mailbox 串行化每个 Session 的命令；
 //! - actor 退出后清理 stale 条目，旧 handle 返回 `ActorStopped`；
 //! - 不同 Session 的 actor 相互独立，Supervisor 不做全局串行。
+//! - 按已冻结的运行时依赖为 RPC transport 装配独占的只读查询端口。
 //!
 //! `SessionHandle` 只投递命令并等待一次应答；它不暴露 Store，也不等待整个回合。
 
@@ -12,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use sagent_agent::{ApprovalDecision, RequestId, SessionCommand, UserInput};
+use sagent_store::SessionQueryStorage;
 use sagent_types::{ApprovalId, ClientCapabilities, SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -45,12 +47,22 @@ impl SessionSupervisor {
     /// 用已解析且冻结的运行时依赖创建 Supervisor。
     ///
     /// 依赖只能在 bootstrap 阶段组合；Supervisor 接管后只维护 actor 生命周期，
-    /// 不再直接保存 Provider、工具、Store 或策略配置。
+    /// 不再直接保存 Provider、工具、Store 或策略配置。只读查询端口也必须从这份冻结
+    /// 快照创建，避免 RPC 连接绕过 Profile 边界重新解析配置。
     pub fn new(dependencies: RuntimeDependencies) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             actor_factory: dependencies.into_actor_factory(),
         }
+    }
+
+    /// 为一个 RPC transport 提供独占的只读查询端口。
+    ///
+    /// 查询端口与 Actor 的写入端口职责不同，不能从正在运行的 Actor 借用；但它们
+    /// 必须来自同一份 bootstrap 快照，才能保证连接查询与会话 Actor 使用同一 Profile
+    /// 和同一存储后端。端口的具体实现与数据库连接仍由内部工厂隐藏。
+    pub fn create_query_storage(&self) -> Result<Box<dyn SessionQueryStorage>, RuntimeError> {
+        self.actor_factory.create_query_storage()
     }
 
     /// 取得会话句柄；会话尚未运行时启动一个 actor。
@@ -330,6 +342,35 @@ mod tests {
             opens.fetch_add(1, Ordering::SeqCst);
             Store::open_readwrite(&path).map_err(|error| error.to_string())
         }
+    }
+
+    #[test]
+    fn query_storage_comes_from_supervisor_snapshot() {
+        // Arrange：只注入一份计数工厂，确认查询端口沿用 Supervisor 的冻结依赖。
+        let path = test_path("query-storage");
+        let _ = fs::remove_file(&path);
+        let session_id = SessionId::new("query-session");
+        create_sessions(&path, &[&session_id]);
+        let opens = Arc::new(AtomicUsize::new(0));
+        let supervisor = SessionSupervisor::new(RuntimeDependencies::new(counting_factory(
+            path.clone(),
+            opens.clone(),
+        )));
+
+        // Act：由 Supervisor 装配连接级查询端口，而不是让调用方重新持有工厂。
+        let query = supervisor
+            .create_query_storage()
+            .expect("Supervisor 应能装配查询端口");
+
+        // Assert：查询端口可读当前 Profile，且只触发一次统一的依赖创建。
+        assert!(
+            query
+                .get_session(&session_id)
+                .expect("查询端口应能读取会话")
+                .is_some()
+        );
+        assert_eq!(opens.load(Ordering::SeqCst), 1);
+        let _ = fs::remove_file(path);
     }
 
     async fn wait_for_event(

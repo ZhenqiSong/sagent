@@ -85,7 +85,7 @@ impl SessionActor {
         );
         assistant.tool_calls = Some(tool_calls);
         assistant.finish_reason = Some("tool_calls".into());
-        if let Err(error) = self.context.store.commit_assistant_tool_calls(
+        if let Err(error) = self.context.session_storage.commit_assistant_tool_calls(
             &turn_id,
             &assistant,
             &(self.context.clock)(),

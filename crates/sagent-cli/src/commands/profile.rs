@@ -10,9 +10,8 @@ use std::{
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use sagent_config::{
-    ensure_legacy_bootstrap_supported, list_profile_names, load_profile_config,
-    normalize_profile_name, paths::platform_default_home, paths::profile_root, read_active_profile,
-    resolve_paths, resolve_sqlite_database_path, set_active_profile,
+    list_profile_names, load_profile_config, normalize_profile_name, paths::platform_default_home,
+    paths::profile_root, read_active_profile, resolve_paths, set_active_profile,
 };
 use sagent_store::Store;
 
@@ -110,8 +109,12 @@ pub fn create(home: Option<&Path>, name: &str) -> Result<PathBuf> {
             .context("写入初始 config.yaml 失败")?;
         let paths = resolve_paths(Some(profile_dir), None).context("解析新 Profile 路径失败")?;
         let config = load_profile_config(&paths).context("读取新 Profile 配置失败")?;
-        ensure_legacy_bootstrap_supported(&config).context("校验新 Profile 存储配置失败")?;
-        let database_path = resolve_sqlite_database_path(&paths, &config)
+        let descriptor = config.get_storage_descriptor();
+        descriptor
+            .ensure_legacy_bootstrap_supported()
+            .context("校验新 Profile 存储配置失败")?;
+        let database_path = descriptor
+            .resolve_sqlite_database_path(&paths)
             .context("解析新 Profile 数据库路径失败")?;
         Store::open_readwrite(&database_path).with_context(|| {
             format!(

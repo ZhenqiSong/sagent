@@ -26,7 +26,7 @@ pub fn load_profile_config(paths: &SagentPaths) -> Result<ProfileConfig> {
     let document = parse_provider_config(&content, &paths.config_yaml)?;
     let unknown_fields = collect_unknown_fields(&content, &paths.config_yaml)?;
     let config = ProfileConfig::from_document(document, unknown_fields);
-    config.storage.validate()?;
+    config.get_storage_descriptor().validate()?;
     Ok(config)
 }
 

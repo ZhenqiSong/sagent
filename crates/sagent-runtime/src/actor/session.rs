@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use sagent_agent::SessionCommand;
 use sagent_provider::ModelProvider;
-use sagent_store::{NewDaemonEvent, Store};
+use sagent_store::{NewDaemonEvent, StorageDependencies};
 use sagent_types::{SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc};
 
@@ -48,16 +48,18 @@ impl SessionActor {
     /// 创建不启动 worker 的 Actor；单测可直接驱动提交边界和 mailbox 状态机。
     pub(crate) fn new(
         session_id: SessionId,
-        store: Store,
+        storage: impl Into<StorageDependencies>,
         command_rx: mpsc::Receiver<ActorInput>,
         command_tx: mpsc::Sender<ActorInput>,
         event_tx: broadcast::Sender<RuntimeEvent>,
     ) -> Self {
-        let startup_recovery = crate::recovery::plan_recovery(&store, &session_id);
+        let (session_storage, query_storage, _search_storage) = storage.into().into_parts();
+        let startup_recovery = crate::recovery::plan_recovery(query_storage.as_ref(), &session_id);
         Self {
             context: ActorSessionContext {
                 session_id,
-                store,
+                session_storage,
+                query_storage,
                 clock: utc_now,
             },
             channels: ActorChannels {
@@ -187,7 +189,7 @@ impl SessionActor {
             }
         }
         let reason = "Runtime 重启导致未完成 Turn 安全终止".to_owned();
-        if let Err(error) = self.context.store.fail_turn(
+        if let Err(error) = self.context.session_storage.fail_turn(
             &plan.turn_id,
             "runtime_restarted",
             &reason,
@@ -283,7 +285,7 @@ impl SessionActor {
         payload: serde_json::Value,
     ) -> Result<(), String> {
         self.context
-            .store
+            .session_storage
             .append_event(&NewDaemonEvent {
                 session_id: self.context.session_id.clone(),
                 turn_id: Some(turn_id),

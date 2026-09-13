@@ -1,6 +1,6 @@
 //! Runtime 重启后的只读恢复判定。
 //!
-//! 判定器只读取 Store 中已经提交的事实，绝不启动 Provider、ToolWorker 或子进程。
+//! 判定器只读取查询端口中已经提交的事实，绝不启动 Provider、ToolWorker 或子进程。
 //! 对于已开始但没有结果的工具调用，无法可靠断言副作用是否已经发生，因此统一
 //! 选择 fail-closed：写入“结果未知”而不是重新执行。
 
@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use sagent_store::{
     EVENT_APPROVAL_REQUESTED, EVENT_APPROVAL_RESOLVED, EVENT_APPROVAL_TIMED_OUT,
-    EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TOOL_STARTED, MAX_EVENT_LIMIT, Store,
+    EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TOOL_STARTED, MAX_EVENT_LIMIT,
+    SessionQueryStorage,
 };
 use sagent_types::{EventSequence, SessionId, TurnId};
 
@@ -32,7 +33,7 @@ pub(crate) struct RecoveryPlan {
 
 /// 从一个 Session 的事实事件构造恢复计划。没有 running Turn 时返回 None。
 pub(crate) fn plan_recovery(
-    store: &Store,
+    store: &dyn SessionQueryStorage,
     session_id: &SessionId,
 ) -> Result<Option<RecoveryPlan>, String> {
     let Some(turn) = store
@@ -150,7 +151,7 @@ pub(crate) fn plan_recovery(
 }
 
 fn turn_events(
-    store: &Store,
+    store: &dyn SessionQueryStorage,
     turn_id: TurnId,
 ) -> Result<Vec<sagent_store::StoredDaemonEvent>, String> {
     let mut after = EventSequence::default();
@@ -173,7 +174,10 @@ fn turn_events(
 #[cfg(test)]
 mod tests {
     use super::plan_recovery;
-    use sagent_store::{NewDaemonEvent, NewGeneration, NewMessage, NewSession, StartTurn, Store};
+    use sagent_store::{
+        NewDaemonEvent, NewGeneration, NewMessage, NewSession, StartTurn, StorageDependencies,
+        Store,
+    };
     use sagent_types::{SessionId, TurnId};
 
     fn store_with_turn() -> (Store, std::path::PathBuf, SessionId, TurnId) {
@@ -248,7 +252,8 @@ mod tests {
             })
             .expect("应能写入审批事实");
 
-        let plan = plan_recovery(&store, &session_id)
+        let dependencies = StorageDependencies::from(store);
+        let plan = plan_recovery(dependencies.query(), &session_id)
             .expect("恢复计划应可读取")
             .expect("应存在 running Turn");
         assert_eq!(plan.unresolved_tools.len(), 1);
@@ -256,7 +261,7 @@ mod tests {
             plan.unresolved_tools[0].error_kind,
             "approval_interrupted_by_restart"
         );
-        drop(store);
+        drop(dependencies);
         let _ = std::fs::remove_file(path);
     }
 }

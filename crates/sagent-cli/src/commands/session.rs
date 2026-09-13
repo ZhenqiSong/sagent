@@ -7,8 +7,7 @@ use std::{path::Path, time::SystemTime};
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use sagent_config::{
-    SagentPaths, ensure_legacy_bootstrap_supported, load_profile_config, normalize_profile_name,
-    resolve_active_paths, resolve_sqlite_database_path,
+    SagentPaths, load_profile_config, normalize_profile_name, resolve_active_paths,
 };
 use sagent_store::Store;
 use sagent_types::MessageId;
@@ -211,8 +210,13 @@ fn current_database_path(
 ) -> Result<std::path::PathBuf> {
     let paths = current_paths(home, profile_override)?;
     let config = load_profile_config(&paths).context("读取当前 Profile 配置失败")?;
-    ensure_legacy_bootstrap_supported(&config).context("当前 Profile 存储配置不可用")?;
-    resolve_sqlite_database_path(&paths, &config).context("解析当前 Profile 数据库路径失败")
+    let descriptor = config.get_storage_descriptor();
+    descriptor
+        .ensure_legacy_bootstrap_supported()
+        .context("当前 Profile 存储配置不可用")?;
+    descriptor
+        .resolve_sqlite_database_path(&paths)
+        .context("解析当前 Profile 数据库路径失败")
 }
 
 /// 打开当前 profile 的可写 Store；只供明确的生命周期命令使用。

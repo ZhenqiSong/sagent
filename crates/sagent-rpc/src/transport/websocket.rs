@@ -26,9 +26,9 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 256;
 
 /// 在指定 loopback 地址上持续接收 WebSocket 连接。
 ///
-/// 每个连接各自拥有 `ConnectionState` 与只读 SQLite 连接，所以 hello capability、请求
-/// 背压和断线都不会串到其它客户端；共享的 Supervisor 则让同一 Profile 的重连能够继续
-/// 访问既有 Actor。
+/// 每个连接各自拥有 `ConnectionState` 与只读查询端口，所以 hello capability、请求背压
+/// 和断线都不会串到其它客户端；共享的 Supervisor 则让同一 Profile 的重连能够继续访问
+/// 既有 Actor。
 pub async fn run(address: SocketAddr, bootstrap: Arc<RuntimeBootstrap>) -> Result<()> {
     let listener = TcpListener::bind(address)
         .await
@@ -43,7 +43,7 @@ pub async fn run(address: SocketAddr, bootstrap: Arc<RuntimeBootstrap>) -> Resul
         let service = match bootstrap.open_service() {
             Ok(service) => service,
             Err(error) => {
-                // 一个连接的只读 Store 打开失败不能结束其它本地客户端；连接尚未升级，
+                // 一个连接的查询端口打开失败不能结束其它本地客户端；连接尚未升级，
                 // 只能记录 server 端诊断并丢弃它，不能伪造不完整的 JSON-RPC 信封。
                 eprintln!("sagent-rpc: 拒绝 WebSocket {peer}: {error:#}");
                 continue;

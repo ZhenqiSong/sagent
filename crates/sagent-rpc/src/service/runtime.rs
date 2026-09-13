@@ -1,7 +1,6 @@
 //! Profile 作用域内的 RPC 服务实现。
 
 use std::{
-    path::PathBuf,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -14,17 +13,17 @@ use sagent_protocol::{
     SessionSummaryDto,
 };
 use sagent_runtime::SessionSupervisor;
-use sagent_store::{EventQuery, NewSession, Store};
+use sagent_store::{EventQuery, NewSession, StorageFactory};
 use sagent_types::SessionId;
 use uuid::Uuid;
 
 /// Profile 作用域中的 RPC 服务。
 ///
-/// `session.create` 使用短生命周期读写 Store 创建空会话；真正的 Actor 仍由后续
+/// `session.create` 使用 Factory 创建短生命周期写入端口；真正的 Actor 仍由后续
 /// `prompt.submit` 经 `SessionSupervisor` 启动，避免空会话占用 mailbox 或 Provider。
 pub struct RuntimeService {
     sessions: SessionService,
-    database_path: PathBuf,
+    storage_factory: Arc<dyn StorageFactory>,
     model: String,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
@@ -34,12 +33,12 @@ pub struct RuntimeService {
 
 /// `prompt.submit` 所需的可跨 await 使用的运行时快照。
 ///
-/// 它刻意不携带 `SessionService` 的只读 SQLite 连接：rusqlite Connection 不是 Sync，
-/// dispatcher 不能在 await Actor mailbox 时借用它。会话存在性检查改为短生命周期打开
-/// Store，Actor 则始终通过 Supervisor 获取自己的独占连接。
+/// 它刻意不携带 `SessionService` 的查询端口：dispatcher 不能在 await Actor mailbox
+/// 时借用它。会话存在性检查和事件补读都通过 Factory 创建短生命周期端口，Actor 则
+/// 始终通过 Supervisor 获取自己的独占端口集合。
 #[derive(Clone)]
 pub struct RuntimePromptContext {
-    database_path: PathBuf,
+    storage_factory: Arc<dyn StorageFactory>,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
 }
@@ -48,7 +47,7 @@ impl RuntimeService {
     /// 将已初始化的只读服务、Actor factory 和当前模型组合为 RPC 适配层。
     pub fn new(
         sessions: SessionService,
-        database_path: PathBuf,
+        storage_factory: Arc<dyn StorageFactory>,
         model: String,
         supervisor: Arc<SessionSupervisor>,
         provider_ready: bool,
@@ -56,7 +55,7 @@ impl RuntimeService {
     ) -> Self {
         Self {
             sessions,
-            database_path,
+            storage_factory,
             model,
             supervisor,
             provider_ready,
@@ -72,7 +71,7 @@ impl RuntimeService {
     /// 提取不含共享 SQLite Connection 的 prompt 运行时快照。
     pub fn prompt_context(&self) -> RuntimePromptContext {
         RuntimePromptContext {
-            database_path: self.database_path.clone(),
+            storage_factory: Arc::clone(&self.storage_factory),
             supervisor: self.supervisor(),
             provider_ready: self.provider_ready,
         }
@@ -99,8 +98,9 @@ impl RuntimePromptContext {
 
     /// 在启动 Actor 前验证会话已持久化到当前 Profile。
     pub fn require_session(&self, session_id: &SessionId) -> Result<(), ProtocolError> {
-        let store = Store::open_readonly(&self.database_path).map_err(store_error)?;
-        if store
+        let dependencies = self.storage_factory.create().map_err(store_error)?;
+        if dependencies
+            .query()
             .get_session(session_id)
             .map_err(store_error)?
             .is_some()
@@ -126,16 +126,25 @@ impl RuntimePromptContext {
         const MAX_LIMIT: u32 = 200;
 
         let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-        self.require_session(&params.session_id)?;
-        let store = Store::open_readonly(&self.database_path).map_err(store_error)?;
-        let events = store
+        let dependencies = self.storage_factory.create().map_err(store_error)?;
+        let query = dependencies.query();
+        if query
+            .get_session(&params.session_id)
+            .map_err(store_error)?
+            .is_none()
+        {
+            return Err(ProtocolError::SessionNotFound(
+                params.session_id.as_str().to_owned(),
+            ));
+        }
+        let events = query
             .events_since(&EventQuery {
                 session_id: params.session_id.clone(),
                 after_sequence: params.after_sequence,
                 limit: i64::from(limit),
             })
             .map_err(store_error)?;
-        let latest_sequence = store
+        let latest_sequence = query
             .latest_event_sequence(&params.session_id)
             .map_err(store_error)?
             .unwrap_or_default();
@@ -145,7 +154,7 @@ impl RuntimePromptContext {
             .unwrap_or(params.after_sequence);
 
         Ok(SessionEventsSinceResult {
-            // DTO 映射隔离 Store 的内部记录，后续调整 SQLite 行结构不会改变线上协议。
+            // DTO 映射隔离存储实现的内部记录，后续调整 SQLite 行结构不会改变线上协议。
             events: events.into_iter().map(event_dto).collect(),
             has_more: latest_sequence > last_sequence,
             latest_sequence,
@@ -200,10 +209,11 @@ impl SessionCreateService for RuntimeService {
             .map_err(|_| ProtocolError::RuntimeUnavailable("clock unavailable".to_owned()))?;
         let session_id = SessionId::new(format!("rpc_{}", Uuid::new_v4().simple()));
 
-        // 创建空会话不触碰 Supervisor：这里的短生命周期 Store 在提交后立即释放，
-        // 之后首次 prompt.submit 才由该 session 唯一 Actor 打开独占读写连接。
-        let mut store = Store::open_readwrite(&self.database_path).map_err(store_error)?;
-        store
+        // 创建空会话不触碰 Supervisor：这里的短生命周期端口在提交后立即释放，
+        // 之后首次 prompt.submit 才由该 session 唯一 Actor 获取独占端口集合。
+        let mut dependencies = self.storage_factory.create().map_err(store_error)?;
+        dependencies
+            .session_mut()
             .create_session(&NewSession {
                 id: session_id.clone(),
                 source: Some("rpc".to_owned()),
@@ -212,7 +222,8 @@ impl SessionCreateService for RuntimeService {
                 started_at,
             })
             .map_err(store_error)?;
-        let session = store
+        let session = dependencies
+            .query()
             .get_session(&session_id)
             .map_err(store_error)?
             .ok_or_else(|| ProtocolError::Internal("created session was not found".to_owned()))?;

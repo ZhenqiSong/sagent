@@ -165,7 +165,7 @@ impl SessionActor {
             });
         }
         self.context
-            .store
+            .session_storage
             .append_event(&NewDaemonEvent {
                 session_id: self.context.session_id.clone(),
                 turn_id: Some(turn_id),
@@ -202,7 +202,7 @@ impl SessionActor {
             .to_string(),
         );
         self.context
-            .store
+            .session_storage
             .commit_tool_result(&turn_id, &message, &(self.context.clock)())
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
         self.publish(RuntimeEvent {

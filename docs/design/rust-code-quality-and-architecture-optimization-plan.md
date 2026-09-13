@@ -175,8 +175,8 @@ terminal 与 stdio transport 补充“负责/不负责”的模块地图。既�
 
 状态：已完成（2026-09-13）。
 
-**完成记录：** `SessionSupervisor` 现在只负责 SessionActor 的生命周期、mailbox、事件
-订阅和收口；`RuntimeDependencies` 聚合 Store、模型、工具和策略依赖，并通过枚举消除
+**完成记录：** `SessionSupervisor` 现在主要负责 SessionActor 的生命周期、mailbox、事件
+订阅和收口，并作为冻结存储依赖向 RPC transport 提供连接级查询端口；`RuntimeDependencies` 聚合存储、模型、工具和策略依赖，并通过枚举消除
 Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、计划、持久化、worker
 启动、active state 安装和事件发布拆分；`handle_worker_event` 已按流式增量、用量、工具调用、
 工具结果和终态/失败拆分。Store 提交后发布事件、取消先传播 token 再收口任务、Actor 单写
@@ -191,7 +191,8 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 
 **工作：**
 
-1. 将 `SessionSupervisor` 限定为 SessionActor 生命周期、mailbox、事件订阅和收口；
+1. 将 `SessionSupervisor` 限定为 SessionActor 生命周期、mailbox、事件订阅、收口，以及
+   通过冻结依赖向 transport 提供连接级查询端口；
 2. 提取 `RuntimeDependencies`，集中 StoreFactory、Clock、CapabilityResolver 等完整依赖；
 3. 以 enum 或已验证的运行模式替代 `provider`、`worker_factory`、`tool_dispatcher`、
    `tool_worker` 的松散 `Option` 组合；
@@ -208,8 +209,9 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 ### R3：持久化端口与 SQLite 实现隔离
 
 当前进度：R3.1 `StorageDescriptor`、R3.2 `provider.rs` 配置职责拆分、SQLite 默认路径
-降级以及 R3.3 最小领域存储端口定义已完成；`StorageFactory`、SQLite adapter 迁移和
-Runtime/RPC/CLI 上层切换尚未开始。
+降级、R3.3 最小领域存储端口与 `StorageFactory` 定义以及首个 SQLite adapter 已完成；
+Runtime Actor、RuntimeDependencies、RPC SessionService 与 RuntimeService 已切换到
+领域端口；`session_search` 也已切换到 StorageFactory，CLI 管理命令的上层切换尚未开始。
 
 **R3.2 完成记录：** 配置读取、Profile 聚合快照、Provider 数据模型、Provider resolver、
 凭据读取、workspace 解析和公开配置摘要分别位于独立 sibling；`lib.rs` 直接公开这些稳定
@@ -217,21 +219,41 @@ API，不再保留只做转发的 `provider.rs`。`config_reader` 与 `ProfileCo
 读取、反序列化和不可变意图组合，不创建数据库、HTTP client 或后台任务。当前
 `resolve_openai_provider_from_config` 只接受已加载快照，仍暂时在 config crate 中实例化
 OpenAI-compatible client；后续 R4 的 ProviderFactory 将把该副作用移到 bootstrap。
-`resolve_storage_descriptor_from_config`
-以及各主题的 `*_from_config` API 提供无 I/O 的已加载配置提取路径，供 bootstrap 复用同一份
-配置快照；`load_profile_config` 是当前唯一的 `config.yaml` 文件读取入口。
+`ProfileConfig::get_storage_descriptor` 以及各主题的 `*_from_config` API 提供无 I/O 的已
+加载配置提取路径，供 bootstrap 复用同一份配置快照；`load_profile_config` 是当前唯一的
+`config.yaml` 文件读取入口。
 
 **SQLite 默认路径降级记录：** `SagentPaths` 不再携带数据库字段；`storage` 模块仅在
-`StorageKind::Sqlite` 且未配置路径时使用 `state.db` 默认文件名。`resolve_sqlite_database_path`
-根据同一 `ProfileConfig` 解析自定义 SQLite 路径，Runtime、CLI 和会话搜索均使用解析后的
-路径。远程、schema/namespace 和只读策略在 StorageFactory 接入前继续 fail-closed，不会静默
+`StorageKind::Sqlite` 且未配置路径时使用 `state.db` 默认文件名。调用方先从同一
+`ProfileConfig::get_storage_descriptor` 提取 `StorageDescriptor`，再由
+`StorageDescriptor::resolve_sqlite_database_path`
+解析自定义 SQLite 路径，Runtime、CLI 和会话搜索均使用解析后的路径。远程、schema/namespace
+和只读策略在 StorageFactory 接入前继续 fail-closed，不会静默
 回退到默认文件。
 
 **R3.3 初始定义记录：** `sagent-store::ports` 按职责拆分为 `SessionStorage`、
 `SessionQueryStorage` 和 `SearchStorage`，并以 `StorageDependencies` 聚合三个领域端口。
-端口只依赖业务 DTO 和强类型 ID，不暴露 SQLite 路径、连接、连接池或 `Store`；Turn 开始、
+`StorageFactory` 负责按已冻结的 descriptor 创建独立依赖集合，保证每个 Actor 的写入端口
+不共享。端口只依赖业务 DTO 和强类型 ID，不暴露 SQLite 路径、连接、连接池或 `Store`；Turn 开始、
 工具结果提交、完成、中断和失败等方法保持高层原子操作。当前接口先保留同步调用模型以
 保持 Actor 单写和事务期间无 `await`，R3 后续技术 spike 再决定远程后端的异步适配方式。
+
+**SQLite adapter 初始实现记录：** `SqliteStorageFactory` 绑定已解析的绝对路径；每次
+`create()` 都重新打开一个 Store，并以受保护的共享句柄包装为三个领域端口，保证同一
+Actor 内写入、查询和搜索看到一致连接状态，同时不在 Actor 或连接之间共享 Store。Factory/adapter 内部仍可使用路径和具体 Store，
+但这些类型不会出现在端口的签名或 `StorageDependencies` 字段中；远程后端尚未注册时仍
+由上层 Factory 选择逻辑明确拒绝。
+
+**Runtime/RPC/工具迁移记录：** SessionActor 的写入、查询和恢复路径已改为分别依赖
+`SessionStorage`/`SessionQueryStorage`，`RuntimeDependencies` 通过 `StorageFactory`
+为每个 Actor 创建端口集合；协议层 `SessionService` 只持有查询端口，RPC `RuntimeService`
+和 `RuntimePromptContext` 通过冻结的 Factory 获取短生命周期端口，`RuntimeBootstrap::open_service`
+则通过同一 Supervisor 获取连接级查询端口，避免 Bootstrap 再直接创建一套依赖。Bootstrap
+仍只保存 Factory，不保存数据库路径或 `Store`。后端选择集中在 RPC bootstrap 的
+`create_storage_factory`，根据已解析 `StorageDescriptor.kind` 选择 adapter；`session_search`
+同样通过 Factory 获取搜索端口，
+不再打开 SQLite 或保存数据库路径。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
+保留 `From<Store>` 到端口聚合的边界转换，但新的生产装配必须使用 Factory selector。
 
 **目的：** 使所有业务持久化经由统一边界，并为本地/远程后端配置切换建立真实路径。
 
@@ -258,7 +280,8 @@ Runtime、RPC、Actor 和工具只接收按领域拆分的存储端口，后端�
    配置读取和 descriptor 组合不得打开数据库、创建 Provider/HTTP 客户端或启动后台任务；
    现有 Provider 实例化兼容入口暂由 resolver 保留，后续 R4 迁移到 `ProviderFactory`；
 3. 移除 `SagentPaths` 上的数据库字段；仅当选择 SQLite 且未指定路径时使用 storage 模块的
-   `state.db` 默认文件名。实际路径由 `resolve_sqlite_database_path` 根据 Profile 快照解析，
+   `state.db` 默认文件名。实际路径由 `StorageDescriptor::resolve_sqlite_database_path` 根据
+   已解析的 descriptor 计算，
    Runtime/CLI 不得绕过该解析；
 4. 设计 `StorageFactory`、`StorageDependencies`、`SessionStorage`、`SessionQueryStorage`、
    `SearchStorage` 的最小领域 API。Factory 根据 `StorageDescriptor` 创建依赖聚合，
@@ -270,7 +293,8 @@ Runtime、RPC、Actor 和工具只接收按领域拆分的存储端口，后端�
    transaction boundary 的选择；
 6. 将现有 `Store` SQLite 逻辑迁为第一实现。可保留 `sagent-store` 作为端口 crate 并新增
    `sagent-store-sqlite`，或将端口与实现置于清晰子模块；选择以依赖图最小、无循环依赖为准；
-7. 逐步迁移 Runtime、RPC session read service、CLI 管理命令与 `session_search`，禁止新的
+7. **部分完成：** Runtime Actor、RuntimeDependencies、RPC session read service、事件补读、
+   空会话创建和 `session_search` 已迁移到领域端口；继续迁移 CLI 管理命令，并禁止新的
    上层代码直接导入 SQLite 类型；
 8. 以第二个测试实现验证边界：内存/recording storage 或独立 fake；它必须验证事务调用的
    原子语义，而不是模拟 SQL 细节；

@@ -294,7 +294,7 @@ pub(crate) async fn dispatcher_loop<S: DispatchService + Send + 'static>(
     Ok(())
 }
 
-/// 处理持久化事件补读；它只读取短生命周期 Store，不需要启动或占用 SessionActor。
+/// 处理持久化事件补读；它只读取连接级查询端口，不需要启动或占用 SessionActor。
 fn dispatch_events_since_request(
     request: JsonRpcRequest,
     runtime: RuntimePromptContext,

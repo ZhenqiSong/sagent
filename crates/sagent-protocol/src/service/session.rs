@@ -1,6 +1,6 @@
 //! 面向 JSON-RPC 的只读会话服务适配层。
 
-use sagent_store::{MessageQuery, SessionListQuery, Store};
+use sagent_store::{MessageQuery, SessionListQuery, SessionQueryStorage};
 use sagent_types::{SessionId, SessionSummary, StoredMessage};
 
 use crate::{
@@ -39,21 +39,25 @@ pub trait SessionCreateService {
     ) -> Result<SessionCreateResult, ProtocolError>;
 }
 
-/// 绑定一个只读 Store 的会话服务。
-#[derive(Debug)]
+/// 绑定一个只读会话查询端口的会话服务。
 pub struct SessionService {
-    store: Store,
+    query: Box<dyn SessionQueryStorage>,
 }
 
 impl SessionService {
-    /// 用已经打开的只读 Store 创建服务。
-    pub fn new(store: Store) -> Self {
-        Self { store }
+    /// 用一个实现了查询端口的对象创建服务。
+    pub fn new<Q>(query: Q) -> Self
+    where
+        Q: SessionQueryStorage + 'static,
+    {
+        Self {
+            query: Box::new(query),
+        }
     }
 
-    /// 取得底层只读 Store，供进程启动阶段执行连接检查。
-    pub fn store(&self) -> &Store {
-        &self.store
+    /// 用已经装配好的查询端口创建服务，供 Factory 在边界处分配端口所有权。
+    pub fn new_boxed(query: Box<dyn SessionQueryStorage>) -> Self {
+        Self { query }
     }
 }
 
@@ -64,8 +68,8 @@ impl SessionReadService for SessionService {
     ) -> Result<SessionListResult, ProtocolError> {
         let limit = checked_limit(params.limit)?;
         let sessions = self
-            .store
-            .list_sessions_with(&SessionListQuery {
+            .query
+            .list_sessions(&SessionListQuery {
                 include_archived: params.include_archived,
                 limit,
                 offset: params.offset,
@@ -92,12 +96,12 @@ impl SessionReadService for SessionService {
         let limit = checked_limit(params.message_limit)?;
         let session_id = SessionId::new(params.session_id.clone());
         let summary = self
-            .store
+            .query
             .get_session(&session_id)
             .map_err(store_error)?
             .ok_or_else(|| ProtocolError::SessionNotFound(params.session_id.clone()))?;
         let messages = self
-            .store
+            .query
             .get_messages_for_display(
                 &session_id,
                 &MessageQuery {
@@ -173,7 +177,7 @@ impl From<StoredMessage> for SessionMessageDto {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use sagent_store::{NewMessage, NewSession};
+    use sagent_store::{NewMessage, NewSession, StorageDependencies};
     use sagent_types::SessionId;
 
     use super::{DEFAULT_PAGE_LIMIT, SessionReadService, SessionService, store_error};
@@ -220,13 +224,18 @@ mod tests {
             .expect("应能追加回答消息");
     }
 
+    fn query_service(path: &std::path::Path) -> SessionService {
+        let store = sagent_store::Store::open_readonly(path).expect("应能只读打开数据库");
+        let (_session, query, _search) = StorageDependencies::from(store).into_parts();
+        SessionService::new_boxed(query)
+    }
+
     #[test]
     fn lists_sessions_with_default_limit_and_archived_filter() {
         let path = test_path("list");
         remove(&path);
         create_store(&path);
-        let store = sagent_store::Store::open_readonly(&path).expect("应能只读打开数据库");
-        let service = SessionService::new(store);
+        let service = query_service(&path);
 
         let result = service
             .list_sessions(&SessionListParams::default())
@@ -243,8 +252,7 @@ mod tests {
         let path = test_path("resume");
         remove(&path);
         create_store(&path);
-        let store = sagent_store::Store::open_readonly(&path).expect("应能只读打开数据库");
-        let service = SessionService::new(store);
+        let service = query_service(&path);
 
         let result = service
             .resume_session(&SessionResumeParams {
@@ -273,8 +281,7 @@ mod tests {
         let path = test_path("limits");
         remove(&path);
         create_store(&path);
-        let store = sagent_store::Store::open_readonly(&path).expect("应能只读打开数据库");
-        let service = SessionService::new(store);
+        let service = query_service(&path);
 
         for limit in [Some(0), Some(super::MAX_PAGE_LIMIT + 1)] {
             let error = service

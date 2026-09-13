@@ -1,14 +1,16 @@
 //! SessionActor 的运行时依赖装配。
 //!
-//! 本模块只负责把 bootstrap 已解析的 Store、Provider、工具和策略参数组成不可变
+//! 本模块只负责把 bootstrap 已解析的存储、Provider、工具和策略参数组成不可变
 //! 快照；不管理 Session 生命周期，也不执行命令。`SessionSupervisor` 消费该快照后，
-//! 每个新 actor 都取得独占 Store 与相同的启动期能力配置。
+//! 每个新 actor 都取得独占存储端口与相同的启动期能力配置。
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use sagent_provider::ModelProvider;
-use sagent_store::Store;
+use sagent_store::{
+    SessionQueryStorage, StorageDependencies as DomainStorageDependencies, StorageFactory,
+};
 use sagent_types::SessionId;
 use tokio::sync::{broadcast, mpsc};
 
@@ -21,31 +23,53 @@ use crate::input::ActorInput;
 use crate::tool_dispatch::ToolDispatcher;
 use crate::tool_worker::ToolWorker;
 
-/// 单个新 actor 使用的 Store 打开函数。
+/// 单个新 actor 使用的领域存储创建函数。
 ///
-/// 每次调用必须返回独立连接，保证 actor 是 Store 的唯一写入者。失败原因会映射为
+/// 每次调用必须返回独立依赖，保证 actor 是写入端口的唯一拥有者。失败原因会映射为
 /// `RuntimeError::Persistence`，不会泄漏具体数据库实现。
-type StoreFactory = Arc<dyn Fn() -> Result<Store, String> + Send + Sync>;
+type DomainStorageFactory =
+    Arc<dyn Fn() -> Result<DomainStorageDependencies, String> + Send + Sync>;
 
-/// 负责为每个 actor 创建独占 Store 的持久化依赖。
-pub(crate) struct StorageDependencies {
-    pub(crate) store_factory: StoreFactory,
+/// 负责为每个 actor 创建独占领域存储端口的运行时依赖。
+pub(crate) struct RuntimeStorageDependencies {
+    pub(crate) storage_factory: DomainStorageFactory,
 }
 
-impl StorageDependencies {
-    /// 从调用方提供的 Store 工厂创建持久化依赖。
-    fn new<F>(store_factory: F) -> Self
+impl RuntimeStorageDependencies {
+    /// 从兼容期的具体存储工厂创建运行时依赖。
+    fn from_factory<F, D>(factory: F) -> Self
     where
-        F: Fn() -> Result<Store, String> + Send + Sync + 'static,
+        F: Fn() -> Result<D, String> + Send + Sync + 'static,
+        D: Into<DomainStorageDependencies> + 'static,
     {
         Self {
-            store_factory: Arc::new(store_factory),
+            storage_factory: Arc::new(move || factory().map(Into::into)),
         }
     }
 
-    /// 打开一个只属于当前 actor 的 Store，并映射为稳定的运行时错误。
-    fn open_store(&self) -> Result<Store, RuntimeError> {
-        (self.store_factory)().map_err(RuntimeError::Persistence)
+    /// 从抽象 StorageFactory 创建一个只属于当前 actor 的存储依赖。
+    fn from_storage_factory(factory: Arc<dyn StorageFactory>) -> Self {
+        Self {
+            storage_factory: Arc::new(move || factory.create().map_err(|error| error.to_string())),
+        }
+    }
+
+    /// 创建一个只属于当前 actor 的存储依赖，并映射为稳定的运行时错误。
+    fn create(&self) -> Result<DomainStorageDependencies, RuntimeError> {
+        (self.storage_factory)().map_err(RuntimeError::Persistence)
+    }
+
+    /// 为只读 transport 创建一个独占查询端口，并复用 Supervisor 已冻结的工厂。
+    ///
+    /// 查询服务不能借用某个 Actor 的写入端口：Actor 退出、切换会话或关闭 mailbox
+    /// 都不应影响已经建立的 RPC 连接。因此这里仍创建连接级端口，但创建入口由同一
+    /// 份运行时依赖统一管理，避免 Bootstrap 再保存一条独立的数据库装配路径。
+    pub(crate) fn create_query_storage(
+        &self,
+    ) -> Result<Box<dyn SessionQueryStorage>, RuntimeError> {
+        let dependencies = self.create()?;
+        let (_session_storage, query_storage, _search_storage) = dependencies.into_parts();
+        Ok(query_storage)
     }
 }
 
@@ -100,23 +124,37 @@ impl Default for RuntimePolicy {
 /// 该对象只在 bootstrap 或测试装配阶段按值构建；交给 Supervisor 后不可再修改，
 /// 从而避免活跃 Session 在 Turn 中途更换 Provider、工具集合或审批策略。
 pub struct RuntimeDependencies {
-    storage: StorageDependencies,
+    storage: RuntimeStorageDependencies,
     model: ModelRuntime,
     tools: ToolRuntime,
     policy: RuntimePolicy,
 }
 
 impl RuntimeDependencies {
-    /// 从每 actor 独占的 Store 工厂创建默认依赖集合。
+    /// 从每 actor 独占的存储工厂创建默认依赖集合。
     ///
     /// Provider 与工具依赖默认缺失，以支持只读 RPC、空会话和测试；一旦注入，配置
     /// 会在 Supervisor 接管时冻结。
-    pub fn new<F>(store_factory: F) -> Self
+    pub fn new<F, D>(storage_factory: F) -> Self
     where
-        F: Fn() -> Result<Store, String> + Send + Sync + 'static,
+        F: Fn() -> Result<D, String> + Send + Sync + 'static,
+        D: Into<DomainStorageDependencies> + 'static,
     {
         Self {
-            storage: StorageDependencies::new(store_factory),
+            storage: RuntimeStorageDependencies::from_factory(storage_factory),
+            model: ModelRuntime::Unconfigured,
+            tools: ToolRuntime::Disabled,
+            policy: RuntimePolicy::default(),
+        }
+    }
+
+    /// 从抽象 `StorageFactory` 创建运行时依赖集合。
+    ///
+    /// Factory 会在每个 Actor 创建时生成新的端口集合；Runtime 只保存 Factory 的
+    /// 抽象句柄，不保存数据库路径、连接或具体 Store。
+    pub fn from_storage_factory(factory: Arc<dyn StorageFactory>) -> Self {
+        Self {
+            storage: RuntimeStorageDependencies::from_storage_factory(factory),
             model: ModelRuntime::Unconfigured,
             tools: ToolRuntime::Disabled,
             policy: RuntimePolicy::default(),
@@ -182,14 +220,21 @@ impl RuntimeDependencies {
 /// 此类型不公开，防止 transport 或业务层绕过 `RuntimeDependencies` 在运行中拼接
 /// 不完整依赖；它只处理 actor 构造，不拥有 actor 的启动、停止或映射关系。
 pub(crate) struct SessionActorFactory {
-    storage: StorageDependencies,
+    storage: RuntimeStorageDependencies,
     model: ModelRuntime,
     tools: ToolRuntime,
     policy: RuntimePolicy,
 }
 
 impl SessionActorFactory {
-    /// 使用独占 Store 与冻结的能力快照创建一个 actor。
+    /// 为 RPC 查询服务提供连接级只读端口；具体后端仍隐藏在冻结的存储工厂之后。
+    pub(crate) fn create_query_storage(
+        &self,
+    ) -> Result<Box<dyn SessionQueryStorage>, RuntimeError> {
+        self.storage.create_query_storage()
+    }
+
+    /// 使用独占领域存储端口与冻结的能力快照创建一个 actor。
     pub(crate) fn create(
         &self,
         session_id: SessionId,
@@ -197,8 +242,8 @@ impl SessionActorFactory {
         command_tx: mpsc::Sender<ActorInput>,
         event_tx: broadcast::Sender<RuntimeEvent>,
     ) -> Result<SessionActor, RuntimeError> {
-        let store = self.storage.open_store()?;
-        let actor = SessionActor::new(session_id, store, command_rx, command_tx, event_tx);
+        let storage = self.storage.create()?;
+        let actor = SessionActor::new(session_id, storage, command_rx, command_tx, event_tx);
         let actor = actor.with_approval_timeout(self.policy.approval_timeout);
         let actor = actor.with_max_tool_rounds(self.policy.max_tool_rounds);
         let actor = match &self.model {

@@ -4,6 +4,7 @@
 //! RuntimeEvent。Provider 的原始 `call_id` 在结果中保留；底层工具需要的本地
 //! `ToolCallId` 仅用于进程跟踪和结果构造，不能暴露为上游调用 ID。
 
+use sagent_store::StorageFactory;
 use sagent_tools::{
     ReadFileLimits, ReadFileRequest, ReadFileService, SessionSearchRequest, SessionSearchService,
     TerminalExecutor, TerminalLimits, TerminalRequest, ToolResult, WorkspaceRoot, WriteFileLimits,
@@ -84,9 +85,15 @@ impl ToolWorker {
         &self.write_file
     }
 
-    /// 绑定当前 Profile 解析出的只读搜索数据库；未绑定时 session_search fail-closed。
-    pub fn with_session_search(mut self, database_path: impl Into<std::path::PathBuf>) -> Self {
-        self.session_search = Some(SessionSearchService::new(database_path, Default::default()));
+    /// 绑定当前 Profile 的搜索 Factory；未绑定时 `session_search` fail-closed。
+    pub fn with_session_search_factory(
+        mut self,
+        storage_factory: std::sync::Arc<dyn StorageFactory>,
+    ) -> Self {
+        self.session_search = Some(SessionSearchService::from_storage_factory(
+            storage_factory,
+            Default::default(),
+        ));
         self
     }
 
@@ -386,7 +393,10 @@ mod tests {
             .expect("应能写入搜索消息");
         drop(store);
 
-        let worker = worker.with_session_search(database);
+        let factory = std::sync::Arc::new(
+            sagent_store::SqliteStorageFactory::new(&database).expect("测试数据库路径应有效"),
+        );
+        let worker = worker.with_session_search_factory(factory);
         let plans = dispatcher
             .plan(vec![ToolCall {
                 call_id: "call_search_1".into(),

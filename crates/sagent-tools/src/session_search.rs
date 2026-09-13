@@ -1,8 +1,8 @@
 //! 受 Profile 范围约束的会话全文搜索工具。
 
-use std::{path::PathBuf, sync::Arc};
+use std::{fmt, sync::Arc};
 
-use sagent_store::{MessageSearchQuery, Store};
+use sagent_store::{MessageSearchQuery, StorageFactory};
 use sagent_types::SessionId;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -64,21 +64,24 @@ impl Default for SessionSearchLimits {
     }
 }
 
-/// 绑定单个 Profile SQLite 文件的只读搜索服务。
+/// 绑定单个 Profile 存储 Factory 的只读搜索服务。
 ///
-/// 服务只保存绝对数据库路径，不保存可跨调用共享的 SQLite Connection；每次搜索短暂
-/// 打开只读 Store，使不同 Actor/连接不会共享非线程安全连接，也不能通过参数切换 Profile。
-#[derive(Debug, Clone)]
+/// 服务只保存抽象 Factory，不保存数据库路径或连接；每次搜索创建短生命周期端口，
+/// 使不同 Actor/连接不会共享后端连接，也不能通过参数切换 Profile。
+#[derive(Clone)]
 pub struct SessionSearchService {
-    database_path: Arc<PathBuf>,
+    storage_factory: Arc<dyn StorageFactory>,
     limits: SessionSearchLimits,
 }
 
 impl SessionSearchService {
-    /// 创建 Profile 固定的会话搜索服务。
-    pub fn new(database_path: impl Into<PathBuf>, limits: SessionSearchLimits) -> Self {
+    /// 创建绑定 Profile 存储 Factory 的会话搜索服务。
+    pub fn from_storage_factory(
+        storage_factory: Arc<dyn StorageFactory>,
+        limits: SessionSearchLimits,
+    ) -> Self {
         Self {
-            database_path: Arc::new(database_path.into()),
+            storage_factory,
             limits,
         }
     }
@@ -108,14 +111,15 @@ impl SessionSearchService {
             include_inactive: false,
             limit,
         };
-        let path = (*self.database_path).clone();
+        let storage_factory = Arc::clone(&self.storage_factory);
         let cancellation_for_query = cancellation.clone();
         let query_task = tokio::task::spawn_blocking(move || {
             if cancellation_for_query.is_cancelled() {
                 return Err(SearchError::Cancelled);
             }
-            let store = Store::open_readonly(&path).map_err(|_| SearchError::Store)?;
-            store
+            let dependencies = storage_factory.create().map_err(|_| SearchError::Store)?;
+            dependencies
+                .search()
                 .search_messages(&query)
                 .map_err(|_| SearchError::Store)
         });
@@ -156,6 +160,15 @@ impl SessionSearchService {
             self.limits.max_output_chars.max(1),
             None,
         )
+    }
+}
+
+impl fmt::Debug for SessionSearchService {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SessionSearchService")
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
     }
 }
 
@@ -214,7 +227,9 @@ fn failure(
 mod tests {
     use std::fs;
 
-    use sagent_store::{NewMessage, NewSession, Store};
+    use std::sync::Arc;
+
+    use sagent_store::{NewMessage, NewSession, SqliteStorageFactory, Store};
     use sagent_types::{MessageId, SessionId, ToolCallId};
     use tokio_util::sync::CancellationToken;
 
@@ -259,11 +274,15 @@ mod tests {
         (path, session)
     }
 
+    fn factory(path: &std::path::Path) -> Arc<dyn sagent_store::StorageFactory> {
+        Arc::new(SqliteStorageFactory::new(path).expect("测试数据库路径应为绝对路径"))
+    }
+
     #[tokio::test]
     async fn searches_cjk_with_stable_ids_and_bounded_snippet() {
         let (path, session) = fixture();
-        let service = SessionSearchService::new(
-            &path,
+        let service = SessionSearchService::from_storage_factory(
+            factory(&path),
             SessionSearchLimits {
                 max_snippet_chars: 6,
                 ..Default::default()
@@ -284,7 +303,8 @@ mod tests {
     #[tokio::test]
     async fn rejects_empty_and_pre_cancelled_queries_without_store_side_effects() {
         let (path, _) = fixture();
-        let service = SessionSearchService::new(&path, Default::default());
+        let service =
+            SessionSearchService::from_storage_factory(factory(&path), Default::default());
         let empty = service
             .search(
                 ToolCallId::new(),

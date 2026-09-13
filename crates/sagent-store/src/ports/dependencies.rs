@@ -46,4 +46,15 @@ impl StorageDependencies {
     pub fn search(&self) -> &dyn SearchStorage {
         self.search.as_ref()
     }
+
+    /// 拆出三个端口的所有权，供 Actor 或 transport 在装配边界绑定各自职责。
+    pub fn into_parts(
+        self,
+    ) -> (
+        Box<dyn SessionStorage>,
+        Box<dyn SessionQueryStorage>,
+        Box<dyn SearchStorage>,
+    ) {
+        (self.session, self.query, self.search)
+    }
 }

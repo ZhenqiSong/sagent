@@ -115,8 +115,8 @@ impl SessionActor {
             timestamp.clone(),
         );
         self.context
-            .store
-            .begin_turn(
+            .session_storage
+            .start_turn(
                 &StartTurn {
                     turn_id: plan.turn_id,
                     session_id: self.context.session_id.clone(),

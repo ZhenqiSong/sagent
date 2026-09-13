@@ -181,9 +181,10 @@ async fn closed_handle_is_stale_and_session_can_restart() {
 
 #[tokio::test]
 async fn store_open_failure_is_exposed_without_leaking_sqlite_error_type() {
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(|| {
-        Err("测试数据库不可用".to_owned())
-    }));
+    let supervisor =
+        SessionSupervisor::new(RuntimeDependencies::new(|| -> Result<Store, String> {
+            Err("测试数据库不可用".to_owned())
+        }));
     let result = supervisor
         .get_or_start(SessionId::new("integration-error"))
         .await;

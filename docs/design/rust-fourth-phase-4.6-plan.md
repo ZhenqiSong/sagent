@@ -214,7 +214,9 @@ notification、超大帧和多响应顺序测试已迁移到异步 transport 并
 2. 用 `load_profile_config` 加载一次快照，再用 `resolve_openai_provider_from_config` 构造
    `Arc<dyn ModelProvider>`；key 只能留在 bootstrap 内存；
 3. 从 Profile 明确配置解析 model、workspace root、terminal limits、approval timeout；workspace 不可用时关闭相应工具或返回配置错误，不能放宽路径策略；
-4. 通过 `resolve_sqlite_database_path` 解析实际 SQLite 文件，再由 `Store::open_readwrite`
+4. 通过 `ProfileConfig::get_storage_descriptor` 获取存储意图，再由
+   `StorageDescriptor::resolve_sqlite_database_path` 解析实际 SQLite 文件，最后由
+   `Store::open_readwrite`
    factory 注入 `SessionSupervisor`，每 Actor 独占 Store；
 5. 注入 ToolDispatcher、ToolWorker、tool round 与 approval timeout；
 6. `session.create` 写 `NewSession`，source 为 `rpc`，创建空会话时不启动 Actor。

@@ -26,6 +26,14 @@ pub struct ProfileConfig {
 }
 
 impl ProfileConfig {
+    /// 获取当前 Profile 已校验的存储 descriptor。
+    ///
+    /// 返回不可变借用，确保所有使用方都读取同一份启动期快照；该方法不重新读取
+    /// `config.yaml`，也不创建数据库、连接或其它基础设施。
+    pub fn get_storage_descriptor(&self) -> &StorageDescriptor {
+        &self.storage
+    }
+
     /// 从一次完整文档解析结果组合 Profile 快照。
     pub(crate) fn from_document(document: ProviderConfig, unknown_fields: Vec<String>) -> Self {
         Self {
@@ -43,8 +51,7 @@ mod tests {
 
     use crate::{
         load_profile_config, read_public_config_from_config, resolve_openai_provider_from_config,
-        resolve_paths, resolve_storage_descriptor_from_config, resolve_workspace_from_config,
-        test_support::test_root,
+        resolve_paths, resolve_workspace_from_config, test_support::test_root,
     };
 
     #[test]
@@ -63,7 +70,7 @@ mod tests {
         // 删除配置文件后继续使用快照；任何 resolver 若重新读取 YAML，此测试都会失败。
         fs::remove_file(&paths.config_yaml).expect("应能删除配置文件 fixture");
 
-        let storage = resolve_storage_descriptor_from_config(&config).expect("storage 应能解析");
+        let storage = config.get_storage_descriptor();
         let workspace = resolve_workspace_from_config(&paths, &config).expect("workspace 应能解析");
         let public = read_public_config_from_config(&paths, &config).expect("摘要应能解析");
         let provider = resolve_openai_provider_from_config(&paths, &config, None, None)

@@ -34,7 +34,7 @@ pub enum SubscriptionError {
 ///
 /// 订阅者落后导致 broadcast 丢失消息时，不把底层 `Lagged` 错误直接暴露给
 /// RPC/TUI，而是返回一个带 skipped 数量的 `SubscriberLagged` 诊断事件；
-/// 客户端随后可以用 Store::events_since 补读持久化事实。
+/// 客户端随后可以通过会话查询端口补读持久化事实。
 pub struct RuntimeEventSubscription {
     session_id: SessionId,
     receiver: broadcast::Receiver<RuntimeEvent>,

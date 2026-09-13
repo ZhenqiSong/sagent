@@ -61,7 +61,7 @@ impl SessionActor {
         let timestamp = (self.context.clock)();
         if let Err(error) = self
             .context
-            .store
+            .session_storage
             .interrupt_turn(&turn_id, reason, &timestamp)
         {
             // 数据库仍是终态事实的唯一来源；写入失败时恢复 active，让调用方显式处理
@@ -102,7 +102,7 @@ impl SessionActor {
         );
         let message_id = match self
             .context
-            .store
+            .session_storage
             .complete_turn(&turn_id, &message, &timestamp)
         {
             Ok(message_id) => message_id,
@@ -148,7 +148,7 @@ impl SessionActor {
         let timestamp = (self.context.clock)();
         if let Err(error) = self
             .context
-            .store
+            .session_storage
             .fail_turn(&turn_id, category, &reason, &timestamp)
         {
             self.active = Some(active);

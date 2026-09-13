@@ -4,23 +4,22 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use sagent_config::{
-    SagentPaths, ensure_legacy_bootstrap_supported, load_profile_config,
-    read_public_config_from_config, resolve_openai_provider_from_config,
-    resolve_sqlite_database_path, resolve_workspace_from_config,
+    SagentPaths, load_profile_config, read_public_config_from_config,
+    resolve_openai_provider_from_config, resolve_workspace_from_config,
 };
 use sagent_provider::ModelProvider;
 use sagent_runtime::{RuntimeDependencies, SessionSupervisor, ToolDispatcher, ToolWorker};
-use sagent_store::Store;
+use sagent_store::StorageFactory;
 use sagent_tools::{ReadFileLimits, TerminalLimits, WorkspaceRoot, builtin_registry};
 
-use crate::service::RuntimeService;
+use crate::{service::RuntimeService, storage_factory::create_storage_factory};
 
 /// 已绑定一个 Profile 的运行时装配结果。
 ///
 /// Bootstrap 在启动时固定路径与 Provider；RPC 请求不能传入 home、profile、model、
 /// endpoint 或 API key，因而不会在同一个 daemon 内跨越 Profile 或凭据边界。
 pub struct RuntimeBootstrap {
-    database_path: std::path::PathBuf,
+    storage_factory: Arc<dyn StorageFactory>,
     model: String,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
@@ -28,33 +27,26 @@ pub struct RuntimeBootstrap {
 }
 
 impl RuntimeBootstrap {
-    /// 创建数据库、Provider 和每 Actor 独占的 Store factory。
+    /// 创建存储 Factory、Provider 和每 Actor 独占的领域端口。
     pub fn from_paths(paths: SagentPaths) -> Result<Self> {
         // Profile 配置在 bootstrap 开始时只读取一次；后续 Provider、workspace、公开摘要
         // 和 storage 校验都复用同一快照，避免同一 Runtime 看到不一致的文件内容。
         let profile_config = load_profile_config(&paths).context("读取 Profile 配置失败")?;
-        ensure_legacy_bootstrap_supported(&profile_config).context("校验 Profile 存储配置失败")?;
-        let database_path = resolve_sqlite_database_path(&paths, &profile_config)
-            .context("解析 Profile SQLite 数据库路径失败")?;
+        let storage_descriptor = profile_config.get_storage_descriptor();
 
-        // 首次启动允许创建 Sagent 自有 SQLite 文件并执行加性 migration；随后读服务和
-        // 每个 Actor 都各自打开连接，绝不跨 Actor 共享 rusqlite Connection。
-        let initialization_store = Store::open_readwrite(&database_path)
-            .with_context(|| format!("初始化 RPC 数据库失败：{}", database_path.display()))?;
-        initialization_store
-            .verify_connection()
-            .context("RPC 数据库连接检查失败")?;
-        drop(initialization_store);
+        // 后端选择只发生在独立的 selector 中；Bootstrap 不根据 StorageKind 分支，
+        // 也不持有数据库路径、连接或具体 Store。Factory 的首次 create 负责初始化
+        // migration 和连接检查，之后每个 Actor/请求都获取独立的端口集合。
+        let storage_factory: Arc<dyn StorageFactory> =
+            create_storage_factory(&paths, storage_descriptor)
+                .context("创建 Profile 存储 Factory 失败")?;
+        storage_factory.create().context("初始化 RPC 存储失败")?;
 
         // 公开配置在 bootstrap 时冻结；读取失败不能降级为“空配置”，否则客户端会把
         // 损坏 YAML 误认为未配置。
         let public_config = read_public_config_from_config(&paths, &profile_config)
             .context("读取公开 Profile 配置失败")?;
-        let store_factory_path = database_path.clone();
-        let dependencies = RuntimeDependencies::new(move || {
-            Store::open_readwrite(&store_factory_path)
-                .map_err(|error| format!("无法打开 actor 数据库：{error}"))
-        });
+        let dependencies = RuntimeDependencies::from_storage_factory(Arc::clone(&storage_factory));
 
         // 工具边界必须在 Profile bootstrap 时固定，不能接受来自 prompt.submit 的路径或
         // registry 覆盖。workspace 不可用时只关闭工具而不影响只读 RPC/空会话，让损坏的
@@ -71,7 +63,7 @@ impl RuntimeBootstrap {
                         ReadFileLimits::default(),
                         TerminalLimits::default(),
                     )
-                    .with_session_search(database_path.clone());
+                    .with_session_search_factory(Arc::clone(&storage_factory));
                     dependencies.with_tools(dispatcher, worker)
                 }
                 Err(_) => dependencies,
@@ -97,7 +89,7 @@ impl RuntimeBootstrap {
         };
 
         Ok(Self {
-            database_path,
+            storage_factory,
             model,
             supervisor: Arc::new(SessionSupervisor::new(dependencies)),
             provider_ready,
@@ -111,18 +103,19 @@ impl RuntimeBootstrap {
         })
     }
 
-    /// 为一条 transport 连接打开独占的只读 Store 适配层。
+    /// 为一条 transport 连接装配独占的只读查询端口。
     ///
-    /// `rusqlite::Connection` 不应跨 WebSocket 连接共享；Supervisor 则必须共享，才能让
-    /// 同一 Profile 的重连客户端继续控制既有 Actor。因此每条连接新建读服务、复用同一
-    /// Actor 注册表和启动期配置快照。
+    /// 查询依赖由 Supervisor 持有的冻结运行时工厂创建，Bootstrap 不再直接打开另一
+    /// 个存储依赖。每条连接仍取得自己的查询端口，Supervisor 则跨连接共享，以便重连
+    /// 客户端继续控制既有 Actor；连接之间不共享具体数据库连接。
     pub fn open_service(&self) -> Result<RuntimeService> {
-        let read_store = Store::open_readonly(&self.database_path).with_context(|| {
-            format!("打开 RPC 只读数据库失败：{}", self.database_path.display())
-        })?;
+        let query_storage = self
+            .supervisor
+            .create_query_storage()
+            .context("打开 RPC 查询存储失败")?;
         Ok(RuntimeService::new(
-            sagent_protocol::SessionService::new(read_store),
-            self.database_path.clone(),
+            sagent_protocol::SessionService::new_boxed(query_storage),
+            Arc::clone(&self.storage_factory),
             self.model.clone(),
             Arc::clone(&self.supervisor),
             self.provider_ready,

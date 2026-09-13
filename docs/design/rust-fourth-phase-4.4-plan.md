@@ -594,7 +594,9 @@ OpenAI-compatible HTTP/SSE adapter 已完成，Provider crate 现在可以在不
 
 ### 17.1 已完成内容
 
-- 在 `sagent-config` 中新增 `src/provider.rs`；
+- 在 `sagent-config` 中新增 Provider 配置模块（初始入口为 `src/provider.rs`，后续已按
+  R3.2 拆分为 `config_reader.rs`、`provider_config.rs`、`provider_resolver.rs`、
+  `credentials.rs`、`workspace.rs` 和 `public_config.rs`）；
 - `SagentPaths` 新增当前 Profile 的 `.env` 路径；
 - 支持从当前 Profile 的 `config.yaml` 读取 provider、model、base_url 和 api_key_env；
 - 支持 Python 兼容的 `providers.<name>.api/url/base_url/key_env` 配置形态；

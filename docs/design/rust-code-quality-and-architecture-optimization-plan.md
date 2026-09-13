@@ -207,8 +207,18 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 
 ### R3：持久化端口与 SQLite 实现隔离
 
-当前进度：R3.1 `StorageDescriptor` 已完成；R3.2 `provider.rs` 配置职责拆分已纳入计划；
+当前进度：R3.1 `StorageDescriptor` 与 R3.2 `provider.rs` 配置职责拆分已完成；
 `StorageFactory`、领域存储端口与 SQLite 迁移尚未开始。
+
+**R3.2 完成记录：** 配置读取、Profile 聚合快照、Provider 数据模型、Provider resolver、
+凭据读取、workspace 解析和公开配置摘要分别位于独立 sibling；`lib.rs` 直接公开这些稳定
+API，不再保留只做转发的 `provider.rs`。`config_reader` 与 `ProfileConfig` 只负责 YAML
+读取、反序列化和不可变意图组合，不创建数据库、HTTP client 或后台任务。当前
+`resolve_openai_provider_from_config` 只接受已加载快照，仍暂时在 config crate 中实例化
+OpenAI-compatible client；后续 R4 的 ProviderFactory 将把该副作用移到 bootstrap。
+`resolve_storage_descriptor_from_config`
+以及各主题的 `*_from_config` API 提供无 I/O 的已加载配置提取路径，供 bootstrap 复用同一份
+配置快照；`load_profile_config` 是当前唯一的 `config.yaml` 文件读取入口。
 
 **目的：** 使所有业务持久化经由统一边界，并为本地/远程后端配置切换建立真实路径。
 
@@ -219,11 +229,12 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 
 1. 定义 `StorageDescriptor`：至少支持 `sqlite` 与未来远程后端所需的 kind、连接引用、
    schema/namespace、只读策略；秘密只能引用环境变量或秘密提供者；
-2. 拆分当前 `sagent-config/src/provider.rs` 的混合职责，保持行为不变并保留中文 Rustdoc：
+2. 将原 `sagent-config/src/provider.rs` 的混合职责拆分，保持行为不变并保留中文 Rustdoc：
    `config_reader.rs` 负责 YAML 反序列化，`provider_resolver.rs` 负责 Provider 解析与实例化，
    `credentials.rs` 负责 `.env`/环境变量读取，`workspace.rs` 负责 workspace 路径解析，
    `storage.rs` 负责 `StorageDescriptor`，公开配置摘要只保留在独立的 `public_config.rs`；
-   拆分期间不得让配置层打开数据库、创建 Provider/HTTP 客户端或启动后台任务；
+   配置读取和 descriptor 组合不得打开数据库、创建 Provider/HTTP 客户端或启动后台任务；
+   现有 Provider 实例化兼容入口暂由 resolver 保留，后续 R4 迁移到 `ProviderFactory`；
 3. 将 `SagentPaths.state_db` 降级为 SQLite 默认路径，不再视为唯一存储策略；
 4. 设计 `StorageFactory`、`SessionStorage`、`SessionQueryStorage`、`SearchStorage` 的最小
    领域 API。`start_turn`、`commit_tool_result`、`complete_turn`、`interrupt_turn` 等必须
@@ -333,7 +344,7 @@ timeout、迟到结果和审计事件契约不变；终端原生三平台测试�
 **工作：**
 
 1. 从 bootstrap 开始切换到 descriptor → factory → domain port；
-2. 删除不再使用的 `resolve_openai_provider`、具体 Store factory、工具硬编码分支和重复连接
+2. 确认文件读取式 Provider 入口已删除，并继续移除具体 Store factory、工具硬编码分支和重复连接
    lifecycle 代码；不保留仅供内部使用的 re-export shim；
 3. 更新 Phase 3 计划、架构文档、配置示例、contract fixture 和 crate 文档；
 4. 在干净环境运行全量格式化、测试、Clippy、contract runner、三平台 CI 与 native terminal

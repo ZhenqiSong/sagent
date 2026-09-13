@@ -15,7 +15,9 @@ use std::{
 
 use anyhow::{Result, bail};
 use sagent_agent::{RequestId, UserInput};
-use sagent_config::{normalize_profile_name, resolve_openai_provider, resolve_paths};
+use sagent_config::{
+    load_profile_config, normalize_profile_name, resolve_openai_provider_from_config, resolve_paths,
+};
 use sagent_runtime::{
     RuntimeDependencies, RuntimeEventKind, RuntimeEventSubscription, SessionHandle,
     SessionSupervisor,
@@ -63,7 +65,8 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
     let profile_name = env::var(LIVE_PROFILE).unwrap_or_else(|_| "default".into());
     let profile = normalize_profile_name(&profile_name)?;
     let paths = resolve_paths(Some(&home), Some(&profile))?;
-    let resolved = resolve_openai_provider(&paths, None, None)?;
+    let config = load_profile_config(&paths)?;
+    let resolved = resolve_openai_provider_from_config(&paths, &config, None, None)?;
     let model = resolved.model.clone();
     let profile_revision = format!("live:{}", profile.as_str());
 

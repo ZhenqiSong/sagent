@@ -71,7 +71,8 @@ sagent-rpc --home <固定 Profile home>
 - `SessionHandle::{submit, interrupt, resolve_approval, resume, subscribe}`；
 - `RuntimeEventKind` 覆盖文本流、工具、审批和终态；
 - `Store::events_since` 按 `SessionId + EventSequence` 查询持久化事实；
-- `resolve_openai_provider` 从固定 Profile config/.env 创建 Provider，密钥不序列化；
+- `load_profile_config` 先固定 Profile 配置快照，再由 `resolve_openai_provider_from_config` 创建
+  Provider；密钥不序列化；
 - `ClientHelloParams`、`ClientHelloResult`、稳定握手错误码和 `client.hello` 分发；
 - `sagent-rpc` 仍为同步、只读的 stdin → dispatch → stdout 循环。
 
@@ -210,7 +211,8 @@ notification、超大帧和多响应顺序测试已迁移到异步 transport 并
 **位置**：新增 `runtime_bootstrap.rs`、`service/runtime.rs`，调整 `args.rs`/`main.rs`。
 
 1. 启动时仅一次解析 `--home`/`--profile`，固定 `SagentPaths`；
-2. 用 `resolve_openai_provider` 构造 `Arc<dyn ModelProvider>`；key 只能留在 bootstrap 内存；
+2. 用 `load_profile_config` 加载一次快照，再用 `resolve_openai_provider_from_config` 构造
+   `Arc<dyn ModelProvider>`；key 只能留在 bootstrap 内存；
 3. 从 Profile 明确配置解析 model、workspace root、terminal limits、approval timeout；workspace 不可用时关闭相应工具或返回配置错误，不能放宽路径策略；
 4. `Store::open_readwrite(state.db)` factory 注入 `SessionSupervisor`，每 Actor 独占 Store；
 5. 注入 ToolDispatcher、ToolWorker、tool round 与 approval timeout；

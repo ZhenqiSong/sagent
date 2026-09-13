@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use serde::Deserialize;
 
+use crate::profile_config::ProfileConfig;
+
 /// 当前配置能够表达的存储后端类别。
 #[derive(Debug, Clone, Copy, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -44,6 +46,35 @@ pub struct StorageDescriptor {
     /// 是否以只读策略打开后端；默认允许写入，以保持现有 SQLite 行为。
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// 从已经读取的 Profile 配置提取并校验存储意图，不产生额外文件 I/O。
+///
+/// Bootstrap 如果同时需要 Provider、workspace 和 storage，应先读取一次 `ProfileConfig`，
+/// 再把同一快照传入各 resolver；本函数不会产生额外文件 I/O。
+pub fn resolve_storage_descriptor_from_config(config: &ProfileConfig) -> Result<StorageDescriptor> {
+    config.storage.validate()?;
+    Ok(config.storage.clone())
+}
+
+/// 检查当前 SQLite bootstrap 是否能完整执行 Profile 的 storage 意图。
+///
+/// StorageFactory 尚未接入前，Runtime 只能使用默认 `state.db` 的读写 SQLite；遇到远程、
+/// 自定义路径、schema/namespace 或只读策略时必须失败关闭，避免用户配置被静默忽略。
+pub fn ensure_legacy_bootstrap_supported(config: &ProfileConfig) -> Result<()> {
+    let descriptor = &config.storage;
+    descriptor.validate()?;
+    if descriptor.kind != StorageKind::Sqlite {
+        bail!("remote storage 后端尚未实现")
+    }
+    if descriptor.path.is_some()
+        || descriptor.schema.is_some()
+        || descriptor.namespace.is_some()
+        || descriptor.read_only
+    {
+        bail!("当前 SQLite bootstrap 仅支持默认 state.db 的读写模式")
+    }
+    Ok(())
 }
 
 impl StorageDescriptor {
@@ -111,6 +142,18 @@ fn validate_connection_env(value: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{StorageDescriptor, StorageKind};
+    use crate::{ProfileConfig, load_profile_config, resolve_paths};
+    use std::{fs, path::PathBuf};
+
+    fn test_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "sagent-storage-config-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("应能创建测试目录");
+        root
+    }
 
     #[test]
     fn missing_storage_uses_sqlite_defaults() {
@@ -181,5 +224,80 @@ mod tests {
         let blank_path: StorageDescriptor =
             serde_yaml::from_str("path: ''\n").expect("空 path 应能先完成反序列化");
         assert!(blank_path.validate().is_err());
+    }
+
+    #[test]
+    fn extracts_descriptor_from_loaded_config_without_io() {
+        let configured = StorageDescriptor {
+            kind: StorageKind::Remote,
+            path: None,
+            connection_env: Some("SAGENT_DB_URL".into()),
+            schema: Some("app".into()),
+            namespace: Some("profile-a".into()),
+            read_only: true,
+        };
+
+        let config = ProfileConfig {
+            storage: configured.clone(),
+            provider: crate::provider_config::ProviderDescriptor {
+                provider: None,
+                model: None,
+                base_url: None,
+                api_key_env: None,
+                providers: std::collections::BTreeMap::new(),
+            },
+            workspace: crate::provider_config::WorkspaceDescriptor::default(),
+            unknown_fields: Vec::new(),
+        };
+
+        let descriptor = super::resolve_storage_descriptor_from_config(&config).expect("应能提取");
+
+        assert_eq!(descriptor, configured);
+    }
+
+    #[test]
+    fn rejects_storage_options_unsupported_by_legacy_bootstrap() {
+        let config = ProfileConfig {
+            storage: StorageDescriptor {
+                kind: StorageKind::Sqlite,
+                path: Some("custom.db".into()),
+                connection_env: None,
+                schema: None,
+                namespace: None,
+                read_only: false,
+            },
+            provider: crate::provider_config::ProviderDescriptor {
+                provider: None,
+                model: None,
+                base_url: None,
+                api_key_env: None,
+                providers: std::collections::BTreeMap::new(),
+            },
+            workspace: crate::provider_config::WorkspaceDescriptor::default(),
+            unknown_fields: Vec::new(),
+        };
+
+        assert!(super::ensure_legacy_bootstrap_supported(&config).is_err());
+    }
+
+    #[test]
+    fn resolves_remote_descriptor_without_opening_a_database() {
+        let root = test_root("remote");
+        fs::write(
+            root.join("config.yaml"),
+            "storage:\n  kind: remote\n  connection_env: SAGENT_DB_URL\n",
+        )
+        .expect("应能写入 storage descriptor 配置");
+        let paths = resolve_paths(Some(&root), None).expect("应能解析 Profile 路径");
+
+        // 远程 descriptor 只验证配置意图；解析过程不应因为旧 bootstrap 而创建 state.db。
+        let config = load_profile_config(&paths).expect("应能加载 storage 快照");
+        let descriptor = super::resolve_storage_descriptor_from_config(&config)
+            .expect("descriptor 应能从快照解析");
+
+        assert_eq!(descriptor.kind, StorageKind::Remote);
+        assert_eq!(descriptor.connection_env.as_deref(), Some("SAGENT_DB_URL"));
+        assert!(!root.join("state.db").exists());
+        fs::remove_dir_all(root).expect("应能清理 storage descriptor fixture");
     }
 }

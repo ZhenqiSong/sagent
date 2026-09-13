@@ -3,7 +3,11 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use sagent_config::{SagentPaths, read_public_config, resolve_openai_provider, resolve_workspace};
+use sagent_config::{
+    SagentPaths, ensure_legacy_bootstrap_supported, load_profile_config,
+    read_public_config_from_config, resolve_openai_provider_from_config,
+    resolve_workspace_from_config,
+};
 use sagent_provider::ModelProvider;
 use sagent_runtime::{RuntimeDependencies, SessionSupervisor, ToolDispatcher, ToolWorker};
 use sagent_store::Store;
@@ -26,6 +30,11 @@ pub struct RuntimeBootstrap {
 impl RuntimeBootstrap {
     /// 创建数据库、Provider 和每 Actor 独占的 Store factory。
     pub fn from_paths(paths: SagentPaths) -> Result<Self> {
+        // Profile 配置在 bootstrap 开始时只读取一次；后续 Provider、workspace、公开摘要
+        // 和 storage 校验都复用同一快照，避免同一 Runtime 看到不一致的文件内容。
+        let profile_config = load_profile_config(&paths).context("读取 Profile 配置失败")?;
+        ensure_legacy_bootstrap_supported(&profile_config).context("校验 Profile 存储配置失败")?;
+
         // 首次启动允许创建 Sagent 自有 state.db 并执行加性 migration；随后读服务和
         // 每个 Actor 都各自打开连接，绝不跨 Actor 共享 rusqlite Connection。
         let initialization_store = Store::open_readwrite(&paths.state_db)
@@ -38,7 +47,8 @@ impl RuntimeBootstrap {
         let state_db = paths.state_db.clone();
         // 公开配置在 bootstrap 时冻结；读取失败不能降级为“空配置”，否则客户端会把
         // 损坏 YAML 误认为未配置。
-        let public_config = read_public_config(&paths).context("读取公开 Profile 配置失败")?;
+        let public_config = read_public_config_from_config(&paths, &profile_config)
+            .context("读取公开 Profile 配置失败")?;
         let store_factory_path = state_db.clone();
         let dependencies = RuntimeDependencies::new(move || {
             Store::open_readwrite(&store_factory_path)
@@ -49,7 +59,7 @@ impl RuntimeBootstrap {
         // registry 覆盖。workspace 不可用时只关闭工具而不影响只读 RPC/空会话，让损坏的
         // 工具配置不会阻塞用户恢复已有 transcript；可用时每个 Actor 共享无状态 worker
         // 配置，但实际 Store 写入仍由 Actor 独占连接完成。
-        let dependencies = match resolve_workspace(&paths)
+        let dependencies = match resolve_workspace_from_config(&paths, &profile_config)
             .and_then(|root| WorkspaceRoot::new(root).map_err(|error| anyhow::anyhow!(error)))
         {
             Ok(workspace) => match builtin_registry() {
@@ -70,7 +80,8 @@ impl RuntimeBootstrap {
 
         // Provider 缺失不破坏第三阶段的只读 RPC 或空会话创建；后续 prompt.submit 会
         // 使用 provider_ready 返回稳定 runtime_unavailable，而不会泄露 resolver 细节。
-        let resolved_provider = resolve_openai_provider(&paths, None, None);
+        let resolved_provider =
+            resolve_openai_provider_from_config(&paths, &profile_config, None, None);
         let (dependencies, model, provider_ready) = match resolved_provider {
             Ok(resolved) => {
                 let model = resolved.model;

@@ -3,19 +3,39 @@
 //! 配置层只负责读取和校验文件，并将结果交给 CLI/RPC/Runtime；它不创建会话或写入
 //! SQLite，因此可以在不同入口复用同一套 Profile 隔离规则。
 
+mod config_reader;
+mod credentials;
+mod profile_config;
+mod provider_config;
+mod provider_resolver;
+mod public_config;
+mod workspace;
+
+#[cfg(test)]
+mod test_support;
+
 pub mod paths;
 pub mod profile;
-pub mod provider;
 pub mod storage;
 
+pub use config_reader::load_profile_config;
 pub use paths::{SagentPaths, resolve_active_paths, resolve_paths};
 pub use profile::{
     ProfileName, active_profile_path, list_profile_names, normalize_profile_name,
     read_active_profile, set_active_profile,
 };
-pub use provider::{
-    ProviderConfig, PublicConfig, ResolvedProvider, ResolvedProviderConfig, read_public_config,
-    resolve_openai_provider, resolve_provider_config, resolve_storage_descriptor,
-    resolve_workspace,
+pub use profile_config::ProfileConfig;
+pub use provider_config::{
+    ModelDetail, ModelSetting, ProviderConfig, ProviderDescriptor, UserProviderConfig,
+    WorkspaceDescriptor,
 };
-pub use storage::{StorageDescriptor, StorageKind};
+pub use provider_resolver::{
+    ResolvedProvider, ResolvedProviderConfig, resolve_openai_provider_from_config,
+    resolve_provider_config_from_config,
+};
+pub use public_config::{PublicConfig, read_public_config_from_config};
+pub use storage::{
+    StorageDescriptor, StorageKind, ensure_legacy_bootstrap_supported,
+    resolve_storage_descriptor_from_config,
+};
+pub use workspace::resolve_workspace_from_config;

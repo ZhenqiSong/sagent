@@ -269,8 +269,9 @@ Runtime/RPC/CLI 扩散。当前接口是同步阻塞模型：Manager 为 `Send +
 
 **执行记录（2026-09-14）：** 已将原 `Store` 重命名为 `SqliteDatabase`，并把连接打开、
 访问模式、migration、健康检查和只读写入保护从 `lib.rs` 拆到独立的
-`sqlite_database.rs`。SQLite 业务端口已进一步拆为 `sqlite_session_storage/` 下的写入、
-查询和搜索子模块；`SqliteStorageFactory` 只保留兼容构造职责，`SqliteStorageManager` 直接
+`sqlite/database.rs`。所有 SQLite 实现现已收拢到 `src/sqlite/` 包，其中 `session/` 按
+会话领域继续划分为消息、查询、搜索、Turn、Event、事务和端口适配子模块。`SqliteStorageFactory`
+只保留兼容构造职责，`SqliteStorageManager` 直接
 通过 adapter 组装 `Storage`、`ReadStorage` 和 `WriteStorage`，不再经由旧依赖聚合创建新对象。
 Session、Message、Turn、Event 和 FTS 的 SQL 实现模块已收回 crate 内部可见性，外部只看到
 领域 DTO 与业务 Storage 外观；既有高层原子操作和只读边界保持不变。`SqliteDatabase` 根导出

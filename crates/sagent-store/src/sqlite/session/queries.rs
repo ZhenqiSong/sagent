@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, Row, params};
 use sagent_types::{SessionId, SessionSummary};
 
-use crate::SqliteDatabase;
+use super::super::database::SqliteDatabase;
 
 /// 会话列表的可见性与分页条件。
 ///
@@ -161,7 +161,7 @@ mod tests {
 
     use rusqlite::Connection;
 
-    use crate::{SessionListQuery, SqliteDatabase};
+    use super::{SessionListQuery, SqliteDatabase};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("sagent-sessions-{name}-{}.db", std::process::id()))

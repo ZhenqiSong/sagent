@@ -10,12 +10,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{
-    ReadStorage, SqliteDatabase, Storage, StorageManager, StorageResult, WriteStorage,
-    sqlite_session_storage::{
-        read_storage_from_database, storage_from_database, write_storage_from_database,
-    },
+use super::{
+    database::SqliteDatabase,
+    session::{read_storage_from_database, storage_from_database, write_storage_from_database},
 };
+use crate::{ReadStorage, Storage, StorageManager, StorageResult, WriteStorage};
 
 /// 绑定单个 Profile SQLite 数据库的存储管理器。
 ///

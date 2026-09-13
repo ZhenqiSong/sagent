@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 
-use crate::SqliteDatabase;
+use super::database::SqliteDatabase;
 
 /// 数据库结构的只读快照。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,7 +182,7 @@ mod tests {
     fn inspects_historic_v1_fixture_without_migrating_it() {
         let path = test_path("historic-v1");
         remove(&path);
-        create_from_fixture(&path, include_str!("../tests/fixtures/historic_v1.sql"));
+        create_from_fixture(&path, include_str!("../../tests/fixtures/historic_v1.sql"));
 
         let info = SqliteDatabase::open_readonly(&path)
             .expect("应能只读打开历史 fixture")
@@ -198,7 +198,7 @@ mod tests {
     fn identifies_fixture_without_fts5() {
         let path = test_path("no-fts");
         remove(&path);
-        create_from_fixture(&path, include_str!("../tests/fixtures/no_fts.sql"));
+        create_from_fixture(&path, include_str!("../../tests/fixtures/no_fts.sql"));
 
         let info = SqliteDatabase::open_readonly(&path)
             .expect("应能只读打开无 FTS fixture")

@@ -1,28 +1,50 @@
-//! SQLite Session 业务存储适配器。
+//! SQLite Session 领域持久化实现。
 //!
-//! 本模块只负责把一个 `SqliteDatabase` 资源组装成 `Storage`、`ReadStorage` 或
-//! `WriteStorage` 所需的领域端口。端口对象共享同一受保护的数据库句柄，但不会把
-//! SQLite 连接泄漏到 Runtime、RPC、CLI 或工具；后续替换为远程后端时，只需替换本模块。
+//! 本模块同时收纳 Session 领域的 SQL 映射和端口适配：查询、搜索、Turn、Event 以及
+//! 跨表事务各自位于独立子模块。`storage_from_database` 只负责把这些实现组装成抽象
+//! `Storage`，不会把 SQLite 连接泄漏到 Runtime、RPC、CLI 或工具。
 //!
-//! 写入、查询和搜索端口分别位于同目录子模块。业务操作的原子边界仍由
-//! `SqliteDatabase` 的同主题实现保证，本模块只负责领域端口适配和最小权限装配。
+//! 业务操作的原子边界仍由 `transactions` 中的高层操作保证；`SqliteDatabase` 只提供
+//! 受访问模式保护的连接资源。后续增加其他业务领域时，应在 `sqlite` 下新增领域包，
+//! 不要把无关 SQL 追加到本模块。
 //!
 //! 作者：SongZQ
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use super::database::SqliteDatabase;
 use crate::{
-    ReadOnlySessionStorage, ReadStorage, SessionStorage, SqliteDatabase, Storage,
-    StorageDependencies, StorageReadDependencies, StorageResult, WriteStorage,
+    ReadOnlySessionStorage, ReadStorage, SessionStorage, Storage, StorageDependencies,
+    StorageReadDependencies, StorageResult, WriteStorage,
 };
 
-mod query;
+mod events;
+mod messages;
+mod queries;
+mod read_port;
 mod search;
-mod write;
+mod search_port;
+mod transactions;
+mod turns;
+mod write_port;
 
-use query::SqliteSessionQueryStorage;
-use search::SqliteSearchStorage;
-use write::SqliteSessionStorage;
+use read_port::SqliteSessionQueryStorage;
+use search_port::SqliteSearchStorage;
+use write_port::SqliteSessionStorage;
+
+pub use events::{
+    EVENT_APPROVAL_REQUESTED, EVENT_APPROVAL_RESOLVED, EVENT_APPROVAL_TIMED_OUT,
+    EVENT_MESSAGE_COMMITTED, EVENT_TOOL_COMPLETED, EVENT_TOOL_STARTED, EVENT_TURN_COMPLETED,
+    EVENT_TURN_FAILED, EVENT_TURN_INTERRUPTED, EVENT_TURN_STARTED, EventQuery, MAX_EVENT_LIMIT,
+    NewDaemonEvent, StoredDaemonEvent,
+};
+pub use messages::{MessageQuery, MessageWindow};
+pub use queries::SessionListQuery;
+pub use search::MessageSearchQuery;
+pub use transactions::{
+    NewMessage, NewSession, RestoreResult, RetryCheckpoint, RewindCheckpoint, RewindResult,
+};
+pub use turns::{NewGeneration, StartTurn, StoredGeneration, StoredRunningTurn};
 
 type SharedDatabase = Arc<Mutex<SqliteDatabase>>;
 

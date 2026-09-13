@@ -55,7 +55,7 @@ Python 项目为兼容目标。
 | `sagent-tools/src/terminal.rs::execute_with_approval` | 约 160 行 | 校验、审批、spawn、取消、输出收集和清理混杂 |
 | `sagent-tui/src/app/reducer.rs::reduce` | 约 155 行 | 多个 UI 领域 action 聚集在一个 reducer |
 | `sagent-runtime/src/actor.rs::submit_prompt` | 约 117 行 | prompt、generation、Store、worker 和事件一次完成 |
-| `sagent-store/src/turn.rs` | 约 623 行 | 一条 turn 生命周期的多个事务集中 |
+| `sagent-store/src/sqlite/session/turns.rs` | 约 623 行 | 一条 turn 生命周期的多个事务集中 |
 | `sagent-rpc/src/transport/stdio.rs` | 约 806 行（生产约 650 行） | framing、连接任务、dispatch、event bridge 与测试混合 |
 | `sagent-runtime/tests/tool_actor.rs` | 约 994 行 | 多个工具/审批/取消场景共用重复搭建 |
 

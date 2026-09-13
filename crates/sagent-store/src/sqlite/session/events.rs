@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, Transaction, params};
 use sagent_types::{EventSequence, SessionId, TurnId};
 
-use crate::SqliteDatabase;
+use super::super::database::SqliteDatabase;
 
 /// Turn 已持久化开始事实的事件类型。
 pub const EVENT_TURN_STARTED: &str = "turn.started";

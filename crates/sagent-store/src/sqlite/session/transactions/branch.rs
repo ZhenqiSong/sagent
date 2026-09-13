@@ -7,8 +7,9 @@ use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
 use sagent_types::{MessageId, SessionId};
 
+use super::super::super::database::SqliteDatabase;
+use super::super::messages::map_stored_message;
 use super::{RestoreResult, RewindCheckpoint, RewindResult};
-use crate::{SqliteDatabase, message::map_stored_message};
 
 impl SqliteDatabase {
     /// 回退到一条用户消息，将目标消息本身及其后的活动消息软删除。

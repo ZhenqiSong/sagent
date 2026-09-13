@@ -41,9 +41,9 @@ sagent session restore <SESSION_ID> <MESSAGE_ID>
 | 命令协议与根分发 | `crates/sagent-cli/src/commands/command.rs`、`handler.rs` | `Command`、`HandlerFactory`、`CommandHandler` |
 | session CLI | `crates/sagent-cli/src/commands/session/{command,handler,service}/` | `SessionCommand`、`SessionHandler`、会话服务 |
 | JSON/text 输出 | `crates/sagent-cli/src/output.rs` | `print_output` |
-| 会话读取 | `crates/sagent-store/src/session.rs` | `list_sessions`、`get_session` |
-| 消息读取 | `crates/sagent-store/src/message.rs` | `get_messages_for_display` |
-| 写事务 | `crates/sagent-store/src/write.rs` | `update_session_title`、`finish_session`、`set_session_archived`、`rewind_to_message`、`restore_rewound` |
+| 会话读取 | `crates/sagent-store/src/sqlite/session/queries.rs` | `list_sessions`、`get_session` |
+| 消息读取 | `crates/sagent-store/src/sqlite/session/messages.rs` | `get_messages_for_display` |
+| 写事务 | `crates/sagent-store/src/sqlite/session/transactions.rs` | `update_session_title`、`finish_session`、`set_session_archived`、`rewind_to_message`、`restore_rewound` |
 | 现有事务测试 | `crates/sagent-store/src/lib.rs` | archive、rewind、retry、compression 测试 |
 
 ### 3.1 必须阅读的 Python 实现
@@ -199,7 +199,7 @@ pub fn restore_rewound_from(
 
 目标：归档命令落地前，先让用户能找到归档的 session。
 
-1. 在 `sagent-store/src/session.rs` 为 list 查询增加 `SessionListQuery`，包含
+1. 在 `sagent-store/src/sqlite/session/queries.rs` 为 list 查询增加 `SessionListQuery`，包含
    `include_archived`、`include_hidden`、`limit`、`offset`；
 2. 保留当前 `list_sessions(limit, offset)` 作为默认可见性包装，避免破坏第一阶段调用方；
 3. 在 `commands/session/command.rs` 为 `List` 新增 `--include-archived`；

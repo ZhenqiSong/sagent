@@ -193,15 +193,15 @@ pub enum PersistedTurnStatus {
 建议新增模块：
 
 ```text
-crates/sagent-store/src/turn.rs
-crates/sagent-store/src/event.rs
+crates/sagent-store/src/sqlite/session/turns.rs
+crates/sagent-store/src/sqlite/session/events.rs
 ```
 
 并调整：
 
 ```text
-crates/sagent-store/src/migration.rs
-crates/sagent-store/src/write.rs
+crates/sagent-store/src/sqlite/migration.rs
+crates/sagent-store/src/sqlite/session/transactions.rs
 crates/sagent-store/src/lib.rs
 ```
 
@@ -232,7 +232,7 @@ pub struct EventQuery { session_id, after_sequence, limit }
 3. 运行 `cargo clippy -p sagent-types -p sagent-store --all-targets --offline -- -D warnings`。
 4. 记录当前 `SCHEMA_VERSION=2`，不修改 Hermes fixture。
 
-参考：`crates/sagent-store/src/migration.rs`、`crates/sagent-store/src/lib.rs` 中现有 migration 回归测试。
+参考：`crates/sagent-store/src/sqlite/migration.rs`、`crates/sagent-store/src/lib.rs` 中现有 migration 回归测试。
 
 完成条件：现有 Store、FTS、回退、恢复、重试测试均为绿。
 
@@ -274,7 +274,7 @@ pub struct EventQuery { session_id, after_sequence, limit }
 - 高于 v3 的版本继续拒绝。
 - migration 故障回滚时 `schema_version` 不能提前变为 3。
 
-参考：`crates/sagent-store/tests/fixtures/historic_v1.sql`、`crates/sagent-store/src/migration.rs`；Python 的 `hermes_state.py` 只参考“短事务 migration”原则。
+参考：`crates/sagent-store/tests/fixtures/historic_v1.sql`、`crates/sagent-store/src/sqlite/migration.rs`；Python 的 `hermes_state.py` 只参考“短事务 migration”原则。
 
 完成条件：任何旧 Sagent 数据库升级后仍能通过 `get_messages_for_display`、`search_messages`、rewind/restore/retry 既有测试。
 
@@ -325,7 +325,7 @@ COMMIT
 - 事件 sequence 单调递增。
 - user 消息仍能被旧 CLI 的 session/message 查询读出。
 
-参考：`sagent-store/src/write.rs` 的 `insert_message` 与 `append_message`；Python `hermes_state.py:10498` 的消息计数更新语义。
+参考：`sagent-store/src/sqlite/session/transactions.rs` 的 `insert_message` 与 `append_message`；Python `hermes_state.py:10498` 的消息计数更新语义。
 
 ### 步骤 4：提交工具最终结果
 
@@ -466,7 +466,7 @@ LIMIT ?;
 
 ```text
 crates/sagent-store/src/lib.rs          # 端到端 Store 测试
-crates/sagent-store/src/migration.rs    # migration 单测
+crates/sagent-store/src/sqlite/migration.rs    # migration 单测
 crates/sagent-store/tests/fixtures/historic_v2.sql
 ```
 

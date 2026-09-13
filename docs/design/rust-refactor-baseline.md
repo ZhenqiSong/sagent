@@ -62,7 +62,7 @@ cargo run -p sagent-contracts
 | `sagent-runtime/src/supervisor.rs` | 828 行（测试自约 387 行开始） | 生命周期与全局能力组装需分离 |
 | `sagent-rpc/src/transport/stdio.rs` | 806 行（测试自约 652 行开始） | framing、连接、dispatch、event bridge 混合 |
 | `sagent-runtime/src/actor.rs` | 760 行 | submit、恢复、取消与状态机路径需要按主题阅读 |
-| `sagent-store/src/turn.rs` | 623 行 | Turn 开始、工具提交、完成等事务集中 |
+| `sagent-store/src/sqlite/session/turns.rs` | 623 行 | Turn 开始、工具提交、完成等事务集中 |
 | `handle_worker_event` | 约 168 行 | 流、工具、Store 与事件发布混合 |
 | `execute_with_approval` | 约 160 行 | 校验、审批、spawn、取消、输出和清理混合 |
 | TUI `reduce` | 约 155 行 | 多个 UI 领域 action 集中 |

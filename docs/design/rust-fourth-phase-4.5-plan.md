@@ -278,7 +278,7 @@ session.interrupt
 - `tools/approval.py` 的危险命令检测和 session approval；
 - `run_agent.py:_execute_tool_calls*`；
 - `hermes_state.py` 的 tool message 写入；
-- 当前 `sagent-agent/src/transition.rs` 和 `sagent-store/src/turn.rs`。
+- 当前 `sagent-agent/src/transition.rs` 和 `sagent-store/src/sqlite/session/turns.rs`。
 
 #### 需要完成
 
@@ -533,18 +533,18 @@ crates/sagent-runtime/tests/tool_actor.rs
 #### 参考代码
 
 - `hermes_state.py` 的 tool message 写入和 transcript 恢复；
-- `crates/sagent-store/src/turn.rs::commit_tool_result`；
-- `crates/sagent-store/src/write.rs::NewMessage`；
-- `crates/sagent-store/src/event.rs`；
+- `crates/sagent-store/src/sqlite/session/turns.rs::commit_tool_result`；
+- `crates/sagent-store/src/sqlite/session/transactions.rs::NewMessage`；
+- `crates/sagent-store/src/sqlite/session/events.rs`；
 - `crates/sagent-agent/src/transcript.rs`。
 
 #### 修改文件
 
 ```text
-crates/sagent-store/src/turn.rs
-crates/sagent-store/src/write.rs
-crates/sagent-store/src/event.rs
-crates/sagent-store/src/migration.rs   # 只有确有需要时增加 migration
+crates/sagent-store/src/sqlite/session/turns.rs
+crates/sagent-store/src/sqlite/session/transactions.rs
+crates/sagent-store/src/sqlite/session/events.rs
+crates/sagent-store/src/sqlite/migration.rs   # 只有确有需要时增加 migration
 crates/sagent-store/tests/tool_result.rs
 ```
 
@@ -745,8 +745,8 @@ crates/sagent-runtime/
 └── tests/tool_actor.rs
 
 crates/sagent-store/
-├── src/turn.rs               # assistant tool-call/tool result 事务
-├── src/event.rs              # tool/approval daemon event
+├── src/sqlite/session/turns.rs        # assistant tool-call/tool result 事务
+├── src/sqlite/session/events.rs       # tool/approval daemon event
 └── tests/tool_result.rs
 
 crates/sagent-protocol/

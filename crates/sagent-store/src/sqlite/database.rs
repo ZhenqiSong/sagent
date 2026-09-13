@@ -71,7 +71,7 @@ impl SqliteDatabase {
         connection
             .execute_batch("PRAGMA foreign_keys = ON;")
             .context("启用 SQLite 外键约束失败")?;
-        crate::migration::migrate(&mut connection)?;
+        super::migration::migrate(&mut connection)?;
         Ok(Self {
             connection,
             writable: true,

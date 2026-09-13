@@ -1,7 +1,7 @@
 //! SQLite 存储工厂的兼容构造边界。
 //!
 //! 本模块只负责把数据库路径绑定到 `SqliteStorageManager`，并保留旧
-//! `StorageFactory` 接口的过渡实现。具体端口适配位于 `sqlite_session_storage`，业务
+//! `StorageFactory` 接口的过渡实现。具体端口适配位于 `sqlite/session`，业务
 //! 调用方不应通过 Factory 直接接触 SQLite 连接。
 //!
 //! 作者：SongZQ
@@ -10,9 +10,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use super::manager::SqliteStorageManager;
 use crate::{
-    SqliteStorageManager, StorageDependencies, StorageFactory, StorageManager,
-    StorageReadDependencies, StorageResult,
+    StorageDependencies, StorageFactory, StorageManager, StorageReadDependencies, StorageResult,
 };
 
 /// 使用同一个数据库文件创建独立领域存储端口的 SQLite Factory。

@@ -60,7 +60,7 @@ mailbox 串行处理 start、工具结果提交、complete 与 interrupt。M5 �
 1. `Store::open_readonly`、`StorageFactory::create_readonly` 和未来
    `StorageManager::open_read_storage` 不创建数据库、不执行 migration、不修改数据；
    `sagent-store/src/store_tests/core.rs::opens_existing_database_in_readonly_mode` 与
-   `sagent-store/src/sqlite_manager.rs::readonly_manager_path_does_not_create_missing_database`
+   `sagent-store/src/sqlite/manager.rs::readonly_manager_path_does_not_create_missing_database`
    已覆盖底层边界。
 2. CLI `session list` 等查询经 `CliStorageContext::open_read` 进入只读 Factory。新增
    `session/handler.rs::readonly_session_list_does_not_create_missing_database` 覆盖实际命令

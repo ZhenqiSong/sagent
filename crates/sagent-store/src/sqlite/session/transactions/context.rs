@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
 use sagent_types::{MessageId, SessionId};
 
+use super::super::super::database::SqliteDatabase;
 use super::{NewMessage, RetryCheckpoint, insert_message};
-use crate::SqliteDatabase;
 
 impl SqliteDatabase {
     /// 软归档当前活动消息，并原子写入一组新的活动消息。

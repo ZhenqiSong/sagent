@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params_from_iter, types::Value};
 use sagent_types::{MessageId, SearchHit, SessionId};
 
-use crate::SqliteDatabase;
+use super::super::database::SqliteDatabase;
 
 /// 消息全文搜索的范围与可见性条件。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,7 +172,7 @@ mod tests {
     fn create_cjk_fixture(path: &std::path::Path) {
         let connection = Connection::open(path).expect("应能创建 CJK fixture 数据库");
         connection
-            .execute_batch(include_str!("../tests/fixtures/cjk_emoji_fts.sql"))
+            .execute_batch(include_str!("../../../tests/fixtures/cjk_emoji_fts.sql"))
             .expect("CJK fixture SQL 应能执行");
     }
 

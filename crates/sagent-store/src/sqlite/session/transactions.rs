@@ -6,13 +6,13 @@ use anyhow::{Context, Result};
 use rusqlite::{Transaction, params};
 use sagent_types::{MessageId, SessionId, StoredMessage};
 
-use crate::SqliteDatabase;
+use super::super::database::SqliteDatabase;
 
 // 这两个子模块仍属于 write：它们共享数据库句柄的事务与只读保护，只是分别承载“替换
 // 活动上下文”和“回退旧分支”两种生命周期，避免常规追加接口演变成写入 god-file。
-#[path = "write/branch.rs"]
+#[path = "transactions/branch.rs"]
 mod branch;
-#[path = "write/context.rs"]
+#[path = "transactions/context.rs"]
 mod context;
 
 /// 不应被聊天记录界面渲染、但仍会进入模型上下文的消息类型。

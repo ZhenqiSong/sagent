@@ -12,6 +12,44 @@ pub struct StorageDependencies {
     search: Box<dyn SearchStorage>,
 }
 
+/// 只读调用所需的领域存储端口集合。
+///
+/// CLI 查询、RPC 事件补读和全文搜索不应获得 `SessionStorage` 写入能力；独立的只读
+/// 聚合让后端可以使用只读连接、连接池中的只读事务或其它等价实现。
+pub struct StorageReadDependencies {
+    query: Box<dyn SessionQueryStorage>,
+    search: Box<dyn SearchStorage>,
+}
+
+impl StorageReadDependencies {
+    /// 用会话查询和全文搜索端口创建只读依赖集合。
+    pub fn new<Q, H>(query: Q, search: H) -> Self
+    where
+        Q: SessionQueryStorage + 'static,
+        H: SearchStorage + 'static,
+    {
+        Self {
+            query: Box::new(query),
+            search: Box::new(search),
+        }
+    }
+
+    /// 取得会话与消息查询端口。
+    pub fn query(&self) -> &dyn SessionQueryStorage {
+        self.query.as_ref()
+    }
+
+    /// 取得全文搜索端口。
+    pub fn search(&self) -> &dyn SearchStorage {
+        self.search.as_ref()
+    }
+
+    /// 拆出只读端口所有权，供协议服务或工具在装配边界持有。
+    pub fn into_parts(self) -> (Box<dyn SessionQueryStorage>, Box<dyn SearchStorage>) {
+        (self.query, self.search)
+    }
+}
+
 impl StorageDependencies {
     /// 用会话写入、会话查询和全文搜索三个领域端口创建依赖聚合。
     pub fn new<S, Q, H>(session: S, query: Q, search: H) -> Self

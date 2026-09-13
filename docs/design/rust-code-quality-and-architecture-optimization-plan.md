@@ -16,7 +16,8 @@ Python 项目为兼容目标。
 
 1. 让每个 crate、模块、对象和函数有单一、可一句话描述的职责；
 2. 将 SQLite、OpenAI-compatible、stdio/WebSocket 等具体实现留在基础设施边界之后；
-3. 让新实现可由配置描述、Factory 创建、领域接口消费，而非在 Runtime 中增加分支；
+3. 让新实现可由配置描述、selector/Factory 创建为运行时 Manager，再由领域接口消费，
+   而非在 Runtime 中增加后端分支；
 4. 保持现有协议、事务、事件顺序、审批和取消行为不变；
 5. 缩短首次阅读核心代码所需的上下文，并让测试直接表达行为契约。
 
@@ -64,7 +65,7 @@ Python 项目为兼容目标。
 
 | 领域 | 当前现实 | 需要建立的边界 |
 |---|---|---|
-| Storage | `Store` 持有 `rusqlite::Connection`，Runtime/CLI/工具直接依赖具体 Store | StorageFactory + 小型领域存储接口 |
+| Storage | `Store` 持有 `rusqlite::Connection`，Runtime/CLI/工具直接依赖具体 Store | StorageManager（由 selector/factory 创建）+ 小型领域存储接口 |
 | Provider | config 解析时创建 `OpenAiCompatibleProvider`；Supervisor 保存全局 Provider | ProviderDescriptor + ProviderFactory + CapabilityResolver |
 | Tools | schema registry 与 `ToolWorker` 的硬编码执行分支分离 | ToolCatalog + ToolExecutor + ToolExecutionContext |
 | Runtime | Supervisor 同时管理 actor 生命周期、provider、模型、工具、超时 | SessionSupervisor + RuntimeDependencies + GenerationResolution |
@@ -91,8 +92,8 @@ Config Resolver ──► ProfileDescriptor / StorageDescriptor / ProviderDescri
         ▼
 Bootstrap / Factories
         │
-        ├──► StorageFactory ──► SessionStorage / QueryStorage / SearchStorage
-        │                         └── SQLite implementation（未来可增加远程后端）
+        ├──► StorageManager ──► SessionStorage / QueryStorage / SearchStorage
+        │       （由 selector/factory 创建；SQLite/PG 只在 manager 内选择连接策略）
         ├──► ProviderFactory ─► ModelProvider
         └──► ToolCatalog + ToolExecutorRegistry
                                       │
@@ -209,9 +210,10 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 ### R3：持久化端口与 SQLite 实现隔离
 
 当前进度：R3.1 `StorageDescriptor`、R3.2 `provider.rs` 配置职责拆分、SQLite 默认路径
-降级、R3.3 最小领域存储端口与 `StorageFactory` 定义以及首个 SQLite adapter 已完成；
-Runtime Actor、RuntimeDependencies、RPC SessionService 与 RuntimeService 已切换到
-领域端口；`session_search` 也已切换到 StorageFactory，CLI 管理命令的上层切换尚未开始。
+降级、R3.3 最小领域存储端口与 `StorageFactory` 定义以及首个 SQLite adapter 已完成；R3.4
+Runtime/RPC/工具和 CLI 迁移已完成；R3.5 `StorageManager` 设计已确定，具体迁移待执行。
+Runtime Actor、RuntimeDependencies、RPC SessionService、RuntimeService、`session_search`
+以及 CLI 会话/Profile 管理命令均已通过工厂申请领域端口，不再直接依赖 `Store`。
 
 **R3.2 完成记录：** 配置读取、Profile 聚合快照、Provider 数据模型、Provider resolver、
 凭据读取、workspace 解析和公开配置摘要分别位于独立 sibling；`lib.rs` 直接公开这些稳定
@@ -244,16 +246,46 @@ Actor 内写入、查询和搜索看到一致连接状态，同时不在 Actor �
 但这些类型不会出现在端口的签名或 `StorageDependencies` 字段中；远程后端尚未注册时仍
 由上层 Factory 选择逻辑明确拒绝。
 
-**Runtime/RPC/工具迁移记录：** SessionActor 的写入、查询和恢复路径已改为分别依赖
+**R3.5 `StorageManager` 设计记录（新增）：** 当前 `StorageFactory` 是无状态的依赖创建
+配方；它适合在 bootstrap 选择 adapter，却不适合作为 `RuntimeService`、`ToolWorker` 和
+其它业务对象的长期依赖。后续引入 Profile 作用域的 `StorageManager`，由 bootstrap 按
+`StorageDescriptor` 创建一次并持有后端资源：SQLite manager 可以持有数据库路径或连接
+池，PostgreSQL manager 可以持有 `PgPool`。manager 负责连接/池的生命周期、健康检查、
+migration 和依赖申请，不负责具体 session/turn 业务规则。
+
+manager 只提供按职责拆分的申请入口，不变成包含所有 CRUD 的万能 `Storage` 对象：
+
+- `open_actor_storage()`：为一个 `SessionActor` 返回独占写入端口和配套查询端口；
+- `open_read_storage()`：为 RPC 查询、事件补读和搜索返回只读端口集合；
+- `open_write_storage()`：为 `session.create` 等短操作返回写入端口；
+- 必要时提供单独的 `open_search_storage()`，避免工具获得不需要的写入能力。
+
+现有 `StorageDependencies` 不能简单全局复用：其中 `SessionStorage` 使用 `&mut self`，
+并且 Actor 是会话状态的唯一写入者。因此 manager 可以被 `Arc` 共享，但每个 Actor 仍须
+申请独立的 actor 依赖；只读和搜索端口则可根据后端能力使用连接池中的轻量句柄。SQLite
+实现可在 manager 内部继续按次打开 Store，PG 实现则可从池中申请连接或事务，Runtime、
+RPC、CLI 和工具均不感知这种差异。
+
+迁移完成后，`StorageFactory` 仅保留在 bootstrap/selector 或 manager 的构造边界；
+`RuntimeBootstrap`、`SessionSupervisor`、`RuntimeService` 和 `ToolWorker` 不再直接传递
+原始 Factory、数据库路径、连接或连接池，而是持有 manager 或更窄的领域能力。manager
+方法如果需要异步获取连接，应在 R3 的同步/异步技术 spike 中统一决定，不能由各调用方
+自行 `spawn_blocking` 或复制连接生命周期。
+
+**R3.4 Runtime/RPC/工具/CLI 迁移记录（已完成）：** SessionActor 的写入、查询和恢复路径已改为分别依赖
 `SessionStorage`/`SessionQueryStorage`，`RuntimeDependencies` 通过 `StorageFactory`
 为每个 Actor 创建端口集合；协议层 `SessionService` 只持有查询端口，RPC `RuntimeService`
 和 `RuntimePromptContext` 通过冻结的 Factory 获取短生命周期端口，`RuntimeBootstrap::open_service`
 则通过同一 Supervisor 获取连接级查询端口，避免 Bootstrap 再直接创建一套依赖。Bootstrap
-仍只保存 Factory，不保存数据库路径或 `Store`。后端选择集中在 RPC bootstrap 的
-`create_storage_factory`，根据已解析 `StorageDescriptor.kind` 选择 adapter；`session_search`
-同样通过 Factory 获取搜索端口，
-不再打开 SQLite 或保存数据库路径。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
-保留 `From<Store>` 到端口聚合的边界转换，但新的生产装配必须使用 Factory selector。
+仍只保存 Factory，不保存数据库路径或 `Store`。RPC bootstrap 的
+`create_storage_factory` 根据已解析 `StorageDescriptor.kind` 选择 adapter；CLI 的存储装配
+边界暂时复用同一 fail-closed 选择规则，待 R3.5 manager 收口为单一 selector。`session_search`
+同样通过 Factory 获取搜索端口，不再打开 SQLite 或保存数据库路径。CLI 的 Profile 创建、
+会话创建、列表、详情、搜索及生命周期管理命令也统一通过 `StorageFactory` 申请可写或只读
+端口；CLI 生产路径不再导入 `Store`。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
+保留 `From<Store>` 到端口聚合的边界转换，但新的生产装配必须使用 Factory selector。上述
+是 R3.3/R3.4 的过渡实现；R3.5 完成后，Factory 只用于构造 `StorageManager`，其余运行时组件
+通过 manager 或已申请的窄领域端口协作。
 
 **目的：** 使所有业务持久化经由统一边界，并为本地/远程后端配置切换建立真实路径。
 
@@ -261,13 +293,13 @@ Actor 内写入、查询和搜索看到一致连接状态，同时不在 Actor �
 事务和查询领域拆分，DTO 继续属于 `sagent-types`。
 
 **Bootstrap 边界（新增决定）：** `RuntimeBootstrap::from_paths` 是装配入口，不是数据库适配器。
-它可以读取固定路径并加载一次 `ProfileConfig`，然后把 `StorageDescriptor` 交给
-`StorageFactory` 创建 `StorageDependencies`；但其签名、字段和返回对象不得暴露 SQLite/PG
-的文件路径、连接、连接池、`rusqlite::Connection`、`Store` 或远程连接字符串等后端细节。
-Runtime、RPC、Actor 和工具只接收按领域拆分的存储端口，后端分支、连接生命周期和事务实现均
-封装在 Factory/adapter 内。切换 `storage.kind` 时只应更换 Factory 的实现或配置，不应修改
-上层编排；尚未支持的远程后端必须在 Factory 层明确失败，不能进入 SQLite 专用路径或静默
-回退到默认数据库。
+它可以读取固定路径并加载一次 `ProfileConfig`，然后把 `StorageDescriptor` 交给 selector
+创建 `StorageManager`；manager 再按调用边界提供 `StorageDependencies`。Bootstrap 的签名、
+字段和返回对象不得暴露 SQLite/PG 的文件路径、连接、连接池、`rusqlite::Connection`、
+`Store` 或远程连接字符串等后端细节。Runtime、RPC、Actor 和工具只接收按领域拆分的存储
+端口或 manager 能力，后端分支、连接生命周期和事务实现均封装在 manager/adapter 内。
+切换 `storage.kind` 时只应更换 manager 的实现或配置，不应修改上层编排；尚未支持的远程
+后端必须在 selector/manager 层明确失败，不能进入 SQLite 专用路径或静默回退到默认数据库。
 
 **工作：**
 
@@ -288,26 +320,37 @@ Runtime、RPC、Actor 和工具只接收按领域拆分的存储端口，后端�
    `RuntimeBootstrap::from_paths` 只负责传入已加载的 Profile 快照并接收该聚合，不保存或
    转发任何后端连接/路径。`start_turn`、`commit_tool_result`、`complete_turn`、
    `interrupt_turn` 等必须保持单个高层原子操作；
-5. 先做技术 spike 决定接口的同步/异步模型：远程后端需要 async；SQLite 实现必须在不破坏
+5. 引入 Profile 作用域的 `StorageManager`，将 Factory 限制在 bootstrap/selector 和
+   manager 构造边界。定义 `open_actor_storage`、`open_read_storage`、`open_write_storage`
+   和可选 `open_search_storage` 等窄入口；Runtime、RPC、CLI、工具只持有 manager 或已申请
+   的领域端口，不再传递原始 Factory。验收必须证明每个 Actor 的写入端口仍独占，RPC/工具
+   不获得超出职责的写入能力，且 SQLite 与未来 PG 的资源模型可以在 manager 内替换；
+6. 先做技术 spike 决定 manager/端口的同步/异步模型：远程后端需要 async；SQLite 实现必须在不破坏
    Actor 单写和事务期间无 await 的前提下适配。spike 记录线程安全、连接生命周期、取消和
    transaction boundary 的选择；
-6. 将现有 `Store` SQLite 逻辑迁为第一实现。可保留 `sagent-store` 作为端口 crate 并新增
+7. 将现有 `Store` SQLite 逻辑迁为第一实现。可保留 `sagent-store` 作为端口 crate 并新增
    `sagent-store-sqlite`，或将端口与实现置于清晰子模块；选择以依赖图最小、无循环依赖为准；
-7. **部分完成：** Runtime Actor、RuntimeDependencies、RPC session read service、事件补读、
-   空会话创建和 `session_search` 已迁移到领域端口；继续迁移 CLI 管理命令，并禁止新的
-   上层代码直接导入 SQLite 类型；
-8. 以第二个测试实现验证边界：内存/recording storage 或独立 fake；它必须验证事务调用的
+8. **已完成：** Runtime Actor、RuntimeDependencies、RPC session read service、事件补读、
+    空会话创建、`session_search` 和 CLI 管理命令均已迁移到领域端口，并禁止新的上层代码
+    直接导入 SQLite 类型；只读 CLI 路径通过 `StorageFactory::create_readonly` 获取查询与
+    搜索端口，可写命令通过 `StorageFactory::create` 获取会话写入端口；
+9. 以第二个测试实现验证边界：内存/recording storage 或独立 fake；它必须验证事务调用的
    原子语义，而不是模拟 SQL 细节；
-9. 单独制定远程后端功能计划，涵盖 migration、全文搜索能力差异、连接池、重试、并发写、
+10. 单独制定远程后端功能计划，涵盖 migration、全文搜索能力差异、连接池、重试、并发写、
    session lease/乐观版本和数据导入；本工作包不承诺实现该后端。
 
 **验收：** Runtime、CLI、RPC 和工具不再直接依赖 `rusqlite` 或 `Store` 具体实现；
 `RuntimeBootstrap::from_paths`、`RuntimeDependencies` 和 RuntimeService 不暴露数据库路径、
-连接、连接池或具体 Store；切换 SQLite/远程后端只需替换 Factory/adapter，未支持后端能明确
+连接、连接池或具体 Store；切换 SQLite/远程后端只需替换 manager/adapter，未支持后端能明确
 失败且不会回退到 SQLite。SQLite 行为契约不变；将 fake/recording storage 注入 actor 可覆盖
 start/commit/complete/interrupt；`storage.kind = sqlite` 保持当前默认行为；配置解析、Provider
 实例化、凭据读取、workspace 解析和公开配置摘要均能从独立模块按职责定位，且配置解析不产生
 基础设施副作用。
+
+**R3.5 专项验收：** 单个 Profile 只创建一个 `StorageManager`；Actor、RPC 查询、写入
+和搜索均通过 manager 申请与其职责匹配的依赖。代码中除 selector、manager 构造和 adapter
+外，不再出现 `StorageFactory` 的长期持有或传播；SQLite 使用本地 Store、PG 使用连接池
+时，上层调用路径和领域端口签名保持不变。
 
 ### R4：配置、Provider 与每回合能力快照
 

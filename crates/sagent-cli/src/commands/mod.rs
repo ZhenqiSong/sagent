@@ -12,6 +12,8 @@ use crate::output::OutputFormat;
 pub mod profile;
 pub mod session;
 
+mod storage;
+
 /// 一次 CLI 调用共享的全局运行参数。
 ///
 /// 命令实现通过此对象读取 home、profile 和输出格式，避免每新增一个子命令就扩展多个

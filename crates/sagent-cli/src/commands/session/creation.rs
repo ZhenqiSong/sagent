@@ -1,7 +1,7 @@
 //! CLI session 的创建和 UTC 标识生成。
 //!
-//! 创建时间与随机 ID 在写入前一次性生成，避免 Store 事务重试时改变会话身份；此模块不
-//! 读取其他 Profile，路径解析仍统一经过 session 父模块。
+//! 创建时间与随机 ID 在写入前一次性生成，避免存储操作重试时改变会话身份；此模块不
+//! 读取其他 Profile，存储装配仍统一经过 commands::storage。
 
 use std::{
     path::Path,
@@ -9,11 +9,11 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use sagent_store::{NewSession, Store};
+use sagent_store::NewSession;
 use sagent_types::SessionId;
 use uuid::Uuid;
 
-use super::current_database_path;
+use crate::commands::storage::factory_from_options;
 /// 创建会话并返回写入数据库的 ID。
 pub fn create(
     home: Option<&Path>,
@@ -36,10 +36,9 @@ pub fn create_with_id(
     model: Option<String>,
     started_at: String,
 ) -> Result<SessionId> {
-    let database_path = current_database_path(home, profile_override)?;
-    let mut store = Store::open_readwrite(&database_path)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
-    store.create_session(&NewSession {
+    let factory = factory_from_options(home, profile_override)?;
+    let mut dependencies = factory.create().context("打开当前 Profile 可写存储失败")?;
+    dependencies.session_mut().create_session(&NewSession {
         id: session_id.clone(),
         source: Some("cli".to_owned()),
         model,

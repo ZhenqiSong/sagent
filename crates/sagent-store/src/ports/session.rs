@@ -1,8 +1,10 @@
 //! 会话和 Turn 的写入端口。
 
-use sagent_types::{EventSequence, MessageId, TurnId};
+use sagent_types::{EventSequence, MessageId, SessionId, TurnId};
 
-use crate::{NewDaemonEvent, NewGeneration, NewMessage, NewSession, StartTurn};
+use crate::{
+    NewDaemonEvent, NewGeneration, NewMessage, NewSession, RestoreResult, RewindResult, StartTurn,
+};
 
 use super::StorageResult;
 
@@ -13,6 +15,46 @@ use super::StorageResult;
 pub trait SessionStorage: Send {
     /// 创建一个空会话。
     fn create_session(&mut self, session: &NewSession) -> StorageResult<()>;
+
+    /// 修改会话标题；返回值表示目标会话是否存在。
+    fn update_session_title(
+        &mut self,
+        session_id: &SessionId,
+        title: Option<&str>,
+        updated_at: &str,
+    ) -> StorageResult<bool>;
+
+    /// 写入会话结束时间和原因；返回值表示目标会话是否存在。
+    fn finish_session(
+        &mut self,
+        session_id: &SessionId,
+        end_reason: &str,
+        ended_at: &str,
+    ) -> StorageResult<bool>;
+
+    /// 设置会话是否归档；返回值表示目标会话是否存在。
+    fn set_session_archived(
+        &mut self,
+        session_id: &SessionId,
+        archived: bool,
+        updated_at: &str,
+    ) -> StorageResult<bool>;
+
+    /// 回退指定 user 消息及其后的活动分支，并返回恢复检查点。
+    fn rewind_to_message(
+        &mut self,
+        session_id: &SessionId,
+        target_message_id: MessageId,
+        updated_at: &str,
+    ) -> StorageResult<RewindResult>;
+
+    /// 按回退起点恢复旧分支；发现新活动分支时必须失败关闭。
+    fn restore_rewound_from(
+        &mut self,
+        session_id: &SessionId,
+        target_message_id: MessageId,
+        updated_at: &str,
+    ) -> StorageResult<RestoreResult>;
 
     /// 写入一个可复现的 generation 快照。
     fn create_generation(&mut self, generation: &NewGeneration) -> StorageResult<()>;

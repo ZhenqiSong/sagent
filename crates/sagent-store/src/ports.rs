@@ -9,7 +9,7 @@ mod query;
 mod search;
 mod session;
 
-pub use dependencies::StorageDependencies;
+pub use dependencies::{StorageDependencies, StorageReadDependencies};
 pub use factory::StorageFactory;
 pub use query::SessionQueryStorage;
 pub use search::SearchStorage;

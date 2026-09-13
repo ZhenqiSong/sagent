@@ -33,7 +33,7 @@ pub use message::{MessageQuery, MessageWindow};
 pub use migration::SCHEMA_VERSION;
 pub use ports::{
     SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageFactory,
-    StorageResult,
+    StorageReadDependencies, StorageResult,
 };
 pub use schema::DatabaseInfo;
 pub use search::MessageSearchQuery;

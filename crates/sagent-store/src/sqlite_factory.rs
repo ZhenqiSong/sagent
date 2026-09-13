@@ -19,7 +19,7 @@ use crate::{
     StoredGeneration, StoredRunningTurn,
     ports::{
         SearchStorage, SessionQueryStorage, SessionStorage, StorageDependencies, StorageFactory,
-        StorageResult,
+        StorageReadDependencies, StorageResult,
     },
 };
 
@@ -54,6 +54,18 @@ impl StorageFactory for SqliteStorageFactory {
 
         Ok(StorageDependencies::from(writable))
     }
+
+    /// 创建只读 SQLite 查询与搜索端口，不执行 migration 或创建缺失数据库。
+    fn create_readonly(&self) -> StorageResult<StorageReadDependencies> {
+        let readonly = Store::open_readonly(&self.database_path).with_context(|| {
+            format!("打开 SQLite 只读存储失败：{}", self.database_path.display())
+        })?;
+        readonly
+            .verify_connection()
+            .context("检查 SQLite 只读存储失败")?;
+
+        Ok(StorageReadDependencies::from(readonly))
+    }
 }
 
 type SharedStore = Arc<Mutex<Store>>;
@@ -82,6 +94,19 @@ impl From<Store> for StorageDependencies {
     }
 }
 
+/// 将只读 SQLite Store 转换为查询与搜索端口，避免只读调用获得写入能力。
+impl From<Store> for StorageReadDependencies {
+    fn from(store: Store) -> Self {
+        let shared = Arc::new(Mutex::new(store));
+        StorageReadDependencies::new(
+            SqliteSessionQueryStorage {
+                store: Arc::clone(&shared),
+            },
+            SqliteSearchStorage { store: shared },
+        )
+    }
+}
+
 /// 将 SQLite Store 的写入操作映射为 SessionStorage 端口。
 struct SqliteSessionStorage {
     store: SharedStore,
@@ -90,6 +115,51 @@ struct SqliteSessionStorage {
 impl SessionStorage for SqliteSessionStorage {
     fn create_session(&mut self, session: &NewSession) -> StorageResult<()> {
         lock_store(&self.store)?.create_session(session)
+    }
+
+    fn update_session_title(
+        &mut self,
+        session_id: &SessionId,
+        title: Option<&str>,
+        updated_at: &str,
+    ) -> StorageResult<bool> {
+        lock_store(&self.store)?.update_session_title(session_id, title, updated_at)
+    }
+
+    fn finish_session(
+        &mut self,
+        session_id: &SessionId,
+        end_reason: &str,
+        ended_at: &str,
+    ) -> StorageResult<bool> {
+        lock_store(&self.store)?.finish_session(session_id, end_reason, ended_at)
+    }
+
+    fn set_session_archived(
+        &mut self,
+        session_id: &SessionId,
+        archived: bool,
+        updated_at: &str,
+    ) -> StorageResult<bool> {
+        lock_store(&self.store)?.set_session_archived(session_id, archived, updated_at)
+    }
+
+    fn rewind_to_message(
+        &mut self,
+        session_id: &SessionId,
+        target_message_id: MessageId,
+        updated_at: &str,
+    ) -> StorageResult<crate::RewindResult> {
+        lock_store(&self.store)?.rewind_to_message(session_id, target_message_id, updated_at)
+    }
+
+    fn restore_rewound_from(
+        &mut self,
+        session_id: &SessionId,
+        target_message_id: MessageId,
+        updated_at: &str,
+    ) -> StorageResult<crate::RestoreResult> {
+        lock_store(&self.store)?.restore_rewound_from(session_id, target_message_id, updated_at)
     }
 
     fn create_generation(&mut self, generation: &NewGeneration) -> StorageResult<()> {
@@ -312,6 +382,45 @@ mod tests {
                 .query()
                 .get_session(&session_id)
                 .expect("第二组查询端口应能读取会话")
+                .is_some()
+        );
+        remove(&path);
+    }
+
+    #[test]
+    fn creates_readonly_domain_ports_without_creating_missing_database() {
+        let path = test_path("readonly");
+        remove(&path);
+        let factory = SqliteStorageFactory::new(&path).expect("绝对路径应能绑定 Factory");
+
+        assert!(
+            factory.create_readonly().is_err(),
+            "只读 Factory 不应创建缺失数据库"
+        );
+        assert!(!path.exists(), "只读打开失败后不应留下数据库文件");
+
+        let mut writable = factory.create().expect("可写 Factory 应能初始化数据库");
+        let session_id = SessionId::new("readonly-session");
+        writable
+            .session_mut()
+            .create_session(&NewSession {
+                id: session_id.clone(),
+                source: Some("test".to_owned()),
+                model: None,
+                title: None,
+                started_at: "2026-09-13T10:00:00Z".to_owned(),
+            })
+            .expect("可写端口应能创建会话");
+        drop(writable);
+
+        let readonly = factory
+            .create_readonly()
+            .expect("已有数据库应能创建只读端口");
+        assert!(
+            readonly
+                .query()
+                .get_session(&session_id)
+                .expect("只读查询应能读取会话")
                 .is_some()
         );
         remove(&path);

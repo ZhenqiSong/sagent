@@ -2,17 +2,17 @@
 //!
 //! 作者：SongZQ
 
-use std::{path::Path, time::SystemTime};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use sagent_config::{
-    SagentPaths, load_profile_config, normalize_profile_name, resolve_active_paths,
-};
-use sagent_store::Store;
+use sagent_store::SessionStorage;
 use sagent_types::MessageId;
 
-use crate::{commands::CommandContext, output::print_output};
+use crate::{
+    commands::{CommandContext, storage::factory_from_options},
+    output::print_output,
+};
 
 // 只读查询与创建各自拥有不同的 I/O 生命周期；物理拆分避免参数分发文件同时承载
 // SQL 查询、日期换算和输出格式，但仍由本模块统一维护 `session` 命令的公开边界。
@@ -197,37 +197,14 @@ fn handle_list(
     print_output(context.format, &sessions, render_list(&sessions))
 }
 
-/// 解析当前命令实际访问的 profile 路径。
-fn current_paths(home: Option<&Path>, profile_override: Option<&str>) -> Result<SagentPaths> {
-    let profile = profile_override.map(normalize_profile_name).transpose()?;
-    resolve_active_paths(home, profile.as_ref())
-}
-
-/// 加载当前 Profile 配置并解析实际 SQLite 路径；默认文件名由 storage 模块决定。
-fn current_database_path(
-    home: Option<&Path>,
-    profile_override: Option<&str>,
-) -> Result<std::path::PathBuf> {
-    let paths = current_paths(home, profile_override)?;
-    let config = load_profile_config(&paths).context("读取当前 Profile 配置失败")?;
-    let descriptor = config.get_storage_descriptor();
-    descriptor
-        .ensure_legacy_bootstrap_supported()
-        .context("当前 Profile 存储配置不可用")?;
-    descriptor
-        .resolve_sqlite_database_path(&paths)
-        .context("解析当前 Profile 数据库路径失败")
-}
-
-/// 打开当前 profile 的可写 Store；只供明确的生命周期命令使用。
-fn with_writable_store<T>(
+/// 为当前 Profile 申请可写领域端口；只供明确的生命周期命令使用。
+fn with_writable_storage<T>(
     context: &CommandContext,
-    operation: impl FnOnce(&mut Store) -> Result<T>,
+    operation: impl FnOnce(&mut dyn SessionStorage) -> Result<T>,
 ) -> Result<T> {
-    let database_path = current_database_path(context.home.as_deref(), context.profile.as_deref())?;
-    let mut store = Store::open_readwrite(&database_path)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
-    operation(&mut store)
+    let factory = factory_from_options(context.home.as_deref(), context.profile.as_deref())?;
+    let mut dependencies = factory.create().context("打开当前 Profile 可写存储失败")?;
+    operation(dependencies.session_mut())
 }
 
 /// 生成生命周期写操作共用的 UTC 毫秒时间戳。

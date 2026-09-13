@@ -1,15 +1,15 @@
 //! CLI session 的只读查询和文本渲染。
 //!
-//! 读取路径始终以当前 Profile 解析出只读 Store；输出渲染与 Clap 分发分开，保证 JSON
+//! 读取路径始终通过当前 Profile 的只读领域端口；输出渲染与 Clap 分发分开，保证 JSON
 //! 与文本模式共享同一个领域结果而不在 handler 中复制查询规则。
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sagent_store::{MessageQuery, MessageSearchQuery, SessionListQuery, Store};
+use sagent_store::{MessageQuery, MessageSearchQuery, SessionListQuery};
 use sagent_types::{SearchHit, SessionDetail, SessionId, SessionSummary};
 
-use super::current_database_path;
+use crate::commands::storage::factory_from_options;
 /// 从当前 profile 读取会话列表，供文本和 JSON 输出共用。
 pub fn list(
     home: Option<&Path>,
@@ -18,10 +18,11 @@ pub fn list(
     offset: u32,
     include_archived: bool,
 ) -> Result<Vec<SessionSummary>> {
-    let database_path = current_database_path(home, profile_override)?;
-    let store = Store::open_readonly(&database_path)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
-    store.list_sessions_with(&SessionListQuery {
+    let factory = factory_from_options(home, profile_override)?;
+    let dependencies = factory
+        .create_readonly()
+        .context("打开当前 Profile 只读存储失败")?;
+    dependencies.query().list_sessions(&SessionListQuery {
         include_archived,
         limit,
         offset,
@@ -53,14 +54,16 @@ pub fn show(
     limit: u32,
     offset: u32,
 ) -> Result<SessionDetail> {
-    let database_path = current_database_path(home, profile_override)?;
-    let store = Store::open_readonly(&database_path)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
+    let factory = factory_from_options(home, profile_override)?;
+    let dependencies = factory
+        .create_readonly()
+        .context("打开当前 Profile 只读存储失败")?;
+    let query = dependencies.query();
     let session_id = SessionId::new(session_id);
-    let session = store
+    let session = query
         .get_session(&session_id)?
         .with_context(|| format!("会话不存在：{}", session_id.as_str()))?;
-    let messages = store.get_messages_for_display(
+    let messages = query.get_messages_for_display(
         &session_id,
         &MessageQuery {
             limit: Some(limit),
@@ -109,13 +112,14 @@ pub fn search(
     limit: u32,
     session_id: Option<&str>,
 ) -> Result<Vec<SearchHit>> {
-    let database_path = current_database_path(home, profile_override)?;
-    let store = Store::open_readonly(&database_path)
-        .with_context(|| format!("打开当前 profile 数据库失败：{}", database_path.display()))?;
+    let factory = factory_from_options(home, profile_override)?;
+    let dependencies = factory
+        .create_readonly()
+        .context("打开当前 Profile 只读存储失败")?;
     let mut search = MessageSearchQuery::new(query);
     search.limit = limit;
     search.session_id = session_id.map(SessionId::new);
-    store.search_messages(&search)
+    dependencies.search().search_messages(&search)
 }
 
 /// 将已经读取的搜索命中渲染为稳定文本行。

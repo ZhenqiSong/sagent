@@ -1,20 +1,20 @@
 //! CLI session 的生命周期写操作。
 //!
-//! 这些命令统一经父模块的可写 Store helper 执行，因此 Profile 解析、事务错误语义和
-//! 输出格式与创建/查询命令保持一致；本模块不自行打开其他路径的数据库。
+//! 这些命令统一经父模块申请可写领域端口执行，因此 Profile 解析、事务错误语义和输出
+//! 格式与创建/查询命令保持一致；本模块不自行打开其他路径的数据库。
 
 use anyhow::Result;
 use sagent_types::{MessageId, SessionId};
 
 use super::{
     CommandContext, now_rfc3339, parse_message_id, print_lifecycle_result, print_output,
-    validate_reason, validate_title, with_writable_store,
+    validate_reason, validate_title, with_writable_storage,
 };
 /// 修改会话标题。
 pub(super) fn handle_rename(context: &CommandContext, session_id: &str, title: &str) -> Result<()> {
     let title = validate_title(title)?;
     let updated_at = now_rfc3339()?;
-    let changed = with_writable_store(context, |store| {
+    let changed = with_writable_storage(context, |store| {
         store.update_session_title(&SessionId::new(session_id), Some(title), &updated_at)
     })?;
     let value = serde_json::json!({
@@ -41,10 +41,10 @@ pub(super) fn handle_unarchive(context: &CommandContext, session_id: &str) -> Re
     handle_archive_state(context, session_id, false)
 }
 
-/// 归档与取消归档共享的 Store 写入和输出逻辑。
+/// 归档与取消归档共享的存储写入和输出逻辑。
 fn handle_archive_state(context: &CommandContext, session_id: &str, archived: bool) -> Result<()> {
     let updated_at = now_rfc3339()?;
-    let changed = with_writable_store(context, |store| {
+    let changed = with_writable_storage(context, |store| {
         store.set_session_archived(&SessionId::new(session_id), archived, &updated_at)
     })?;
     let operation = if archived { "archive" } else { "unarchive" };
@@ -59,7 +59,7 @@ pub(super) fn handle_finish(
 ) -> Result<()> {
     let reason = validate_reason(reason)?;
     let updated_at = now_rfc3339()?;
-    let changed = with_writable_store(context, |store| {
+    let changed = with_writable_storage(context, |store| {
         store.finish_session(&SessionId::new(session_id), reason, &updated_at)
     })?;
     let value = serde_json::json!({
@@ -84,7 +84,7 @@ pub(super) fn handle_rewind(
 ) -> Result<()> {
     let message_id = parse_message_id(message_id)?;
     let updated_at = now_rfc3339()?;
-    let result = with_writable_store(context, |store| {
+    let result = with_writable_storage(context, |store| {
         store.rewind_to_message(&SessionId::new(session_id), message_id, &updated_at)
     })?;
     let value = serde_json::json!({
@@ -113,7 +113,7 @@ pub(super) fn handle_restore(
 ) -> Result<()> {
     let message_id = parse_message_id(message_id)?;
     let updated_at = now_rfc3339()?;
-    let result = with_writable_store(context, |store| {
+    let result = with_writable_storage(context, |store| {
         store.restore_rewound_from(&SessionId::new(session_id), message_id.clone(), &updated_at)
     })?;
     let value = serde_json::json!({

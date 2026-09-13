@@ -42,11 +42,7 @@ fn run(cli: Cli) -> Result<()> {
         command,
     } = cli;
 
-    let context = CommandContext {
-        home,
-        profile,
-        format,
-    };
+    let context = CommandContext::new(home, profile, format);
     command.execute(&context)
 }
 

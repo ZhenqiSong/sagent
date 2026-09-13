@@ -282,7 +282,9 @@ RPC、CLI 和工具均不感知这种差异。
 边界暂时复用同一 fail-closed 选择规则，待 R3.5 manager 收口为单一 selector。`session_search`
 同样通过 Factory 获取搜索端口，不再打开 SQLite 或保存数据库路径。CLI 的 Profile 创建、
 会话创建、列表、详情、搜索及生命周期管理命令也统一通过 `StorageFactory` 申请可写或只读
-端口；CLI 生产路径不再导入 `Store`。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
+端口；CLI 生产路径不再导入 `Store`。CLI 在 `CommandContext` 中按命令作用域缓存一个
+`CliStorageContext`，同一条命令的各 handler 只从该上下文申请职责匹配的端口，不重复读取
+配置或构造 Factory。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
 保留 `From<Store>` 到端口聚合的边界转换，但新的生产装配必须使用 Factory selector。上述
 是 R3.3/R3.4 的过渡实现；R3.5 完成后，Factory 只用于构造 `StorageManager`，其余运行时组件
 通过 manager 或已申请的窄领域端口协作。

@@ -9,10 +9,7 @@ use clap::Subcommand;
 use sagent_store::SessionStorage;
 use sagent_types::MessageId;
 
-use crate::{
-    commands::{CommandContext, storage::factory_from_options},
-    output::print_output,
-};
+use crate::{commands::CommandContext, output::print_output};
 
 // 只读查询与创建各自拥有不同的 I/O 生命周期；物理拆分避免参数分发文件同时承载
 // SQL 查询、日期换算和输出格式，但仍由本模块统一维护 `session` 命令的公开边界。
@@ -20,15 +17,17 @@ mod creation;
 mod lifecycle;
 mod query;
 
-use creation::rfc3339_now;
 #[cfg(test)]
 use creation::session_id_from_clock;
 #[allow(unused_imports)]
 pub use creation::{create, create_with_id};
+use creation::{create_with_storage, rfc3339_now};
 use lifecycle::{
     handle_archive, handle_finish, handle_rename, handle_restore, handle_rewind, handle_unarchive,
 };
+#[allow(unused_imports)]
 pub use query::{list, render_list, render_search, render_show, search, show};
+use query::{list_with_storage, search_with_storage, show_with_storage};
 
 /// `session` 分组下的命令参数与处理器。
 #[derive(Debug, Subcommand)]
@@ -137,12 +136,7 @@ fn handle_create(
     title: Option<String>,
     model: Option<String>,
 ) -> Result<()> {
-    let session_id = create(
-        context.home.as_deref(),
-        context.profile.as_deref(),
-        title,
-        model,
-    )?;
+    let session_id = create_with_storage(context.storage()?, title, model)?;
     let value = serde_json::json!({ "session_id": session_id.as_str() });
     print_output(
         context.format,
@@ -153,13 +147,7 @@ fn handle_create(
 
 /// 读取并展示单个会话。
 fn handle_show(context: &CommandContext, session_id: &str, limit: u32, offset: u32) -> Result<()> {
-    let detail = show(
-        context.home.as_deref(),
-        context.profile.as_deref(),
-        session_id,
-        limit,
-        offset,
-    )?;
+    let detail = show_with_storage(context.storage()?, session_id, limit, offset)?;
     print_output(context.format, &detail, render_show(&detail))
 }
 
@@ -170,13 +158,7 @@ fn handle_search(
     limit: u32,
     session_id: Option<&str>,
 ) -> Result<()> {
-    let hits = search(
-        context.home.as_deref(),
-        context.profile.as_deref(),
-        query,
-        limit,
-        session_id,
-    )?;
+    let hits = search_with_storage(context.storage()?, query, limit, session_id)?;
     print_output(context.format, &hits, render_search(&hits))
 }
 
@@ -187,13 +169,7 @@ fn handle_list(
     offset: u32,
     include_archived: bool,
 ) -> Result<()> {
-    let sessions = list(
-        context.home.as_deref(),
-        context.profile.as_deref(),
-        limit,
-        offset,
-        include_archived,
-    )?;
+    let sessions = list_with_storage(context.storage()?, limit, offset, include_archived)?;
     print_output(context.format, &sessions, render_list(&sessions))
 }
 
@@ -202,8 +178,7 @@ fn with_writable_storage<T>(
     context: &CommandContext,
     operation: impl FnOnce(&mut dyn SessionStorage) -> Result<T>,
 ) -> Result<T> {
-    let factory = factory_from_options(context.home.as_deref(), context.profile.as_deref())?;
-    let mut dependencies = factory.create().context("打开当前 Profile 可写存储失败")?;
+    let mut dependencies = context.storage()?.open_write()?;
     operation(dependencies.session_mut())
 }
 

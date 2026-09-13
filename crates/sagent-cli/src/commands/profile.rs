@@ -15,7 +15,8 @@ use sagent_config::{
 };
 
 use crate::{
-    commands::CommandContext, commands::storage::factory_from_paths, output::print_output,
+    commands::{CommandContext, storage::storage_from_paths},
+    output::print_output,
 };
 
 /// `profile` 分组下的命令参数与处理器。
@@ -109,9 +110,9 @@ pub fn create(home: Option<&Path>, name: &str) -> Result<PathBuf> {
         fs::write(profile_dir.join("config.yaml"), INITIAL_CONFIG_YAML)
             .context("写入初始 config.yaml 失败")?;
         let paths = resolve_paths(Some(profile_dir), None).context("解析新 Profile 路径失败")?;
-        factory_from_paths(&paths)
-            .context("创建新 Profile 存储工厂失败")?
-            .create()
+        storage_from_paths(&paths)
+            .context("创建新 Profile 存储上下文失败")?
+            .open_write()
             .context("初始化 profile 存储失败")?;
         Ok(())
     })

@@ -13,21 +13,21 @@ use sagent_store::NewSession;
 use sagent_types::SessionId;
 use uuid::Uuid;
 
-use crate::commands::storage::factory_from_options;
+use crate::commands::storage::{CliStorageContext, storage_from_options};
 /// 创建会话并返回写入数据库的 ID。
+#[allow(dead_code)]
 pub fn create(
     home: Option<&Path>,
     profile_override: Option<&str>,
     title: Option<String>,
     model: Option<String>,
 ) -> Result<SessionId> {
-    let now = SystemTime::now();
-    let session_id = session_id_from_clock(now)?;
-    let started_at = rfc3339_now(now)?;
-    create_with_id(home, profile_override, session_id, title, model, started_at)
+    let storage = storage_from_options(home, profile_override)?;
+    create_with_storage(&storage, title, model)
 }
 
 /// 使用调用方指定的 ID 与时间创建会话，供生产编排和确定性测试复用。
+#[allow(dead_code)]
 pub fn create_with_id(
     home: Option<&Path>,
     profile_override: Option<&str>,
@@ -36,8 +36,31 @@ pub fn create_with_id(
     model: Option<String>,
     started_at: String,
 ) -> Result<SessionId> {
-    let factory = factory_from_options(home, profile_override)?;
-    let mut dependencies = factory.create().context("打开当前 Profile 可写存储失败")?;
+    let storage = storage_from_options(home, profile_override)?;
+    create_with_id_storage(&storage, session_id, title, model, started_at)
+}
+
+/// 在已经装配的 CLI 存储上下文中生成身份并创建会话。
+pub(super) fn create_with_storage(
+    storage: &CliStorageContext,
+    title: Option<String>,
+    model: Option<String>,
+) -> Result<SessionId> {
+    let now = SystemTime::now();
+    let session_id = session_id_from_clock(now)?;
+    let started_at = rfc3339_now(now)?;
+    create_with_id_storage(storage, session_id, title, model, started_at)
+}
+
+/// 在已经装配的 CLI 存储上下文中使用指定身份创建会话。
+fn create_with_id_storage(
+    storage: &CliStorageContext,
+    session_id: SessionId,
+    title: Option<String>,
+    model: Option<String>,
+    started_at: String,
+) -> Result<SessionId> {
+    let mut dependencies = storage.open_write()?;
     dependencies.session_mut().create_session(&NewSession {
         id: session_id.clone(),
         source: Some("cli".to_owned()),

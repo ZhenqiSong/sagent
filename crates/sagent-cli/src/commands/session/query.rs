@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use sagent_store::{MessageQuery, MessageSearchQuery, SessionListQuery};
 use sagent_types::{SearchHit, SessionDetail, SessionId, SessionSummary};
 
-use crate::commands::storage::factory_from_options;
+use crate::commands::storage::{CliStorageContext, storage_from_options};
 /// 从当前 profile 读取会话列表，供文本和 JSON 输出共用。
+#[allow(dead_code)]
 pub fn list(
     home: Option<&Path>,
     profile_override: Option<&str>,
@@ -18,10 +19,18 @@ pub fn list(
     offset: u32,
     include_archived: bool,
 ) -> Result<Vec<SessionSummary>> {
-    let factory = factory_from_options(home, profile_override)?;
-    let dependencies = factory
-        .create_readonly()
-        .context("打开当前 Profile 只读存储失败")?;
+    let storage = storage_from_options(home, profile_override)?;
+    list_with_storage(&storage, limit, offset, include_archived)
+}
+
+/// 使用已装配的 CLI 存储上下文读取会话列表。
+pub(super) fn list_with_storage(
+    storage: &CliStorageContext,
+    limit: u32,
+    offset: u32,
+    include_archived: bool,
+) -> Result<Vec<SessionSummary>> {
+    let dependencies = storage.open_read()?;
     dependencies.query().list_sessions(&SessionListQuery {
         include_archived,
         limit,
@@ -47,6 +56,7 @@ pub fn render_list(sessions: &[SessionSummary]) -> Vec<String> {
 }
 
 /// 从当前 profile 加载会话详情及其用户可见消息。
+#[allow(dead_code)]
 pub fn show(
     home: Option<&Path>,
     profile_override: Option<&str>,
@@ -54,10 +64,18 @@ pub fn show(
     limit: u32,
     offset: u32,
 ) -> Result<SessionDetail> {
-    let factory = factory_from_options(home, profile_override)?;
-    let dependencies = factory
-        .create_readonly()
-        .context("打开当前 Profile 只读存储失败")?;
+    let storage = storage_from_options(home, profile_override)?;
+    show_with_storage(&storage, session_id, limit, offset)
+}
+
+/// 使用已装配的 CLI 存储上下文读取会话详情。
+pub(super) fn show_with_storage(
+    storage: &CliStorageContext,
+    session_id: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<SessionDetail> {
+    let dependencies = storage.open_read()?;
     let query = dependencies.query();
     let session_id = SessionId::new(session_id);
     let session = query
@@ -105,6 +123,7 @@ pub fn render_show(detail: &SessionDetail) -> Vec<String> {
 /// 在当前 profile 搜索消息。
 ///
 /// 默认搜索活动消息和压缩归档消息，过滤用户已经回退的普通非活动分支。
+#[allow(dead_code)]
 pub fn search(
     home: Option<&Path>,
     profile_override: Option<&str>,
@@ -112,10 +131,18 @@ pub fn search(
     limit: u32,
     session_id: Option<&str>,
 ) -> Result<Vec<SearchHit>> {
-    let factory = factory_from_options(home, profile_override)?;
-    let dependencies = factory
-        .create_readonly()
-        .context("打开当前 Profile 只读存储失败")?;
+    let storage = storage_from_options(home, profile_override)?;
+    search_with_storage(&storage, query, limit, session_id)
+}
+
+/// 使用已装配的 CLI 存储上下文搜索消息。
+pub(super) fn search_with_storage(
+    storage: &CliStorageContext,
+    query: &str,
+    limit: u32,
+    session_id: Option<&str>,
+) -> Result<Vec<SearchHit>> {
+    let dependencies = storage.open_read()?;
     let mut search = MessageSearchQuery::new(query);
     search.limit = limit;
     search.session_id = session_id.map(SessionId::new);

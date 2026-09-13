@@ -20,7 +20,7 @@ impl SessionActor {
             WorkerEvent::TextDelta { turn_id, text } => {
                 if self.is_active_turn(turn_id) && !self.is_cancelled(turn_id) {
                     self.publish(RuntimeEvent {
-                        session_id: self.session_id.clone(),
+                        session_id: self.context.session_id.clone(),
                         turn_id: Some(turn_id),
                         request_id: self.active.as_ref().map(|turn| turn.request_id),
                         kind: RuntimeEventKind::ModelTextDelta { text },
@@ -30,7 +30,7 @@ impl SessionActor {
             WorkerEvent::Usage { turn_id, usage } => {
                 if self.is_active_turn(turn_id) && !self.is_cancelled(turn_id) {
                     self.publish(RuntimeEvent {
-                        session_id: self.session_id.clone(),
+                        session_id: self.context.session_id.clone(),
                         turn_id: Some(turn_id),
                         request_id: self.active.as_ref().map(|turn| turn.request_id),
                         kind: RuntimeEventKind::ModelUsage { usage },
@@ -59,7 +59,7 @@ impl SessionActor {
                 if self
                     .active
                     .as_ref()
-                    .is_some_and(|active| active.tool_rounds >= self.max_tool_rounds)
+                    .is_some_and(|active| active.tool_rounds >= self.policy.max_tool_rounds)
                 {
                     let _ = self
                         .fail_active(
@@ -81,8 +81,8 @@ impl SessionActor {
                     return;
                 }
                 let plans = match self
-                    .tool_dispatcher
-                    .as_ref()
+                    .tool_runtime
+                    .dispatcher()
                     .ok_or_else(|| "ToolRegistry 未配置".to_owned())
                     .and_then(|dispatcher| {
                         dispatcher
@@ -104,14 +104,19 @@ impl SessionActor {
                         return;
                     }
                 };
-                let mut assistant =
-                    NewMessage::new(self.session_id.clone(), "assistant", text, (self.clock)());
+                let mut assistant = NewMessage::new(
+                    self.context.session_id.clone(),
+                    "assistant",
+                    text,
+                    (self.context.clock)(),
+                );
                 assistant.tool_calls = Some(tool_calls);
                 assistant.finish_reason = Some("tool_calls".into());
-                if let Err(error) =
-                    self.store
-                        .commit_assistant_tool_calls(&turn_id, &assistant, &(self.clock)())
-                {
+                if let Err(error) = self.context.store.commit_assistant_tool_calls(
+                    &turn_id,
+                    &assistant,
+                    &(self.context.clock)(),
+                ) {
                     let _ = self
                         .fail_active(turn_id, "persistence", error.to_string())
                         .await;
@@ -124,7 +129,7 @@ impl SessionActor {
                 }
                 for plan in &plans {
                     self.publish(RuntimeEvent {
-                        session_id: self.session_id.clone(),
+                        session_id: self.context.session_id.clone(),
                         turn_id: Some(turn_id),
                         request_id: self.active.as_ref().map(|active| active.request_id),
                         kind: RuntimeEventKind::ToolCallRequested {

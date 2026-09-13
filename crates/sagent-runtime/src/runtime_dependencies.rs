@@ -213,9 +213,9 @@ impl SessionActorFactory {
         };
         Ok(match &self.tools {
             ToolRuntime::Disabled => actor,
-            ToolRuntime::Enabled { dispatcher, worker } => actor
-                .with_tool_dispatcher(dispatcher.clone())
-                .with_tool_worker(worker.as_ref().clone()),
+            ToolRuntime::Enabled { dispatcher, worker } => {
+                actor.with_tools(dispatcher.clone(), worker.as_ref().clone())
+            }
         })
     }
 }

@@ -60,12 +60,16 @@ impl SessionActor {
                 policy_key,
                 summary,
             } => {
-                if self.approvals.is_allowed(&self.session_id, &policy_key) {
+                if self
+                    .policy
+                    .approvals
+                    .is_allowed(&self.context.session_id, &policy_key)
+                {
                     self.start_tool_plan(turn_id, plan).await;
                     return;
                 }
                 let request = match ApprovalRequest::new(
-                    self.session_id.clone(),
+                    self.context.session_id.clone(),
                     turn_id,
                     ToolCallId::new(),
                     plan.call.name,
@@ -93,7 +97,7 @@ impl SessionActor {
     /// 启动已经通过动态风险策略的单个工具。工具 worker 不拥有审批状态，不能自行
     /// 决定执行危险命令。
     async fn start_tool_plan(&mut self, turn_id: TurnId, plan: crate::ToolDispatchPlan) {
-        let Some(tool_worker) = self.tool_worker.clone() else {
+        let Some(tool_worker) = self.tool_runtime.worker() else {
             let _ = self
                 .fail_active(turn_id, "tool_dispatch", "ToolWorker 未配置".to_owned())
                 .await;
@@ -117,7 +121,7 @@ impl SessionActor {
             return;
         }
         self.publish(RuntimeEvent {
-            session_id: self.session_id.clone(),
+            session_id: self.context.session_id.clone(),
             turn_id: Some(turn_id),
             request_id: self.active.as_ref().map(|active| active.request_id),
             kind: RuntimeEventKind::ToolStarted {
@@ -125,7 +129,7 @@ impl SessionActor {
                 tool_name: plan.call.name.clone(),
             },
         });
-        let sender = self.command_tx.clone();
+        let sender = self.channels.command_tx.clone();
         let tool_task = tokio::spawn(async move {
             let result = tool_worker.execute(plan, cancellation).await;
             let _ = sender
@@ -160,13 +164,14 @@ impl SessionActor {
                 "content_bytes": plan.call.arguments.get("content").and_then(serde_json::Value::as_str).map(str::len),
             });
         }
-        self.store
+        self.context
+            .store
             .append_event(&NewDaemonEvent {
-                session_id: self.session_id.clone(),
+                session_id: self.context.session_id.clone(),
                 turn_id: Some(turn_id),
                 event_type: EVENT_TOOL_STARTED.to_owned(),
                 payload,
-                created_at: (self.clock)(),
+                created_at: (self.context.clock)(),
             })
             .map(|_| ())
             .map_err(|error| RuntimeError::Persistence(error.to_string()))
@@ -179,10 +184,10 @@ impl SessionActor {
         result: ToolExecutionResult,
     ) -> Result<(), RuntimeError> {
         let mut message = NewMessage::new(
-            self.session_id.clone(),
+            self.context.session_id.clone(),
             "tool",
             result.content.clone(),
-            (self.clock)(),
+            (self.context.clock)(),
         );
         message.tool_call_id = Some(result.call_id.clone());
         message.tool_name = Some(result.name.clone());
@@ -196,11 +201,12 @@ impl SessionActor {
             })
             .to_string(),
         );
-        self.store
-            .commit_tool_result(&turn_id, &message, &(self.clock)())
+        self.context
+            .store
+            .commit_tool_result(&turn_id, &message, &(self.context.clock)())
             .map_err(|error| RuntimeError::Persistence(error.to_string()))?;
         self.publish(RuntimeEvent {
-            session_id: self.session_id.clone(),
+            session_id: self.context.session_id.clone(),
             turn_id: Some(turn_id),
             request_id: self.active.as_ref().map(|active| active.request_id),
             kind: RuntimeEventKind::ToolCompleted {
@@ -251,12 +257,12 @@ impl SessionActor {
 
     /// 生成展示用过期时间；实际 timeout 仍以 ApprovalManager 的单调时钟为准。
     fn approval_expires_at(&self) -> String {
-        let now = (self.clock)();
+        let now = (self.context.clock)();
         now.parse::<u64>()
             .map(|seconds| {
                 format!(
                     "{:020}",
-                    seconds.saturating_add(self.approvals.timeout().as_secs())
+                    seconds.saturating_add(self.policy.approvals.timeout().as_secs())
                 )
             })
             .unwrap_or(now)
@@ -272,13 +278,13 @@ impl SessionActor {
         if !self.is_active_turn(turn_id) || self.is_cancelled(turn_id) {
             return;
         }
-        if request.session_id != self.session_id || request.turn_id != turn_id {
+        if request.session_id != self.context.session_id || request.turn_id != turn_id {
             let _ = self
                 .fail_active(turn_id, "approval", "审批请求上下文不匹配".into())
                 .await;
             return;
         }
-        if !self.interactive_approval {
+        if !self.policy.interactive_approval {
             self.fail_current_tool(
                 turn_id,
                 "approval_unavailable",
@@ -289,8 +295,9 @@ impl SessionActor {
             return;
         }
         if self
+            .policy
             .approvals
-            .is_allowed(&self.session_id, &request.policy_key)
+            .is_allowed(&self.context.session_id, &request.policy_key)
         {
             // 正常工具批次会在 advance_tool_batch 中先检查此规则并直接执行，
             // 因而这里仅保留外部注入 ApprovalRequired 的幂等兼容路径。
@@ -304,7 +311,7 @@ impl SessionActor {
             .and_then(|active| active.pending_tool_batch.as_ref())
             .and_then(PendingToolBatch::current)
             .map(|plan| plan.call.call_id.clone());
-        let waiter = match self.approvals.register(request.clone()) {
+        let waiter = match self.policy.approvals.register(request.clone()) {
             Ok(waiter) => waiter,
             Err(error) => {
                 let _ = self
@@ -313,13 +320,13 @@ impl SessionActor {
                 return;
             }
         };
-        let timeout = self.approvals.timeout();
+        let timeout = self.policy.approvals.timeout();
         let cancellation = self
             .active
             .as_ref()
             .map(|active| active.cancellation.child_token())
             .expect("active turn checked above");
-        let sender = self.command_tx.clone();
+        let sender = self.channels.command_tx.clone();
         let waiter_task = tokio::spawn(async move {
             let outcome = waiter.wait(timeout, cancellation).await;
             let _ = sender
@@ -353,7 +360,7 @@ impl SessionActor {
             return;
         }
         self.publish(RuntimeEvent {
-            session_id: self.session_id.clone(),
+            session_id: self.context.session_id.clone(),
             turn_id: Some(turn_id),
             request_id: self.active.as_ref().map(|active| active.request_id),
             kind: RuntimeEventKind::ApprovalRequested {
@@ -382,7 +389,7 @@ impl SessionActor {
             outcome,
             ApprovalOutcome::TimedOut | ApprovalOutcome::Cancelled
         ) {
-            self.approvals.expire(approval_id);
+            self.policy.approvals.expire(approval_id);
         }
         if let Some(active) = self.active.as_mut() {
             // waiter 已经把结果送回 mailbox；不能在它自己的 task 中 await join handle。
@@ -400,7 +407,7 @@ impl SessionActor {
                     }
                 }
                 self.publish(RuntimeEvent {
-                    session_id: self.session_id.clone(),
+                    session_id: self.context.session_id.clone(),
                     turn_id: Some(turn_id),
                     request_id: self.active.as_ref().map(|active| active.request_id),
                     kind: RuntimeEventKind::ApprovalResolved {
@@ -420,7 +427,7 @@ impl SessionActor {
             }
             ApprovalOutcome::Denied => {
                 self.publish(RuntimeEvent {
-                    session_id: self.session_id.clone(),
+                    session_id: self.context.session_id.clone(),
                     turn_id: Some(turn_id),
                     request_id: self.active.as_ref().map(|active| active.request_id),
                     kind: RuntimeEventKind::ApprovalResolved {
@@ -446,7 +453,7 @@ impl SessionActor {
             }
             ApprovalOutcome::TimedOut => {
                 self.publish(RuntimeEvent {
-                    session_id: self.session_id.clone(),
+                    session_id: self.context.session_id.clone(),
                     turn_id: Some(turn_id),
                     request_id: self.active.as_ref().map(|active| active.request_id),
                     kind: RuntimeEventKind::ApprovalTimedOut { approval_id },
@@ -477,8 +484,14 @@ impl SessionActor {
         if active.state != TurnState::AwaitingApproval {
             return Err(RuntimeError::Approval("当前 Turn 没有等待中的审批".into()));
         }
-        self.approvals
-            .resolve(&self.session_id, &active.turn_id, approval_id, decision)
+        self.policy
+            .approvals
+            .resolve(
+                &self.context.session_id,
+                &active.turn_id,
+                approval_id,
+                decision,
+            )
             .map_err(|error| RuntimeError::Approval(error.to_string()))?;
         Ok(CommandReply::ApprovalAccepted)
     }

@@ -1,7 +1,7 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0、M1、M2、M3 已完成；Runtime/RPC/CLI/工具的长期依赖迁移仍属于 M5/M6
+状态：M0、M1、M2、M3 已完成；M4.1 selector 已定义但尚未接入实际启动链，M4.2 及后续迁移仍未完成
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
@@ -288,6 +288,15 @@ Session、Message、Turn、Event 和 FTS 的 SQL 实现模块已收回 crate 内
 5. `RuntimeBootstrap::from_paths` 只接收抽象 Manager，不暴露数据库细节。
 
 完成条件：SQLite/未来 PG 只替换 selector 和 adapter，业务调用路径不变。
+
+**执行记录（2026-09-14，M4.1 selector 定义）：** 已在 `sagent-rpc` bootstrap selector 中新增
+`create_storage_manager(paths, descriptor)`，但尚未替换 `RuntimeBootstrap` 当前的 Factory
+依赖。该入口复用已加载的 `StorageDescriptor`，将
+SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径后创建
+`Arc<dyn StorageManager>`；Remote 和当前 SQLite 不支持的 schema、namespace、只读组合
+均 fail-closed。迁移期 `create_storage_factory` 仍保留，并与 Manager selector 共用同一校验
+和路径解析逻辑，避免两条入口产生不同后端语义。RuntimeBootstrap 的实际切换留在后续步骤，
+因此当前运行时的实际依赖仍是 `StorageFactory`。
 
 ### M5：迁移 Runtime 和 Supervisor
 

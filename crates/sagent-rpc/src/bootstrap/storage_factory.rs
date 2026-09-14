@@ -1,14 +1,32 @@
-//! 根据 Profile 存储意图选择具体 StorageFactory。
+//! 根据 Profile 存储意图选择具体 StorageManager。
 //!
 //! 本模块是 Bootstrap 与后端 adapter 之间的唯一选择边界：它读取已解析的
-//! `StorageDescriptor`，负责校验当前后端是否可用并构造对应 Factory；Runtime、RPC
-//! service 和工具只接收抽象 `StorageFactory`，不会根据 `StorageKind` 分支。
+//! `StorageDescriptor`，负责校验当前后端是否可用并构造对应 Manager。兼容期仍保留
+//! Factory 构造函数，但 Runtime、RPC service 和工具应逐步改为接收抽象 `StorageManager`，
+//! 不在调用方根据 `StorageKind` 分支。
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Result, bail};
 use sagent_config::{SagentPaths, StorageDescriptor, StorageKind};
-use sagent_store::{SqliteStorageFactory, StorageFactory};
+use sagent_store::{SqliteStorageFactory, SqliteStorageManager, StorageFactory, StorageManager};
+
+/// 根据已解析的存储配置创建后端 Manager。
+///
+/// `paths` 只用于把 SQLite 的相对路径或默认文件名解析成 Profile 作用域的绝对路径；
+/// descriptor 已由配置快照提供，因此本函数不会重新读取 `config.yaml`。Manager 的
+/// 初始化、连接生命周期和领域端口装配由具体 adapter 负责；未实现的后端在这里明确
+/// 失败，禁止静默回退到 SQLite。
+// M4.1 先建立唯一 Manager selector；RuntimeBootstrap 在后续迁移步骤接入它，期间保留
+// Factory selector 以避免把 Runtime、工具和 RPC 的迁移与本次结构变更耦合在一起。
+#[allow(dead_code)]
+pub(crate) fn create_storage_manager(
+    paths: &SagentPaths,
+    descriptor: &StorageDescriptor,
+) -> Result<Arc<dyn StorageManager>> {
+    let database_path = resolve_sqlite_database_path(paths, descriptor)?;
+    Ok(Arc::new(SqliteStorageManager::new(database_path)?))
+}
 
 /// 根据已解析的存储配置创建后端 Factory。
 ///
@@ -19,6 +37,18 @@ pub(crate) fn create_storage_factory(
     paths: &SagentPaths,
     descriptor: &StorageDescriptor,
 ) -> Result<Arc<dyn StorageFactory>> {
+    let database_path = resolve_sqlite_database_path(paths, descriptor)?;
+    Ok(Arc::new(SqliteStorageFactory::new(database_path)?))
+}
+
+/// 校验当前 SQLite adapter 的能力并解析数据库路径。
+///
+/// 该共享步骤保证 Manager 和迁移期 Factory 对同一个 descriptor 采用完全一致的
+/// fail-closed 规则；Remote 会在路径计算前失败，不会意外创建本地 `state.db`。
+fn resolve_sqlite_database_path(
+    paths: &SagentPaths,
+    descriptor: &StorageDescriptor,
+) -> Result<PathBuf> {
     descriptor.validate()?;
     match descriptor.kind {
         StorageKind::Sqlite => {
@@ -26,8 +56,7 @@ pub(crate) fn create_storage_factory(
             {
                 bail!("当前 SQLite storage 不支持 schema、namespace 或只读策略")
             }
-            let database_path = descriptor.resolve_sqlite_database_path(paths)?;
-            Ok(Arc::new(SqliteStorageFactory::new(database_path)?))
+            descriptor.resolve_sqlite_database_path(paths)
         }
         StorageKind::Remote => bail!("remote storage 后端尚未实现"),
     }
@@ -35,12 +64,18 @@ pub(crate) fn create_storage_factory(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use sagent_config::{SagentPaths, StorageDescriptor, StorageKind};
 
-    use super::create_storage_factory;
+    use super::{create_storage_factory, create_storage_manager};
 
-    fn paths() -> SagentPaths {
-        let root = std::env::temp_dir().join("sagent-storage-selector-test");
+    fn paths(name: &str) -> SagentPaths {
+        let root = std::env::temp_dir().join(format!(
+            "sagent-storage-selector-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
         SagentPaths {
             profile: "default".to_owned(),
             config_yaml: root.join("config.yaml"),
@@ -52,9 +87,24 @@ mod tests {
     #[test]
     fn selects_sqlite_factory_without_exposing_its_type() {
         assert!(
-            create_storage_factory(&paths(), &StorageDescriptor::default()).is_ok(),
+            create_storage_factory(&paths("factory"), &StorageDescriptor::default()).is_ok(),
             "默认 SQLite descriptor 应能选择 Factory"
         );
+    }
+
+    #[test]
+    fn selects_sqlite_manager_without_opening_database() {
+        let paths = paths("manager");
+        let manager = create_storage_manager(&paths, &StorageDescriptor::default())
+            .expect("默认 SQLite descriptor 应能选择 Manager");
+        assert!(
+            !paths.sagent_home.join("state.db").exists(),
+            "选择 Manager 不应提前创建 SQLite 文件"
+        );
+        // selector 只装配 Manager；显式 initialize 才允许创建数据库和执行 migration。
+        manager
+            .initialize()
+            .expect("选出的 Manager 应能初始化 SQLite 数据库");
     }
 
     #[test]
@@ -64,7 +114,8 @@ mod tests {
             connection_env: Some("SAGENT_DB_URL".to_owned()),
             ..StorageDescriptor::default()
         };
-        let result = create_storage_factory(&paths(), &descriptor);
+        let paths = paths("remote");
+        let result = create_storage_factory(&paths, &descriptor);
         assert!(result.is_err(), "未实现的远程后端必须明确失败");
         assert!(
             result
@@ -72,6 +123,12 @@ mod tests {
                 .expect("错误结果应包含失败原因")
                 .to_string()
                 .contains("remote storage")
+        );
+
+        let manager_result = create_storage_manager(&paths, &descriptor);
+        assert!(
+            manager_result.is_err(),
+            "未实现的远程后端必须拒绝创建 Manager"
         );
     }
 
@@ -81,7 +138,7 @@ mod tests {
             schema: Some("app".to_owned()),
             ..StorageDescriptor::default()
         };
-        let result = create_storage_factory(&paths(), &descriptor);
+        let result = create_storage_factory(&paths("options"), &descriptor);
         assert!(result.is_err(), "SQLite 未实现的 schema 必须 fail-closed");
     }
 }

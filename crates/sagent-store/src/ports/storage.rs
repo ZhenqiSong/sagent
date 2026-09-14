@@ -38,6 +38,15 @@ impl Storage {
         ))
     }
 
+    /// 将新业务存储聚合转换为迁移期的旧端口依赖集合。
+    ///
+    /// Runtime 逐步从 `StorageFactory` 切换到 `StorageManager` 时，Actor 构造边界仍需
+    /// 暂时接收旧集合；转换只拆解已经装配好的端口，不重新打开数据库或改变事务边界。
+    pub fn into_dependencies(self) -> StorageDependencies {
+        let (write, query, search) = self.into_parts();
+        StorageDependencies::from_parts(write, query, search)
+    }
+
     /// 拆出底层端口，供迁移适配层或测试装配边界接管所有权。
     pub fn into_parts(
         self,
@@ -47,6 +56,13 @@ impl Storage {
         Box<dyn super::SearchStorage>,
     ) {
         self.session.into_parts()
+    }
+}
+
+/// 为迁移期 Actor 构造边界提供从新业务聚合到旧端口集合的标准转换。
+impl From<Storage> for StorageDependencies {
+    fn from(storage: Storage) -> Self {
+        storage.into_dependencies()
     }
 }
 

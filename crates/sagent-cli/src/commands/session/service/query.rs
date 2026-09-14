@@ -18,8 +18,8 @@ impl SessionService {
         offset: u32,
         include_archived: bool,
     ) -> Result<Vec<SessionSummary>> {
-        let dependencies = self.storage()?.open_read()?;
-        dependencies.query().list_sessions(&SessionListQuery {
+        let storage = self.storage()?.open_read()?;
+        storage.session.list_sessions(&SessionListQuery {
             include_archived,
             limit,
             offset,
@@ -34,8 +34,8 @@ impl SessionService {
         limit: u32,
         offset: u32,
     ) -> Result<SessionDetail> {
-        let dependencies = self.storage()?.open_read()?;
-        let query = dependencies.query();
+        let storage = self.storage()?.open_read()?;
+        let query = &storage.session;
         let session_id = SessionId::new(session_id);
         let session = query
             .get_session(&session_id)?
@@ -59,10 +59,10 @@ impl SessionService {
         limit: u32,
         session_id: Option<&str>,
     ) -> Result<Vec<SearchHit>> {
-        let dependencies = self.storage()?.open_read()?;
+        let storage = self.storage()?.open_read()?;
         let mut search = MessageSearchQuery::new(query);
         search.limit = limit;
         search.session_id = session_id.map(SessionId::new);
-        dependencies.search().search_messages(&search)
+        storage.session.search_messages(&search)
     }
 }

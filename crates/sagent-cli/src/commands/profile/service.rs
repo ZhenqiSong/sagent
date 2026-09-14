@@ -39,8 +39,7 @@ impl ProfileService {
                 resolve_paths(Some(profile_dir), None).context("解析新 Profile 路径失败")?;
             storage_from_paths(&paths)
                 .context("创建新 Profile 存储上下文失败")?
-                .open_write()
-                .context("初始化 profile 存储失败")?;
+                .initialize()?;
             Ok(())
         })
     }

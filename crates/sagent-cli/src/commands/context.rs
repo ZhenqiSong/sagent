@@ -42,7 +42,7 @@ impl CommandContext {
         }
     }
 
-    /// 取得当前命令共享的存储上下文，并在首次调用时完成一次 Factory 装配。
+    /// 取得当前命令共享的存储上下文，并在首次调用时完成一次 Manager 装配。
     pub(crate) fn storage(&self) -> Result<&CliStorageContext> {
         if let Some(storage) = self.storage.get() {
             return Ok(storage);

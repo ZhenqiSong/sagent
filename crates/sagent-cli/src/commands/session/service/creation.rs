@@ -35,8 +35,8 @@ impl SessionService {
         model: Option<String>,
         started_at: String,
     ) -> Result<SessionId> {
-        let mut dependencies = self.storage()?.open_write()?;
-        dependencies.session_mut().create_session(&NewSession {
+        let mut storage = self.storage()?.open_write()?;
+        storage.session.create_session(&NewSession {
             id: session_id.clone(),
             source: Some("cli".to_owned()),
             model,

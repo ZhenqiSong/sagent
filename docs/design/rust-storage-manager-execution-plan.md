@@ -1,7 +1,7 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0、M1、M2、M3、M4.1 和 M5 启动链迁移已完成；Factory 兼容路径清理、M6、M7、M8 仍未完成
+状态：M0、M1、M2、M3、M4.1、M5 启动链迁移和 M6 业务入口迁移已完成；Factory 兼容路径清理、M7、M8 仍未完成
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
@@ -284,19 +284,18 @@ Session、Message、Turn、Event 和 FTS 的 SQL 实现模块已收回 crate 内
 1. 新增 `create_storage_manager(ProfileConfig/StorageDescriptor)`；
 2. SQLite 由 selector 创建 `SqliteStorageManager`，未支持后端明确失败；
 3. 配置只读取一次，Manager 构造后不重复读取 `config.yaml`；
-4. `SqliteStorageFactory::into_manager` 仅作为过渡，最终由 selector 直接返回 Manager；
+4. 旧 `SqliteStorageFactory` 仅作为兼容构造保留，最终由 selector 直接返回 Manager；
 5. `RuntimeBootstrap::from_paths` 只接收抽象 Manager，不暴露数据库细节。
 
 完成条件：SQLite/未来 PG 只替换 selector 和 adapter，业务调用路径不变。
 
 **执行记录（2026-09-14，M4.1 selector 定义）：** 已在 `sagent-rpc` bootstrap selector 中新增
-`create_storage_manager(paths, descriptor)`，但尚未替换 `RuntimeBootstrap` 当前的 Factory
-依赖。该入口复用已加载的 `StorageDescriptor`，将
+`create_storage_manager(paths, descriptor)`；该入口复用已加载的 `StorageDescriptor`，将
 SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径后创建
 `Arc<dyn StorageManager>`；Remote 和当前 SQLite 不支持的 schema、namespace、只读组合
 均 fail-closed。迁移期 `create_storage_factory` 仍保留，并与 Manager selector 共用同一校验
-和路径解析逻辑，避免两条入口产生不同后端语义。RuntimeBootstrap 的实际切换留在后续步骤，
-因此当前运行时的实际依赖仍是 `StorageFactory`。
+和路径解析逻辑，避免两条入口产生不同后端语义。RuntimeBootstrap 的实际切换已在 M5
+启动链迁移中完成；本记录保留当时的 selector 设计状态，当前生产依赖以 Manager 为准。
 
 ### M5：迁移 Runtime 和 Supervisor
 
@@ -330,6 +329,12 @@ SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径�
 5. 工具只获得自身职责需要的读、写或搜索能力。
 
 完成条件：Runtime、RPC、CLI 和工具的生产路径不再导入 `SqliteDatabase` 或 `rusqlite`。
+
+**执行记录（2026-09-14，M6 CLI 入口迁移）：** CLI 的 `CliStorageContext` 已从持有
+`StorageFactory` 改为持有 Profile 级 `StorageManager`；Session 创建、查询、搜索和
+生命周期命令分别使用 `WriteStorage`/`ReadStorage`，Profile 创建通过显式
+`initialize()` 执行 migration。Runtime、RPC 和工具的生产入口均不再依赖具体数据库
+连接或 `SqliteDatabase`；CLI/RPC selector 的统一收口和 Factory 兼容接口删除留在 M7。
 
 ### M7：删除过渡路径
 

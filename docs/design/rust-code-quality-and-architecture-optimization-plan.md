@@ -280,27 +280,21 @@ RPC、CLI 和工具均不感知这种差异。
 统一提供 `open_actor_storage`、`open_read_storage`、`open_write_storage` 和
 `open_search_storage` 申请入口；`StorageWriteDependencies` 将短操作的写入能力与查询、
 搜索能力隔离。新增 `SqliteStorageManager` 作为首个实现，持有经过校验的绝对数据库路径，
-并由 `SqliteStorageFactory::into_manager` 提供 Factory 到 manager 的构造边界。当前 manager
+并由 selector 直接创建 `SqliteStorageManager`，把 Factory 限制在兼容构造边界。当前 manager
 仍按次打开 SQLite Store，以保持既有事务和连接行为；Runtime、RPC、CLI 和工具的持有对象
-迁移，以及连接池/健康检查/migration 生命周期管理，留待 R3.5 后续工作包。
+已迁移到 Manager，连接池和远程后端的资源生命周期留待后续工作包。
 
 **R3.4 Runtime/RPC/工具/CLI 迁移记录（已完成）：** SessionActor 的写入、查询和恢复路径已改为分别依赖
-`SessionStorage`/`SessionQueryStorage`，`SessionSupervisorDependencies` 通过 `StorageFactory`
-为每个 Actor 创建端口集合；协议层 `SessionService` 只持有查询端口，RPC `RuntimeService`
-和 `RuntimePromptContext` 通过冻结的 Factory 获取短生命周期端口，`RuntimeBootstrap::open_service`
-则通过同一 Supervisor 获取连接级查询端口，避免 Bootstrap 再直接创建一套依赖。Bootstrap
-仍只保存 Factory，不保存数据库路径或 `Store`。RPC bootstrap 的
-`create_storage_factory` 根据已解析 `StorageDescriptor.kind` 选择 adapter；CLI 的存储装配
-边界暂时复用同一 fail-closed 选择规则，待 R3.5 manager 收口为单一 selector。`session_search`
-同样通过 Factory 获取搜索端口，不再打开 SQLite 或保存数据库路径。CLI 的 Profile 索引由
-配置层 `Profile` 提供，目录和存储初始化由独立的 `ProfileService` 承担。CLI 的 Profile 创建、
-会话创建、列表、详情、搜索及生命周期管理命令也统一通过 `StorageFactory` 申请可写或只读
-端口；CLI 生产路径不再导入 `Store`。CLI 通过 `HandlerFactory` 为每条顶层命令创建领域 handler；
-`SessionHandler` 由 `SessionService` 持有 `CommandContext`，会话创建、查询和生命周期操作均
-通过该服务的方法复用上下文中的 `CliStorageContext`，不重复读取配置或构造 Factory。为保持已有同步测试的迁移兼容，SQLite adapter 暂时
-保留 `From<Store>` 到端口聚合的边界转换，但新的生产装配必须使用 Factory selector。上述
-是 R3.3/R3.4 的过渡实现；R3.5 完成后，Factory 只用于构造 `StorageManager`，其余运行时组件
-通过 manager 或已申请的窄领域端口协作。
+`SessionStorage`/`SessionQueryStorage`；协议层 `SessionService` 只持有查询端口。CLI 的 Profile
+创建、会话创建、列表、详情、搜索及生命周期管理命令通过 `StorageManager` 申请
+`WriteStorage`/`ReadStorage`，Runtime、RPC 和工具的生产路径也已切换到 Manager 或窄领域端口，
+不再直接导入 `Store`、`rusqlite` 或数据库连接。`RuntimeBootstrap` 只保存 Profile 级 Manager，
+`RuntimeService` 和 `RuntimePromptContext` 通过 Manager 获取短生命周期端口，`session_search`
+只接收拆出的 `SearchStorage`。CLI 的 Profile 索引由配置层 `Profile` 提供，目录和存储初始化由
+独立的 `ProfileService` 承担；CLI 通过 `HandlerFactory` 为每条顶层命令创建领域 handler，
+`SessionHandler` 由 `SessionService` 持有 `CommandContext` 并复用惰性 `CliStorageContext`。
+当前仍保留 Factory 构造方法作为迁移兼容，CLI/RPC selector 的统一收口和兼容入口删除留在
+R3.5 的 M7；SQLite adapter 暂时保留 `From<Store>` 到端口聚合的边界转换，生产装配不再使用该转换。
 
 **目的：** 使所有业务持久化经由统一边界，并为本地/远程后端配置切换建立真实路径。
 
@@ -309,7 +303,8 @@ RPC、CLI 和工具均不感知这种差异。
 
 **Bootstrap 边界（新增决定）：** `RuntimeBootstrap::from_paths` 是装配入口，不是数据库适配器。
 它可以读取固定路径并加载一次 `ProfileConfig`，然后把 `StorageDescriptor` 交给 selector
-创建 `StorageManager`；manager 再按调用边界提供 `StorageDependencies`。Bootstrap 的签名、
+创建 `StorageManager`；manager 再按调用边界提供 `Storage`/`ReadStorage`/`WriteStorage`。
+Bootstrap 的签名、
 字段和返回对象不得暴露 SQLite/PG 的文件路径、连接、连接池、`rusqlite::Connection`、
 `Store` 或远程连接字符串等后端细节。Runtime、RPC、Actor 和工具只接收按领域拆分的存储
 端口或 manager 能力，后端分支、连接生命周期和事务实现均封装在 manager/adapter 内。
@@ -347,8 +342,8 @@ RPC、CLI 和工具均不感知这种差异。
    `sagent-store-sqlite`，或将端口与实现置于清晰子模块；选择以依赖图最小、无循环依赖为准；
 8. **已完成：** Runtime Actor、SessionSupervisorDependencies、RPC session read service、事件补读、
     空会话创建、`session_search` 和 CLI 管理命令均已迁移到领域端口，并禁止新的上层代码
-    直接导入 SQLite 类型；只读 CLI 路径通过 `StorageFactory::create_readonly` 获取查询与
-    搜索端口，可写命令通过 `StorageFactory::create` 获取会话写入端口；
+    直接导入 SQLite 类型；只读路径通过 `StorageManager::open_read_storage` 获取查询与
+    搜索端口，可写命令通过 `StorageManager::open_write_storage` 获取会话写入端口；
 9. 以第二个测试实现验证边界：内存/recording storage 或独立 fake；它必须验证事务调用的
    原子语义，而不是模拟 SQL 细节；
 10. 单独制定远程后端功能计划，涵盖 migration、全文搜索能力差异、连接池、重试、并发写、

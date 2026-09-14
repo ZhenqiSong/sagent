@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use sagent_agent::RequestId;
-use sagent_runtime::{RuntimeDependencies, RuntimeError, RuntimeEventKind, SessionSupervisor};
+use sagent_runtime::{
+    RuntimeError, RuntimeEventKind, SessionSupervisor, SessionSupervisorDependencies,
+};
 use sagent_store::{MessageQuery, NewSession, SqliteDatabase};
 use sagent_types::SessionId;
 
@@ -33,7 +35,7 @@ async fn public_handle_serializes_submit_and_persists_interrupt() {
     let session_id = SessionId::new("integration-serial");
     create_session(&path, &session_id);
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(move || {
         SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     }));
     let handle = supervisor
@@ -99,7 +101,7 @@ async fn different_sessions_are_isolated_through_public_supervisor() {
     create_session(&path, &session_a);
     create_session(&path, &session_b);
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(move || {
         SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     }));
     let handle_a = supervisor
@@ -148,7 +150,7 @@ async fn closed_handle_is_stale_and_session_can_restart() {
     let session_id = SessionId::new("integration-restart");
     create_session(&path, &session_id);
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(move || {
         SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     }));
     let old_handle = supervisor
@@ -181,7 +183,7 @@ async fn closed_handle_is_stale_and_session_can_restart() {
 
 #[tokio::test]
 async fn store_open_failure_is_exposed_without_leaking_sqlite_error_type() {
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(
+    let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(
         || -> Result<SqliteDatabase, String> { Err("测试数据库不可用".to_owned()) },
     ));
     let result = supervisor
@@ -205,10 +207,10 @@ async fn separate_profile_databases_do_not_share_actor_data() {
 
     let factory_a = path_a.clone();
     let factory_b = path_b.clone();
-    let supervisor_a = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let supervisor_a = SessionSupervisor::new(SessionSupervisorDependencies::new(move || {
         SqliteDatabase::open_readwrite(&factory_a).map_err(|error| error.to_string())
     }));
-    let supervisor_b = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let supervisor_b = SessionSupervisor::new(SessionSupervisorDependencies::new(move || {
         SqliteDatabase::open_readwrite(&factory_b).map_err(|error| error.to_string())
     }));
     let handle_a = supervisor_a

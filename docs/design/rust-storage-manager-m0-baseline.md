@@ -26,7 +26,7 @@ rg -n "StorageFactory|StorageDependencies|Store::open|SqliteStorage" \
 |---|---|---|---|
 | `sagent-rpc/bootstrap/runtime.rs` | 保存 `Arc<dyn StorageFactory>`；启动时 `create()` 初始化 SQLite；为 Runtime、工具和 RPC Service 传播 Factory | selector 返回 `Arc<dyn StorageManager>`；bootstrap 只管理后端生命周期和初始化策略 | M4、M5 |
 | `sagent-rpc/bootstrap/storage_factory.rs` | 根据 descriptor 选择 `SqliteStorageFactory` | 统一为 `create_storage_manager(descriptor)`；不支持的后端明确失败 | M4 |
-| `sagent-runtime/runtime_dependencies.rs` | 以 Factory 闭包为每个 Actor 创建 `StorageDependencies` | 持有 Manager；Actor 申请独占 `Storage` | M5 |
+| `sagent-runtime/supervisor_dependencies.rs` | 以 Factory 闭包为每个 Actor 创建 `StorageDependencies` | 持有 Manager；Actor 申请独占 `Storage` | M5 |
 | `sagent-runtime/actor/session.rs` | 解构 `StorageDependencies` 为写、查询、搜索端口 | 只持有业务 `storage.session` 外观；保留 Actor 为唯一写入者 | M5 |
 | `sagent-rpc/service/runtime.rs` | 为创建和查询操作保存 Factory | 分别申请 `WriteStorage`、`ReadStorage`，不识别后端 | M5、M6 |
 | `sagent-runtime/worker/tool.rs` | 将 Factory 注入会话搜索工具 | 注入受限的搜索/只读业务 Storage | M6 |

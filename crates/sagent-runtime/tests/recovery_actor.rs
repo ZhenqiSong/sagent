@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use sagent_runtime::{RuntimeDependencies, SessionSupervisor};
+use sagent_runtime::{SessionSupervisor, SessionSupervisorDependencies};
 use sagent_store::{
     EVENT_TOOL_STARTED, MessageQuery, NewDaemonEvent, NewGeneration, NewMessage, NewSession,
     SqliteDatabase, StartTurn,
@@ -85,7 +85,7 @@ async fn startup_records_unknown_tool_result_without_reexecuting_and_allows_a_ne
     }
 
     let factory_path = path.clone();
-    let supervisor = SessionSupervisor::new(RuntimeDependencies::new(move || {
+    let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(move || {
         SqliteDatabase::open_readwrite(&factory_path).map_err(|error| error.to_string())
     }));
     let handle = supervisor

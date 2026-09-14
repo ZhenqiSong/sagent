@@ -1,4 +1,4 @@
-//! SessionActor 的运行时依赖装配。
+//! SessionSupervisor 与 SessionActor 的依赖装配。
 //!
 //! 本模块只负责把 bootstrap 已解析的存储、Provider、工具和策略参数组成不可变
 //! 快照；不管理 Session 生命周期，也不执行命令。`SessionSupervisor` 消费该快照后，
@@ -161,18 +161,18 @@ impl Default for RuntimePolicy {
     }
 }
 
-/// 运行时启动一个 SessionActor 所需的已解析依赖。
+/// SessionSupervisor 启动 SessionActor 所需的已解析依赖快照。
 ///
 /// 该对象只在 bootstrap 或测试装配阶段按值构建；交给 Supervisor 后不可再修改，
 /// 从而避免活跃 Session 在 Turn 中途更换 Provider、工具集合或审批策略。
-pub struct RuntimeDependencies {
+pub struct SessionSupervisorDependencies {
     storage: RuntimeStorageDependencies,
     model: ModelRuntime,
     tools: ToolRuntime,
     policy: RuntimePolicy,
 }
 
-impl RuntimeDependencies {
+impl SessionSupervisorDependencies {
     /// 从每 actor 独占的存储工厂创建默认依赖集合。
     ///
     /// Provider 与工具依赖默认缺失，以支持只读 RPC、空会话和测试；一旦注入，配置
@@ -273,7 +273,7 @@ impl RuntimeDependencies {
 
 /// 根据冻结依赖创建单个 SessionActor 的内部工厂。
 ///
-/// 此类型不公开，防止 transport 或业务层绕过 `RuntimeDependencies` 在运行中拼接
+/// 此类型不公开，防止 transport 或业务层绕过 `SessionSupervisorDependencies` 在运行中拼接
 /// 不完整依赖；它只处理 actor 构造，不拥有 actor 的启动、停止或映射关系。
 pub(crate) struct SessionActorFactory {
     storage: RuntimeStorageDependencies,

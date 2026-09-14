@@ -302,7 +302,7 @@ SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径�
 
 工作：
 
-1. `RuntimeDependencies` 持有 `Arc<dyn StorageManager>`，不再持有原始 Factory；
+1. `SessionSupervisorDependencies` 持有 `Arc<dyn StorageManager>`，不再持有原始 Factory；
 2. 每个 SessionActor 通过 `open_actor_storage()` 获得独占 `Storage`；
 3. RPC 查询通过 `open_read_storage()` 获取 `ReadStorage`；
 4. Supervisor 不保存路径、连接或 `SqliteDatabase`；

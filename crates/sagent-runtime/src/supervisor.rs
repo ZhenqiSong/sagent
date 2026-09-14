@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use crate::RuntimeError;
 use crate::event::{RuntimeEvent, RuntimeEventSubscription};
 use crate::input::{ActorInput, CommandReply};
-use crate::runtime_dependencies::{RuntimeDependencies, SessionActorFactory};
+use crate::supervisor_dependencies::{SessionActorFactory, SessionSupervisorDependencies};
 
 /// 每个 Session 的 mailbox 容量；满时命令立即返回 `MailboxFull`。
 const MAILBOX_CAPACITY: usize = 32;
@@ -49,7 +49,7 @@ impl SessionSupervisor {
     /// 依赖只能在 bootstrap 阶段组合；Supervisor 接管后只维护 actor 生命周期，
     /// 不再直接保存 Provider、工具、Store 或策略配置。只读查询端口也必须从这份冻结
     /// 快照创建，避免 RPC 连接绕过 Profile 边界重新解析配置。
-    pub fn new(dependencies: RuntimeDependencies) -> Self {
+    pub fn new(dependencies: SessionSupervisorDependencies) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             actor_factory: dependencies.into_actor_factory(),
@@ -310,7 +310,7 @@ mod tests {
     use crate::actor::WorkerFactory;
     use crate::event::RuntimeEventSubscription;
     use crate::input::{ActorInput, WorkerEvent};
-    use crate::{RuntimeDependencies, RuntimeError, RuntimeEvent, RuntimeEventKind};
+    use crate::{RuntimeError, RuntimeEvent, RuntimeEventKind, SessionSupervisorDependencies};
 
     fn test_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -352,10 +352,9 @@ mod tests {
         let session_id = SessionId::new("query-session");
         create_sessions(&path, &[&session_id]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = SessionSupervisor::new(RuntimeDependencies::new(counting_factory(
-            path.clone(),
-            opens.clone(),
-        )));
+        let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(
+            counting_factory(path.clone(), opens.clone()),
+        ));
 
         // Act：由 Supervisor 装配连接级查询端口，而不是让调用方重新持有工厂。
         let query = supervisor
@@ -396,7 +395,7 @@ mod tests {
         let session_id = SessionId::new("concurrent-session");
         create_sessions(&path, &[&session_id]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = Arc::new(SessionSupervisor::new(RuntimeDependencies::new(
+        let supervisor = Arc::new(SessionSupervisor::new(SessionSupervisorDependencies::new(
             counting_factory(path.clone(), opens.clone()),
         )));
 
@@ -464,10 +463,9 @@ mod tests {
         let session_id = SessionId::new("reuse-session");
         create_sessions(&path, &[&session_id]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = SessionSupervisor::new(RuntimeDependencies::new(counting_factory(
-            path.clone(),
-            opens.clone(),
-        )));
+        let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(
+            counting_factory(path.clone(), opens.clone()),
+        ));
 
         let first = supervisor
             .get_or_start(session_id.clone())
@@ -516,10 +514,9 @@ mod tests {
         let session_id = SessionId::new("close-session");
         create_sessions(&path, &[&session_id]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = SessionSupervisor::new(RuntimeDependencies::new(counting_factory(
-            path.clone(),
-            opens.clone(),
-        )));
+        let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(
+            counting_factory(path.clone(), opens.clone()),
+        ));
 
         let handle = supervisor
             .get_or_start(session_id.clone())
@@ -570,10 +567,9 @@ mod tests {
         let session_b = SessionId::new("independent-b");
         create_sessions(&path, &[&session_a, &session_b]);
         let opens = Arc::new(AtomicUsize::new(0));
-        let supervisor = SessionSupervisor::new(RuntimeDependencies::new(counting_factory(
-            path.clone(),
-            opens.clone(),
-        )));
+        let supervisor = SessionSupervisor::new(SessionSupervisorDependencies::new(
+            counting_factory(path.clone(), opens.clone()),
+        ));
 
         let handle_a = supervisor
             .get_or_start(session_a.clone())
@@ -655,8 +651,9 @@ mod tests {
             })
         };
 
-        let dependencies = RuntimeDependencies::new(counting_factory(path.clone(), opens))
-            .with_worker_factory(factory);
+        let dependencies =
+            SessionSupervisorDependencies::new(counting_factory(path.clone(), opens))
+                .with_worker_factory(factory);
         let supervisor = SessionSupervisor::new(dependencies);
         let handle_a = supervisor
             .get_or_start(session_a.clone())
@@ -765,9 +762,10 @@ mod tests {
 
     #[tokio::test]
     async fn store_open_failure_returns_persistence_without_actor() {
-        let dependencies = RuntimeDependencies::new(|| -> Result<SqliteDatabase, String> {
-            Err("无法打开数据库".into())
-        });
+        let dependencies =
+            SessionSupervisorDependencies::new(|| -> Result<SqliteDatabase, String> {
+                Err("无法打开数据库".into())
+            });
         let supervisor = SessionSupervisor::new(dependencies);
 
         let result = supervisor.get_or_start(SessionId::new("no-store")).await;

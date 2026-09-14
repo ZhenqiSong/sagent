@@ -68,7 +68,7 @@ Python 项目为兼容目标。
 | Storage | `Store` 持有 `rusqlite::Connection`，Runtime/CLI/工具直接依赖具体 Store | StorageManager（由 selector/factory 创建）+ 小型领域存储接口 |
 | Provider | config 解析时创建 `OpenAiCompatibleProvider`；Supervisor 保存全局 Provider | ProviderDescriptor + ProviderFactory + CapabilityResolver |
 | Tools | schema registry 与 `ToolWorker` 的硬编码执行分支分离 | ToolCatalog + ToolExecutor + ToolExecutionContext |
-| Runtime | Supervisor 同时管理 actor 生命周期、provider、模型、工具、超时 | SessionSupervisor + RuntimeDependencies + GenerationResolution |
+| Runtime | Supervisor 同时管理 actor 生命周期、provider、模型、工具、超时 | SessionSupervisor + SessionSupervisorDependencies + GenerationResolution |
 | Protocol | protocol crate 中含 Store 驱动的 `SessionService` | 纯协议 DTO/trait 与 RPC/Runtime adapter 分离 |
 | Transport | stdio/WebSocket 仍各自维护连接任务和关闭逻辑 | ConnectionRuntime + 各自 framing adapter |
 | Config | 路径、YAML、密钥读取、Provider 创建部分混合 | Profile/Storage/Provider/Workspace/Policy descriptors |
@@ -177,7 +177,7 @@ terminal 与 stdio transport 补充“负责/不负责”的模块地图。既�
 状态：已完成（2026-09-13）。
 
 **完成记录：** `SessionSupervisor` 现在主要负责 SessionActor 的生命周期、mailbox、事件
-订阅和收口，并作为冻结存储依赖向 RPC transport 提供连接级查询端口；`RuntimeDependencies` 聚合存储、模型、工具和策略依赖，并通过枚举消除
+订阅和收口，并作为冻结存储依赖向 RPC transport 提供连接级查询端口；`SessionSupervisorDependencies` 聚合存储、模型、工具和策略依赖，并通过枚举消除
 Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、计划、持久化、worker
 启动、active state 安装和事件发布拆分；`handle_worker_event` 已按流式增量、用量、工具调用、
 工具结果和终态/失败拆分。Store 提交后发布事件、取消先传播 token 再收口任务、Actor 单写
@@ -194,7 +194,7 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 
 1. 将 `SessionSupervisor` 限定为 SessionActor 生命周期、mailbox、事件订阅、收口，以及
    通过冻结依赖向 transport 提供连接级查询端口；
-2. 提取 `RuntimeDependencies`，集中 StoreFactory、Clock、CapabilityResolver 等完整依赖；
+2. 提取 `SessionSupervisorDependencies`，集中 StoreFactory、Clock、CapabilityResolver 等完整依赖；
 3. 以 enum 或已验证的运行模式替代 `provider`、`worker_factory`、`tool_dispatcher`、
    `tool_worker` 的松散 `Option` 组合；
 4. 将 `submit_prompt` 拆为：输入/会话校验、resolution 获取、Turn 计划准备、原子持久化、
@@ -214,7 +214,7 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 Runtime/RPC/工具和 CLI 迁移已完成；R3.5 `StorageManager` 框架（管理端口、窄依赖聚合和
 `SqliteStorageManager`）已完成，调用方迁移待执行。R3.5 的分阶段执行拆分见
 [StorageManager 重构执行计划](rust-storage-manager-execution-plan.md)。
-Runtime Actor、RuntimeDependencies、RPC SessionService、RuntimeService、`session_search`
+Runtime Actor、SessionSupervisorDependencies、RPC SessionService、RuntimeService、`session_search`
 以及 CLI 会话/Profile 管理命令均已通过工厂申请领域端口，不再直接依赖 `Store`。
 
 **R3.2 完成记录：** 配置读取、Profile 聚合快照、Provider 数据模型、Provider resolver、
@@ -285,7 +285,7 @@ RPC、CLI 和工具均不感知这种差异。
 迁移，以及连接池/健康检查/migration 生命周期管理，留待 R3.5 后续工作包。
 
 **R3.4 Runtime/RPC/工具/CLI 迁移记录（已完成）：** SessionActor 的写入、查询和恢复路径已改为分别依赖
-`SessionStorage`/`SessionQueryStorage`，`RuntimeDependencies` 通过 `StorageFactory`
+`SessionStorage`/`SessionQueryStorage`，`SessionSupervisorDependencies` 通过 `StorageFactory`
 为每个 Actor 创建端口集合；协议层 `SessionService` 只持有查询端口，RPC `RuntimeService`
 和 `RuntimePromptContext` 通过冻结的 Factory 获取短生命周期端口，`RuntimeBootstrap::open_service`
 则通过同一 Supervisor 获取连接级查询端口，避免 Bootstrap 再直接创建一套依赖。Bootstrap
@@ -345,7 +345,7 @@ RPC、CLI 和工具均不感知这种差异。
    transaction boundary 的选择；
 7. 将现有 `Store` SQLite 逻辑迁为第一实现。可保留 `sagent-store` 作为端口 crate 并新增
    `sagent-store-sqlite`，或将端口与实现置于清晰子模块；选择以依赖图最小、无循环依赖为准；
-8. **已完成：** Runtime Actor、RuntimeDependencies、RPC session read service、事件补读、
+8. **已完成：** Runtime Actor、SessionSupervisorDependencies、RPC session read service、事件补读、
     空会话创建、`session_search` 和 CLI 管理命令均已迁移到领域端口，并禁止新的上层代码
     直接导入 SQLite 类型；只读 CLI 路径通过 `StorageFactory::create_readonly` 获取查询与
     搜索端口，可写命令通过 `StorageFactory::create` 获取会话写入端口；
@@ -355,7 +355,7 @@ RPC、CLI 和工具均不感知这种差异。
    session lease/乐观版本和数据导入；本工作包不承诺实现该后端。
 
 **验收：** Runtime、CLI、RPC 和工具不再直接依赖 `rusqlite` 或 `Store` 具体实现；
-`RuntimeBootstrap::from_paths`、`RuntimeDependencies` 和 RuntimeService 不暴露数据库路径、
+`RuntimeBootstrap::from_paths`、`SessionSupervisorDependencies` 和 RuntimeService 不暴露数据库路径、
 连接、连接池或具体 Store；切换 SQLite/远程后端只需替换 manager/adapter，未支持后端能明确
 失败且不会回退到 SQLite。SQLite 行为契约不变；将 fake/recording storage 注入 actor 可覆盖
 start/commit/complete/interrupt；`storage.kind = sqlite` 保持当前默认行为；配置解析、Provider
@@ -382,7 +382,7 @@ start/commit/complete/interrupt；`storage.kind = sqlite` 保持当前默认行�
    结果、tool schema hash/revision、prompt revision、policy revision、workspace/approval policy；
 5. 在 `submit_prompt` 之前一次解析并持久化可审计 revision；worker 只使用该 snapshot；
 6. 将当前 Supervisor 的 `with_provider`、model、profile revision、工具 dispatcher/worker 等
-   builder 迁为完整的 `RuntimeDependencies` 与 resolver；测试注入走同一边界；
+   builder 迁为完整的 `SessionSupervisorDependencies` 与 resolver；测试注入走同一边界；
 7. 明确 Python 风格配置别名的策略：若不再是正式用户兼容承诺，在一次配置版本迁移中标记
    deprecated 并移除；若保留，则文档化为 Sagent 自身支持字段并写解析契约。
 

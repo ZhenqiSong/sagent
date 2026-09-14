@@ -8,7 +8,9 @@ use sagent_config::{
     resolve_openai_provider_from_config, resolve_workspace_from_config,
 };
 use sagent_provider::ModelProvider;
-use sagent_runtime::{RuntimeDependencies, SessionSupervisor, ToolDispatcher, ToolWorker};
+use sagent_runtime::{
+    SessionSupervisor, SessionSupervisorDependencies, ToolDispatcher, ToolWorker,
+};
 use sagent_store::StorageFactory;
 use sagent_tools::{ReadFileLimits, TerminalLimits, WorkspaceRoot, builtin_registry};
 
@@ -46,7 +48,8 @@ impl RuntimeBootstrap {
         // 损坏 YAML 误认为未配置。
         let public_config = read_public_config_from_config(&paths, &profile_config)
             .context("读取公开 Profile 配置失败")?;
-        let dependencies = RuntimeDependencies::from_storage_factory(Arc::clone(&storage_factory));
+        let dependencies =
+            SessionSupervisorDependencies::from_storage_factory(Arc::clone(&storage_factory));
 
         // 工具边界必须在 Profile bootstrap 时固定，不能接受来自 prompt.submit 的路径或
         // registry 覆盖。workspace 不可用时只关闭工具而不影响只读 RPC/空会话，让损坏的

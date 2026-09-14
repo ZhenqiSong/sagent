@@ -19,8 +19,8 @@ use sagent_config::{
     load_profile_config, normalize_profile_name, resolve_openai_provider_from_config, resolve_paths,
 };
 use sagent_runtime::{
-    RuntimeDependencies, RuntimeEventKind, RuntimeEventSubscription, SessionHandle,
-    SessionSupervisor,
+    RuntimeEventKind, RuntimeEventSubscription, SessionHandle, SessionSupervisor,
+    SessionSupervisorDependencies,
 };
 use sagent_store::{MessageQuery, NewSession, SqliteDatabase};
 use sagent_types::SessionId;
@@ -94,7 +94,7 @@ async fn prepare_live_session() -> Result<Option<LiveSession>> {
 
     let database_path_for_factory = database_path.clone();
     let provider = Arc::new(resolved.client);
-    let dependencies = RuntimeDependencies::new(move || {
+    let dependencies = SessionSupervisorDependencies::new(move || {
         SqliteDatabase::open_readwrite(&database_path_for_factory)
             .map_err(|error| error.to_string())
     })

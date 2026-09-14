@@ -24,8 +24,8 @@ mod input;
 mod provider_worker;
 #[path = "actor_support/recovery.rs"]
 mod recovery;
-mod runtime_dependencies;
 mod supervisor;
+mod supervisor_dependencies;
 #[path = "tooling/call.rs"]
 mod tool_call;
 #[path = "tooling/dispatch.rs"]
@@ -41,8 +41,8 @@ pub use approval::{
 };
 pub use error::RuntimeError;
 pub use event::{RuntimeEvent, RuntimeEventKind, RuntimeEventSubscription, SubscriptionError};
-pub use runtime_dependencies::RuntimeDependencies;
 pub use supervisor::{SessionHandle, SessionSupervisor, SubmitReceipt};
+pub use supervisor_dependencies::SessionSupervisorDependencies;
 pub use tool_call::{ToolCall, ToolCallAccumulator, ToolCallError};
 pub use tool_dispatch::{ToolDispatchError, ToolDispatchPlan, ToolDispatcher};
 pub use tool_worker::{ToolExecutionResult, ToolWorker, ToolWorkerError};

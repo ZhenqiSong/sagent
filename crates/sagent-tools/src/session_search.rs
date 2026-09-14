@@ -2,7 +2,7 @@
 
 use std::{fmt, sync::Arc};
 
-use sagent_store::{MessageSearchQuery, StorageFactory};
+use sagent_store::{MessageSearchQuery, SearchStorage, StorageFactory, StorageManager};
 use sagent_types::SessionId;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -64,26 +64,61 @@ impl Default for SessionSearchLimits {
     }
 }
 
-/// 绑定单个 Profile 存储 Factory 的只读搜索服务。
+type SearchStorageProvider = Arc<dyn Fn() -> Result<Box<dyn SearchStorage>, String> + Send + Sync>;
+
+/// 绑定单个 Profile 搜索能力的只读搜索服务。
 ///
-/// 服务只保存抽象 Factory，不保存数据库路径或连接；每次搜索创建短生命周期端口，
-/// 使不同 Actor/连接不会共享后端连接，也不能通过参数切换 Profile。
+/// 服务只保存搜索能力提供器，不保存数据库路径或连接；每次搜索创建短生命周期端口，
+/// 使不同 Actor/连接不会共享后端连接，也不能通过参数切换 Profile。Manager 和迁移期
+/// Factory 都在构造阶段收敛成同一个窄搜索端口。
 #[derive(Clone)]
 pub struct SessionSearchService {
-    storage_factory: Arc<dyn StorageFactory>,
+    search_storage_provider: SearchStorageProvider,
     limits: SessionSearchLimits,
 }
 
 impl SessionSearchService {
-    /// 创建绑定 Profile 存储 Factory 的会话搜索服务。
+    /// 创建绑定 Profile 搜索能力提供器的会话搜索服务。
+    fn from_provider(
+        search_storage_provider: SearchStorageProvider,
+        limits: SessionSearchLimits,
+    ) -> Self {
+        Self {
+            search_storage_provider,
+            limits,
+        }
+    }
+
+    /// 从 Profile 级 Manager 创建只读搜索服务。
+    ///
+    /// 搜索只接收 `ReadStorage` 拆出的搜索端口，不会把查询或写入能力传播到工具层。
+    pub fn from_storage_manager(
+        manager: Arc<dyn StorageManager>,
+        limits: SessionSearchLimits,
+    ) -> Self {
+        let search_storage_provider: SearchStorageProvider = Arc::new(move || {
+            let storage = manager
+                .open_read_storage()
+                .map_err(|error| error.to_string())?;
+            let (_query, search) = storage.into_parts();
+            Ok(search)
+        });
+        Self::from_provider(search_storage_provider, limits)
+    }
+
+    /// 从迁移期 Factory 创建会话搜索服务；仅供旧调用方过渡使用。
     pub fn from_storage_factory(
         storage_factory: Arc<dyn StorageFactory>,
         limits: SessionSearchLimits,
     ) -> Self {
-        Self {
-            storage_factory,
-            limits,
-        }
+        let search_storage_provider: SearchStorageProvider = Arc::new(move || {
+            let dependencies = storage_factory
+                .create()
+                .map_err(|error| error.to_string())?;
+            let (_write, _query, search) = dependencies.into_parts();
+            Ok(search)
+        });
+        Self::from_provider(search_storage_provider, limits)
     }
 
     /// 执行只读 FTS 查询；不会写数据库、执行 shell 或读取任意文件。
@@ -111,15 +146,14 @@ impl SessionSearchService {
             include_inactive: false,
             limit,
         };
-        let storage_factory = Arc::clone(&self.storage_factory);
+        let search_storage_provider = Arc::clone(&self.search_storage_provider);
         let cancellation_for_query = cancellation.clone();
         let query_task = tokio::task::spawn_blocking(move || {
             if cancellation_for_query.is_cancelled() {
                 return Err(SearchError::Cancelled);
             }
-            let dependencies = storage_factory.create().map_err(|_| SearchError::Store)?;
-            dependencies
-                .search()
+            let search_storage = search_storage_provider().map_err(|_| SearchError::Store)?;
+            search_storage
                 .search_messages(&query)
                 .map_err(|_| SearchError::Store)
         });
@@ -229,7 +263,9 @@ mod tests {
 
     use std::sync::Arc;
 
-    use sagent_store::{NewMessage, NewSession, SqliteDatabase, SqliteStorageFactory};
+    use sagent_store::{
+        NewMessage, NewSession, SqliteDatabase, SqliteStorageFactory, SqliteStorageManager,
+    };
     use sagent_types::{MessageId, SessionId, ToolCallId};
     use tokio_util::sync::CancellationToken;
 
@@ -281,8 +317,9 @@ mod tests {
     #[tokio::test]
     async fn searches_cjk_with_stable_ids_and_bounded_snippet() {
         let (path, session) = fixture();
-        let service = SessionSearchService::from_storage_factory(
-            factory(&path),
+        let manager = Arc::new(SqliteStorageManager::new(&path).expect("测试数据库路径应有效"));
+        let service = SessionSearchService::from_storage_manager(
+            manager,
             SessionSearchLimits {
                 max_snippet_chars: 6,
                 ..Default::default()

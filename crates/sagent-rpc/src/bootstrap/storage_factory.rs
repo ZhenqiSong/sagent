@@ -2,8 +2,8 @@
 //!
 //! 本模块是 Bootstrap 与后端 adapter 之间的唯一选择边界：它读取已解析的
 //! `StorageDescriptor`，负责校验当前后端是否可用并构造对应 Manager。兼容期仍保留
-//! Factory 构造函数，但 Runtime、RPC service 和工具应逐步改为接收抽象 `StorageManager`，
-//! 不在调用方根据 `StorageKind` 分支。
+//! 兼容期仍保留 Factory 构造函数，但 Runtime、RPC service 和工具的生产路径统一接收
+//! 抽象 `StorageManager`，不在调用方根据 `StorageKind` 分支。
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -17,9 +17,6 @@ use sagent_store::{SqliteStorageFactory, SqliteStorageManager, StorageFactory, S
 /// descriptor 已由配置快照提供，因此本函数不会重新读取 `config.yaml`。Manager 的
 /// 初始化、连接生命周期和领域端口装配由具体 adapter 负责；未实现的后端在这里明确
 /// 失败，禁止静默回退到 SQLite。
-// M4.1 先建立唯一 Manager selector；RuntimeBootstrap 在后续迁移步骤接入它，期间保留
-// Factory selector 以避免把 Runtime、工具和 RPC 的迁移与本次结构变更耦合在一起。
-#[allow(dead_code)]
 pub(crate) fn create_storage_manager(
     paths: &SagentPaths,
     descriptor: &StorageDescriptor,
@@ -33,6 +30,8 @@ pub(crate) fn create_storage_manager(
 /// 输入是一次配置快照中的 descriptor 和 Profile 路径上下文，不会重新读取文件或读取
 /// 远程密钥。Factory 的连接、事务和 migration 生命周期仍由具体 adapter 管理；未实现
 /// 的后端在这里明确失败，禁止静默回退到 SQLite。
+// 迁移期保留给旧测试和外部适配验证；实际 RuntimeBootstrap 已统一走 Manager selector。
+#[allow(dead_code)]
 pub(crate) fn create_storage_factory(
     paths: &SagentPaths,
     descriptor: &StorageDescriptor,

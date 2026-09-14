@@ -13,17 +13,17 @@ use sagent_protocol::{
     SessionSummaryDto,
 };
 use sagent_runtime::SessionSupervisor;
-use sagent_store::{EventQuery, NewSession, StorageFactory};
+use sagent_store::{EventQuery, NewSession, StorageManager};
 use sagent_types::SessionId;
 use uuid::Uuid;
 
 /// Profile 作用域中的 RPC 服务。
 ///
-/// `session.create` 使用 Factory 创建短生命周期写入端口；真正的 Actor 仍由后续
+/// `session.create` 使用 Manager 创建短生命周期写入端口；真正的 Actor 仍由后续
 /// `prompt.submit` 经 `SessionSupervisor` 启动，避免空会话占用 mailbox 或 Provider。
 pub struct RuntimeService {
     sessions: SessionService,
-    storage_factory: Arc<dyn StorageFactory>,
+    storage_manager: Arc<dyn StorageManager>,
     model: String,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
@@ -34,20 +34,20 @@ pub struct RuntimeService {
 /// `prompt.submit` 所需的可跨 await 使用的运行时快照。
 ///
 /// 它刻意不携带 `SessionService` 的查询端口：dispatcher 不能在 await Actor mailbox
-/// 时借用它。会话存在性检查和事件补读都通过 Factory 创建短生命周期端口，Actor 则
+/// 时借用它。会话存在性检查和事件补读都通过 Manager 创建短生命周期端口，Actor 则
 /// 始终通过 Supervisor 获取自己的独占端口集合。
 #[derive(Clone)]
 pub struct RuntimePromptContext {
-    storage_factory: Arc<dyn StorageFactory>,
+    storage_manager: Arc<dyn StorageManager>,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
 }
 
 impl RuntimeService {
-    /// 将已初始化的只读服务、Actor factory 和当前模型组合为 RPC 适配层。
+    /// 将已初始化的只读服务、StorageManager 和当前模型组合为 RPC 适配层。
     pub fn new(
         sessions: SessionService,
-        storage_factory: Arc<dyn StorageFactory>,
+        storage_manager: Arc<dyn StorageManager>,
         model: String,
         supervisor: Arc<SessionSupervisor>,
         provider_ready: bool,
@@ -55,7 +55,7 @@ impl RuntimeService {
     ) -> Self {
         Self {
             sessions,
-            storage_factory,
+            storage_manager,
             model,
             supervisor,
             provider_ready,
@@ -68,10 +68,10 @@ impl RuntimeService {
         Arc::clone(&self.supervisor)
     }
 
-    /// 提取不含共享 SQLite Connection 的 prompt 运行时快照。
+    /// 提取不含共享数据库连接的 prompt 运行时快照。
     pub fn prompt_context(&self) -> RuntimePromptContext {
         RuntimePromptContext {
-            storage_factory: Arc::clone(&self.storage_factory),
+            storage_manager: Arc::clone(&self.storage_manager),
             supervisor: self.supervisor(),
             provider_ready: self.provider_ready,
         }
@@ -98,9 +98,12 @@ impl RuntimePromptContext {
 
     /// 在启动 Actor 前验证会话已持久化到当前 Profile。
     pub fn require_session(&self, session_id: &SessionId) -> Result<(), ProtocolError> {
-        let dependencies = self.storage_factory.create().map_err(store_error)?;
-        if dependencies
-            .query()
+        let storage = self
+            .storage_manager
+            .open_read_storage()
+            .map_err(store_error)?;
+        if storage
+            .session
             .get_session(session_id)
             .map_err(store_error)?
             .is_some()
@@ -126,8 +129,11 @@ impl RuntimePromptContext {
         const MAX_LIMIT: u32 = 200;
 
         let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-        let dependencies = self.storage_factory.create().map_err(store_error)?;
-        let query = dependencies.query();
+        let storage = self
+            .storage_manager
+            .open_read_storage()
+            .map_err(store_error)?;
+        let query = &storage.session;
         if query
             .get_session(&params.session_id)
             .map_err(store_error)?
@@ -209,11 +215,14 @@ impl SessionCreateService for RuntimeService {
             .map_err(|_| ProtocolError::RuntimeUnavailable("clock unavailable".to_owned()))?;
         let session_id = SessionId::new(format!("rpc_{}", Uuid::new_v4().simple()));
 
-        // 创建空会话不触碰 Supervisor：这里的短生命周期端口在提交后立即释放，
+        // 创建空会话不触碰 Supervisor：这里先申请最小写端口并在作用域结束时释放，
         // 之后首次 prompt.submit 才由该 session 唯一 Actor 获取独占端口集合。
-        let mut dependencies = self.storage_factory.create().map_err(store_error)?;
-        dependencies
-            .session_mut()
+        let mut storage = self
+            .storage_manager
+            .open_write_storage()
+            .map_err(store_error)?;
+        storage
+            .session
             .create_session(&NewSession {
                 id: session_id.clone(),
                 source: Some("rpc".to_owned()),
@@ -222,8 +231,15 @@ impl SessionCreateService for RuntimeService {
                 started_at,
             })
             .map_err(store_error)?;
-        let session = dependencies
-            .query()
+        drop(storage);
+
+        // 写入已提交后再通过只读入口读取完整摘要，保持 RPC 的读写能力边界清晰。
+        let read_storage = self
+            .storage_manager
+            .open_read_storage()
+            .map_err(store_error)?;
+        let session = read_storage
+            .session
             .get_session(&session_id)
             .map_err(store_error)?
             .ok_or_else(|| ProtocolError::Internal("created session was not found".to_owned()))?;

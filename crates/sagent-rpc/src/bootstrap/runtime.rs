@@ -11,17 +11,17 @@ use sagent_provider::ModelProvider;
 use sagent_runtime::{
     SessionSupervisor, SessionSupervisorDependencies, ToolDispatcher, ToolWorker,
 };
-use sagent_store::StorageFactory;
+use sagent_store::StorageManager;
 use sagent_tools::{ReadFileLimits, TerminalLimits, WorkspaceRoot, builtin_registry};
 
-use crate::{service::RuntimeService, storage_factory::create_storage_factory};
+use crate::{service::RuntimeService, storage_factory::create_storage_manager};
 
 /// 已绑定一个 Profile 的运行时装配结果。
 ///
 /// Bootstrap 在启动时固定路径与 Provider；RPC 请求不能传入 home、profile、model、
 /// endpoint 或 API key，因而不会在同一个 daemon 内跨越 Profile 或凭据边界。
 pub struct RuntimeBootstrap {
-    storage_factory: Arc<dyn StorageFactory>,
+    storage_manager: Arc<dyn StorageManager>,
     model: String,
     supervisor: Arc<SessionSupervisor>,
     provider_ready: bool,
@@ -29,7 +29,7 @@ pub struct RuntimeBootstrap {
 }
 
 impl RuntimeBootstrap {
-    /// 创建存储 Factory、Provider 和每 Actor 独占的领域端口。
+    /// 创建存储 Manager、Provider 和每 Actor 独占的领域端口。
     pub fn from_paths(paths: SagentPaths) -> Result<Self> {
         // Profile 配置在 bootstrap 开始时只读取一次；后续 Provider、workspace、公开摘要
         // 和 storage 校验都复用同一快照，避免同一 Runtime 看到不一致的文件内容。
@@ -37,19 +37,21 @@ impl RuntimeBootstrap {
         let storage_descriptor = profile_config.get_storage_descriptor();
 
         // 后端选择只发生在独立的 selector 中；Bootstrap 不根据 StorageKind 分支，
-        // 也不持有数据库路径、连接或具体 SQLite 数据库句柄。Factory 的首次 create 负责初始化
-        // migration 和连接检查，之后每个 Actor/请求都获取独立的端口集合。
-        let storage_factory: Arc<dyn StorageFactory> =
-            create_storage_factory(&paths, storage_descriptor)
-                .context("创建 Profile 存储 Factory 失败")?;
-        storage_factory.create().context("初始化 RPC 存储失败")?;
+        // 也不持有数据库路径、连接或具体 SQLite 数据库句柄。Manager 初始化负责 migration
+        // 和连接检查，之后每个 Actor/请求都通过窄入口取得独立的业务存储。
+        let storage_manager: Arc<dyn StorageManager> =
+            create_storage_manager(&paths, storage_descriptor)
+                .context("创建 Profile 存储 Manager 失败")?;
+        storage_manager
+            .initialize()
+            .context("初始化 RPC 存储失败")?;
 
         // 公开配置在 bootstrap 时冻结；读取失败不能降级为“空配置”，否则客户端会把
         // 损坏 YAML 误认为未配置。
         let public_config = read_public_config_from_config(&paths, &profile_config)
             .context("读取公开 Profile 配置失败")?;
         let dependencies =
-            SessionSupervisorDependencies::from_storage_factory(Arc::clone(&storage_factory));
+            SessionSupervisorDependencies::from_storage_manager(Arc::clone(&storage_manager));
 
         // 工具边界必须在 Profile bootstrap 时固定，不能接受来自 prompt.submit 的路径或
         // registry 覆盖。workspace 不可用时只关闭工具而不影响只读 RPC/空会话，让损坏的
@@ -66,7 +68,7 @@ impl RuntimeBootstrap {
                         ReadFileLimits::default(),
                         TerminalLimits::default(),
                     )
-                    .with_session_search_factory(Arc::clone(&storage_factory));
+                    .with_session_search_manager(Arc::clone(&storage_manager));
                     dependencies.with_tools(dispatcher, worker)
                 }
                 Err(_) => dependencies,
@@ -92,7 +94,7 @@ impl RuntimeBootstrap {
         };
 
         Ok(Self {
-            storage_factory,
+            storage_manager,
             model,
             supervisor: Arc::new(SessionSupervisor::new(dependencies)),
             provider_ready,
@@ -108,7 +110,7 @@ impl RuntimeBootstrap {
 
     /// 为一条 transport 连接装配独占的只读查询端口。
     ///
-    /// 查询依赖由 Supervisor 持有的冻结运行时工厂创建，Bootstrap 不再直接打开另一
+    /// 查询依赖由 Supervisor 持有的冻结运行时 Manager 创建，Bootstrap 不再直接打开另一
     /// 个存储依赖。每条连接仍取得自己的查询端口，Supervisor 则跨连接共享，以便重连
     /// 客户端继续控制既有 Actor；连接之间不共享具体数据库连接。
     pub fn open_service(&self) -> Result<RuntimeService> {
@@ -118,7 +120,7 @@ impl RuntimeBootstrap {
             .context("打开 RPC 查询存储失败")?;
         Ok(RuntimeService::new(
             sagent_protocol::SessionService::new_boxed(query_storage),
-            Arc::clone(&self.storage_factory),
+            Arc::clone(&self.storage_manager),
             self.model.clone(),
             Arc::clone(&self.supervisor),
             self.provider_ready,

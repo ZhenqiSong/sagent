@@ -1,7 +1,7 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0、M1、M2、M3 已完成；M4.1 selector 已定义但尚未接入实际启动链，M4.2 及后续迁移仍未完成
+状态：M0、M1、M2、M3、M4.1 和 M5 启动链迁移已完成；Factory 兼容路径清理、M6、M7、M8 仍未完成
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
@@ -309,6 +309,14 @@ SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径�
 5. Actor 仍是 Session 状态唯一写入者，worker 不得绕过 `storage.session` 写库。
 
 完成条件：Runtime 的 Session、Turn、恢复和事件测试全部通过，且无生产代码 Factory 传播。
+
+**执行记录（2026-09-14，M5 启动链迁移）：** `RuntimeBootstrap` 已改为通过统一
+`create_storage_manager` 创建并初始化 Profile 级 `StorageManager`，并将同一 Manager
+注入 `SessionSupervisorDependencies`、RPC `RuntimeService` 和 `session_search`。Actor
+通过 `open_actor_storage()` 取得完整 `Storage`，RPC 查询通过 `open_read_storage()`，
+创建会话通过 `open_write_storage()` 后再用只读入口读取摘要；工具搜索只接收拆出的
+`SearchStorage`。旧 Factory 构造方法仍保留在 Runtime、Tools 和 selector 中作为迁移期
+兼容入口，尚未满足“生产代码无 Factory 传播”的最终完成条件，后续 M6/M7 继续删除。
 
 ### M6：迁移 RPC、CLI 和工具
 

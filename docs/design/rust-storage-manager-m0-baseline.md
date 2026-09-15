@@ -24,18 +24,18 @@ rg -n "StorageFactory|StorageDependencies|Store::open|SqliteStorage" \
 
 | 当前调用方 | 当前依赖与行为 | R3.5 目标 | 对应工作包 |
 |---|---|---|---|
-| `sagent-rpc/bootstrap/runtime.rs` | 保存 `Arc<dyn StorageFactory>`；启动时 `create()` 初始化 SQLite；为 Runtime、工具和 RPC Service 传播 Factory | selector 返回 `Arc<dyn StorageManager>`；bootstrap 只管理后端生命周期和初始化策略 | M4、M5 |
-| `sagent-rpc/bootstrap/storage_factory.rs` | 根据 descriptor 选择 `SqliteStorageFactory` | 统一为 `create_storage_manager(descriptor)`；不支持的后端明确失败 | M4 |
-| `sagent-runtime/supervisor_dependencies.rs` | 以 Factory 闭包为每个 Actor 创建 `StorageDependencies` | 持有 Manager；Actor 申请独占 `Storage` | M5 |
-| `sagent-runtime/actor/session.rs` | 解构 `StorageDependencies` 为写、查询、搜索端口 | 只持有业务 `storage.session` 外观；保留 Actor 为唯一写入者 | M5 |
-| `sagent-rpc/service/runtime.rs` | 为创建和查询操作保存 Factory | 分别申请 `WriteStorage`、`ReadStorage`，不识别后端 | M5、M6 |
-| `sagent-runtime/worker/tool.rs` | 将 Factory 注入会话搜索工具 | 注入受限的搜索/只读业务 Storage | M6 |
-| `sagent-tools/session_search.rs` | 搜索时调用 `StorageFactory::create()` 再取搜索端口 | 仅申请 `ReadStorage.session.search(...)`，绝不打开写入端口 | M6 |
-| `sagent-cli/commands/storage.rs` | CLI 自己选择 `SqliteStorageFactory`，向命令提供读写依赖 | CLI Context 保存 Manager，只暴露按命令需要申请的 `Storage` 对象 | M4、M6 |
+| `sagent-rpc/bootstrap/runtime.rs` | 旧实现保存后端构造器并在启动时初始化 SQLite | selector 返回 `Arc<dyn StorageManager>`；bootstrap 只管理后端生命周期和初始化策略 | M4、M5、M7 |
+| `sagent-store/src/selector.rs` | 根据 descriptor 选择具体后端 | CLI/RPC 共享 `create_storage_manager(descriptor)`；不支持的后端明确失败 | M4、M7 |
+| `sagent-runtime/supervisor_dependencies.rs` | 以存储提供器为每个 Actor 创建完整业务 `Storage` | 持有 Manager；Actor 申请独占 `Storage` | M5、M7 |
+| `sagent-runtime/actor/session.rs` | 解构业务 `Storage` 为 Actor 所需的领域端口 | 只持有业务 `storage.session` 外观；保留 Actor 为唯一写入者 | M5、M7 |
+| `sagent-rpc/service/runtime.rs` | 旧实现为创建和查询操作保存后端构造器 | 分别申请 `WriteStorage`、`ReadStorage`，不识别后端 | M5、M6、M7 |
+| `sagent-runtime/worker/tool.rs` | 将 Manager 注入会话搜索工具 | 注入受限的搜索/只读业务 Storage | M6、M7 |
+| `sagent-tools/session_search.rs` | 搜索时从 Manager 申请只读存储 | 仅申请 `ReadStorage.session.search(...)`，绝不打开写入端口 | M6、M7 |
+| `sagent-cli/commands/storage.rs` | CLI 自己选择具体后端，向命令提供读写依赖 | CLI Context 保存 Manager，只暴露按命令需要申请的 `Storage` 对象 | M4、M6、M7 |
 | `sagent-cli/commands/session/service/*` | Session 命令从 `CliStorageContext` 取得底层端口 | 统一使用 `storage.session` | M6 |
 | `sagent-cli/commands/profile/service.rs` | Profile 创建经 CLI 存储上下文初始化 | 使用 Manager 的窄初始化/写入入口 | M6 |
 
-`sagent-store` 内的 `Store`、`SqliteStorageManager`、`SqliteStorageFactory` 和端口适配器
+`sagent-store` 内的 `Store`、`SqliteStorageManager` 和端口适配器
 是后端实现边界，M1--M3 会重组它们，但不允许向上层传播。
 
 ## 3. 已冻结的 Session 事务契约
@@ -57,18 +57,17 @@ mailbox 串行处理 start、工具结果提交、complete 与 interrupt。M5 �
 
 以下规则是迁移的强制约束：
 
-1. `Store::open_readonly`、`StorageFactory::create_readonly` 和未来
-   `StorageManager::open_read_storage` 不创建数据库、不执行 migration、不修改数据；
+1. `Store::open_readonly` 和 `StorageManager::open_read_storage` 不创建数据库、不执行
+   migration、不修改数据；
    `sagent-store/src/store_tests/core.rs::opens_existing_database_in_readonly_mode` 与
    `sagent-store/src/sqlite/manager.rs::readonly_manager_path_does_not_create_missing_database`
    已覆盖底层边界。
-2. CLI `session list` 等查询经 `CliStorageContext::open_read` 进入只读 Factory。新增
+2. CLI `session list` 等查询经 `CliStorageContext::open_read` 进入只读 Manager。新增
    `session/handler.rs::readonly_session_list_does_not_create_missing_database` 覆盖实际命令
    服务路径：缺失 `state.db` 时查询失败，但不会留下数据库文件。
-3. 当前 `SessionSearchService` 名义上是只读服务，却调用 `StorageFactory::create()`。
-   这不是可接受的最终实现：它在 M6 必须改为只获取搜索或只读 Storage，并追加同类
-   “缺失数据库不创建文件”的端到端契约测试。
-4. `RuntimeBootstrap::from_paths` 在 daemon 启动阶段主动调用 `StorageFactory::create()`，
+3. `SessionSearchService` 通过 Manager 申请只读搜索能力，并追加同类“缺失数据库不创建文件”
+   的端到端契约测试。
+4. `RuntimeBootstrap::from_paths` 在 daemon 启动阶段主动调用 Manager 的初始化入口，
    用于初始化 migration 和连接检查。因此“启动 RPC daemon 不创建数据库”不是当前契约，
    也不能作为 M0 回归测试。M4 必须将初始化策略明确成 Manager 的生命周期入口；M5 迁移
    时不得把普通 RPC 查询误接到该写入初始化路径。
@@ -77,10 +76,10 @@ mailbox 串行处理 start、工具结果提交、complete 与 interrupt。M5 �
 
 | 当前对象 | 迁移后的对象 | 不可改变的行为 |
 |---|---|---|
-| `StorageFactory::create()` | `StorageManager::open_actor_storage()` / `open_write_storage()` | 返回独立的写入能力；不得共享 Actor 的可变写入句柄 |
-| `StorageFactory::create_readonly()` | `StorageManager::open_read_storage()` | 只读、无 migration、缺失库不创建文件 |
-| `StorageDependencies` | `Storage` | 上层通过 `storage.session` 执行 Session 领域动作；端口组合留在 adapter |
-| `StorageReadDependencies` | `ReadStorage` | 只暴露读取和搜索，编译期不提供写入方法 |
+| 旧后端构造调用 | `StorageManager::open_actor_storage()` / `open_write_storage()` | 返回独立的写入能力；不得共享 Actor 的可变写入句柄 |
+| 旧只读依赖聚合 | `StorageManager::open_read_storage()` | 只读、无 migration、缺失库不创建文件 |
+| 旧端口依赖聚合 | `Storage` | 上层通过 `storage.session` 执行 Session 领域动作；端口组合留在 adapter |
+| 旧只读端口聚合 | `ReadStorage` | 只暴露读取和搜索，编译期不提供写入方法 |
 | 独立 `SearchStorage` | `ReadStorage.session` 或受限搜索对象 | 搜索不能借由能力对象获得写入权限 |
 | `SqliteStorageManager` | `SqliteStorageManager`（重组后） | SQLite 文件、连接和 migration 细节仍只在 adapter 内部 |
 

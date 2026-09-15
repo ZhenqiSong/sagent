@@ -14,7 +14,8 @@ use sagent_runtime::{
 use sagent_store::StorageManager;
 use sagent_tools::{ReadFileLimits, TerminalLimits, WorkspaceRoot, builtin_registry};
 
-use crate::{service::RuntimeService, storage_factory::create_storage_manager};
+use crate::service::RuntimeService;
+use sagent_store::create_storage_manager;
 
 /// 已绑定一个 Profile 的运行时装配结果。
 ///

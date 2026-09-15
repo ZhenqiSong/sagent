@@ -26,10 +26,6 @@ impl WriteOnlySessionStorage {
         }
     }
 
-    pub(super) fn from_parts(write: Box<dyn SessionWriteStorage>) -> Self {
-        Self { write }
-    }
-
     pub(super) fn into_session(self) -> Box<dyn SessionWriteStorage> {
         self.write
     }

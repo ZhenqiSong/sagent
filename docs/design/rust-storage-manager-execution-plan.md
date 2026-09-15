@@ -1,17 +1,15 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0、M1、M2、M3、M4.1、M5 启动链迁移和 M6 业务入口迁移已完成；Factory 兼容路径清理、M7、M8 仍未完成
+状态：M0、M1、M2、M3、M4.1、M5、M6、M7 已完成；M8 综合验证与 R3.5 结项待执行
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
 
-当前 `sagent-store` 已有 `StorageFactory`、旧依赖聚合和
-`SqliteStorageManager` 的过渡实现，但依赖聚合仍主要围绕 Session：
+当前 `sagent-store` 已有 `StorageManager` 和按业务域组织的存储聚合：
 
-- 旧 `StorageDependencies` 暴露写端口、查询端口和搜索端口；
-- `StorageManager` 的申请入口直接返回这些 Session 端口；
-- Runtime、RPC、CLI 和工具仍有长期持有 `StorageFactory` 的路径；
+- `StorageManager` 的申请入口返回 `Storage`、`ReadStorage` 和 `WriteStorage`；
+- Runtime、RPC、CLI 和工具均通过 Manager 申请短生命周期业务存储；
 - SQLite 的具体数据库对象虽然位于 `sagent-store`，但业务调用方仍按底层端口组织代码。
 
 这使“存储管理”和“Session 业务存储”两个层次混在一起。目标不是建立一个包含所有 CRUD
@@ -26,7 +24,7 @@
 ### 2.1 目标
 
 - 每个 Profile 只创建一个长期存活的 `StorageManager`；
-- Runtime、RPC、CLI 和工具不持有数据库路径、连接、连接池、`SqliteDatabase` 或原始 Factory；
+- Runtime、RPC、CLI 和工具不持有数据库路径、连接、连接池或 `SqliteDatabase`；
 - 上层通过稳定的抽象对象访问业务域，例如 `storage.session.search(...)`；
 - SQLite、PostgreSQL 或其它后端只在 Manager/adapter 内部选择资源和连接策略；
 - 业务 Storage 负责领域表操作和事务边界，Manager 不承载 Session/Turn 业务规则；
@@ -192,7 +190,7 @@ SessionStorage（对外业务外观）
 
 工作：
 
-1. 盘点所有 `StorageFactory`、`StorageDependencies`、`Store` 和 SQLite 类型的生产引用；
+1. 盘点所有 Manager、旧依赖聚合、`Store` 和 SQLite 类型的生产引用；
 2. 确认 SessionActor 的 start/commit/complete/interrupt/recovery 事务契约；
 3. 确认只读 RPC、CLI 查询和全文搜索不能创建数据库或执行 migration；
 4. 为新旧对象关系写最小 contract，先锁定行为再迁移结构。
@@ -219,8 +217,7 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
 **执行记录（2026-09-13）：** 已新增 `Storage`、`ReadStorage`、`WriteStorage` 以及按
 职责拆分的 `SessionStorage`、`ReadOnlySessionStorage`、`WriteOnlySessionStorage`。完整
 外观统一通过 `storage.session` 暴露业务方法。只有 `SessionStorage` 负责组合 Session
-底层端口，顶层 `Storage`/`ReadStorage`/`WriteStorage` 只接收已组装的业务对象；窄对象在类型层面隔离读写能力；兼容期的
-`StorageDependencies` 仍保留为过渡适配层。新增不依赖 SQLite 的 recording 构造测试，
+底层端口，顶层 `Storage`/`ReadStorage`/`WriteStorage` 只接收已组装的业务对象；窄对象在类型层面隔离读写能力。新增不依赖 SQLite 的 recording 构造测试，
 验证三种聚合均可由领域端口装配。Runtime、RPC、CLI 和工具迁移留给 M5/M6。
 
 ### M2：重构 Manager 框架
@@ -234,7 +231,7 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
    Storage；Manager 本身不执行 Session 表操作；
 4. 增加 `initialize` 和 `health_check` 两个明确入口：前者允许创建数据库和执行 migration，
    后者必须只读、无副作用，不创建数据库、不执行 migration；
-5. 保留 `StorageFactory` 仅作为构造边界，禁止在 Runtime/RPC/CLI 中长期持有；
+5. 构造边界直接返回 `StorageManager`，不再保留独立 Factory 抽象；
 6. 删除长期的 `open_search_storage` 平级入口，搜索统一通过 `ReadStorage.session`；
 7. 记录同步/异步模型、线程安全、连接生命周期和取消策略，并明确每次申请的资源释放
    和 Actor 独占写入语义。
@@ -243,8 +240,7 @@ Profile 的存储，此行为不属于只读 RPC 查询契约；M4/M5 必须在�
 
 **执行记录（2026-09-13）：** `StorageManager` 已改为返回 `Storage`、`ReadStorage` 和
 `WriteStorage`，并新增 `initialize`/`health_check` 生命周期入口。`SqliteStorageManager`
-现在在 Manager 边界组装业务聚合；`StorageFactory` 仅在兼容层将新聚合拆回旧依赖，未向
-Runtime/RPC/CLI 扩散。当前接口是同步阻塞模型：Manager 为 `Send + Sync`，每次 `open_*`
+现在在 Manager 边界组装业务聚合。当前接口是同步阻塞模型：Manager 为 `Send + Sync`，每次 `open_*`
 重新申请独立 SQLite 数据库句柄，Actor 之间不共享可变写句柄；没有隐藏后台任务，取消由调用方
 的任务边界负责。`health_check` 只读且不会创建文件，`initialize` 明确表示允许创建和
 迁移数据库。新增 Manager 的完整存储、窄读写、初始化和缺失库健康检查测试。
@@ -270,9 +266,9 @@ Runtime/RPC/CLI 扩散。当前接口是同步阻塞模型：Manager 为 `Send +
 **执行记录（2026-09-14）：** 已将原 `Store` 重命名为 `SqliteDatabase`，并把连接打开、
 访问模式、migration、健康检查和只读写入保护从 `lib.rs` 拆到独立的
 `sqlite/database.rs`。所有 SQLite 实现现已收拢到 `src/sqlite/` 包，其中 `session/` 按
-会话领域继续划分为消息、查询、搜索、Turn、Event、事务和端口适配子模块。`SqliteStorageFactory`
-只保留兼容构造职责，`SqliteStorageManager` 直接
-通过 adapter 组装 `Storage`、`ReadStorage` 和 `WriteStorage`，不再经由旧依赖聚合创建新对象。
+会话领域继续划分为消息、查询、搜索、Turn、Event、事务和端口适配子模块。
+`SqliteStorageManager` 直接通过 adapter 组装 `Storage`、`ReadStorage` 和 `WriteStorage`，
+不再经由旧依赖聚合创建新对象。
 Session、Message、Turn、Event 和 FTS 的 SQL 实现模块已收回 crate 内部可见性，外部只看到
 领域 DTO 与业务 Storage 外观；既有高层原子操作和只读边界保持不变。`SqliteDatabase` 根导出
 暂为 fixture/兼容适配器保留，待 M5/M6 完成上层测试与工具迁移后删除该过渡导出。
@@ -284,24 +280,23 @@ Session、Message、Turn、Event 和 FTS 的 SQL 实现模块已收回 crate 内
 1. 新增 `create_storage_manager(ProfileConfig/StorageDescriptor)`；
 2. SQLite 由 selector 创建 `SqliteStorageManager`，未支持后端明确失败；
 3. 配置只读取一次，Manager 构造后不重复读取 `config.yaml`；
-4. 旧 `SqliteStorageFactory` 仅作为兼容构造保留，最终由 selector 直接返回 Manager；
+4. selector 直接返回 Manager，不再保留旧 Factory 构造入口；
 5. `RuntimeBootstrap::from_paths` 只接收抽象 Manager，不暴露数据库细节。
 
 完成条件：SQLite/未来 PG 只替换 selector 和 adapter，业务调用路径不变。
 
-**执行记录（2026-09-14，M4.1 selector 定义）：** 已在 `sagent-rpc` bootstrap selector 中新增
-`create_storage_manager(paths, descriptor)`；该入口复用已加载的 `StorageDescriptor`，将
+**执行记录（2026-09-14，M4.1 selector 定义）：** 已新增共享的
+`sagent_store::create_storage_manager(paths, descriptor)`；该入口复用已加载的 `StorageDescriptor`，将
 SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径后创建
 `Arc<dyn StorageManager>`；Remote 和当前 SQLite 不支持的 schema、namespace、只读组合
-均 fail-closed。迁移期 `create_storage_factory` 仍保留，并与 Manager selector 共用同一校验
-和路径解析逻辑，避免两条入口产生不同后端语义。RuntimeBootstrap 的实际切换已在 M5
-启动链迁移中完成；本记录保留当时的 selector 设计状态，当前生产依赖以 Manager 为准。
+均 fail-closed。selector 现在只有 `create_storage_manager` 入口；RuntimeBootstrap 的实际
+切换已在 M5 启动链迁移中完成，生产依赖和测试装配均以 Manager 为准。
 
 ### M5：迁移 Runtime 和 Supervisor
 
 工作：
 
-1. `SessionSupervisorDependencies` 持有 `Arc<dyn StorageManager>`，不再持有原始 Factory；
+1. `SessionSupervisorDependencies` 持有 `Arc<dyn StorageManager>`，不再持有后端构造器；
 2. 每个 SessionActor 通过 `open_actor_storage()` 获得独占 `Storage`；
 3. RPC 查询通过 `open_read_storage()` 获取 `ReadStorage`；
 4. Supervisor 不保存路径、连接或 `SqliteDatabase`；
@@ -314,8 +309,7 @@ SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径�
 注入 `SessionSupervisorDependencies`、RPC `RuntimeService` 和 `session_search`。Actor
 通过 `open_actor_storage()` 取得完整 `Storage`，RPC 查询通过 `open_read_storage()`，
 创建会话通过 `open_write_storage()` 后再用只读入口读取摘要；工具搜索只接收拆出的
-`SearchStorage`。旧 Factory 构造方法仍保留在 Runtime、Tools 和 selector 中作为迁移期
-兼容入口，尚未满足“生产代码无 Factory 传播”的最终完成条件，后续 M6/M7 继续删除。
+`SearchStorage`。Runtime、Tools 和 selector 已不再保留 Factory 兼容入口。
 
 ### M6：迁移 RPC、CLI 和工具
 
@@ -323,7 +317,7 @@ SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径�
 
 1. RPC `SessionService` 只依赖 `ReadStorage.session`；
 2. CLI `SessionService` 只依赖 `Storage`/`ReadStorage`/`WriteStorage`，命令 handler 不接触
-   `SqliteDatabase` 或 Factory；
+   `SqliteDatabase` 或后端构造器；
 3. `session_search` 使用 `storage.session.search(...)`，不单独打开 SQLite；
 4. Profile 创建和其它命令都通过 Manager 的窄入口申请能力；
 5. 工具只获得自身职责需要的读、写或搜索能力。
@@ -331,22 +325,28 @@ SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径�
 完成条件：Runtime、RPC、CLI 和工具的生产路径不再导入 `SqliteDatabase` 或 `rusqlite`。
 
 **执行记录（2026-09-14，M6 CLI 入口迁移）：** CLI 的 `CliStorageContext` 已从持有
-`StorageFactory` 改为持有 Profile 级 `StorageManager`；Session 创建、查询、搜索和
+`StorageManager` 改为持有 Profile 级 `StorageManager`；Session 创建、查询、搜索和
 生命周期命令分别使用 `WriteStorage`/`ReadStorage`，Profile 创建通过显式
 `initialize()` 执行 migration。Runtime、RPC 和工具的生产入口均不再依赖具体数据库
-连接或 `SqliteDatabase`；CLI/RPC selector 的统一收口和 Factory 兼容接口删除留在 M7。
+连接或 `SqliteDatabase`；CLI/RPC selector 的统一收口和 Factory 兼容接口删除已在 M7 完成。
 
 ### M7：删除过渡路径
 
 工作：
 
-1. 删除上层对 `StorageFactory` 的长期字段和闭包传播；
+1. 删除上层对后端构造器的长期字段和闭包传播；
 2. 删除仅为兼容旧调用方保留的 Session 端口 re-export 和自由函数；
 3. 删除 CLI/RPC 各自的后端 selector，统一使用 `create_storage_manager`；
 4. 更新 crate 文档、R3 计划和架构图；
 5. 检查依赖图，避免 Manager 反向依赖 CLI、RPC 或 Runtime。
 
 完成条件：代码中只有 selector、Manager 构造和 adapter 可以看到具体后端类型。
+
+**执行记录（2026-09-15）：** 已删除 `StorageFactory`、`SqliteStorageFactory` 及旧的
+`StorageDependencies` 聚合；Runtime、Tools 和 RPC selector 的 Factory 兼容构造、闭包传播
+和独立 selector 均已移除。共享 `sagent_store::create_storage_manager` 统一返回
+`Arc<dyn StorageManager>`；测试装配改用 `Storage`/`ReadStorage` 或 `SqliteStorageManager`。
+全量搜索确认上层生产代码不再引用 Factory 或旧依赖类型。
 
 ### M8：综合验证与 R3.5 结项
 
@@ -378,7 +378,7 @@ SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径�
 | 为统一 API 把所有业务方法塞进 Manager | Manager 只创建领域 Storage，CRUD 留在 `storage.session` |
 | 读写对象意外共享可变端口 | 使用 `ReadStorage`/`WriteStorage` 和 Actor 独占依赖 |
 | SQLite 实现细节泄漏到上层 | 在 adapter 组装边界封装 `SqliteDatabase`，contract 检查上层依赖 |
-| Factory 与 Manager 长期并存 | 先 selector 切换，再删除上层 Factory 字段和闭包 |
+| 后端构造器与 Manager 长期并存 | 先 selector 切换，再删除上层构造器字段和闭包 |
 | 为了抽象破坏事务边界 | 以高层业务方法为原子单元，禁止拆成多次上层调用 |
 | 未来领域尚未存在却提前建空模块 | 只有出现真实调用方时才增加 Event/Cron/Memory Storage |
 
@@ -396,7 +396,7 @@ git diff --check
 影响 Store、Runtime、RPC、CLI 或工具边界时，还必须检查：
 
 ```powershell
-rg -n "Store::|use rusqlite|StorageFactory" crates/sagent-runtime crates/sagent-rpc crates/sagent-cli/src crates/sagent-tools -g '*.rs'
+rg -n "Store::|use rusqlite|StorageFactory" crates/sagent-runtime/src crates/sagent-rpc/src crates/sagent-cli/src crates/sagent-tools/src -g '*.rs'
 ```
 
 最终目标是：上层只看到 `StorageManager`、`Storage` 和业务 Storage，Session 操作统一通过

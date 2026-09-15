@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use sagent_agent::SessionCommand;
 use sagent_provider::ModelProvider;
-use sagent_store::{NewDaemonEvent, StorageDependencies};
+use sagent_store::{NewDaemonEvent, Storage};
 use sagent_types::{SessionId, TurnId};
 use tokio::sync::{broadcast, mpsc};
 
@@ -48,7 +48,7 @@ impl SessionActor {
     /// 创建不启动 worker 的 Actor；单测可直接驱动提交边界和 mailbox 状态机。
     pub(crate) fn new(
         session_id: SessionId,
-        storage: impl Into<StorageDependencies>,
+        storage: impl Into<Storage>,
         command_rx: mpsc::Receiver<ActorInput>,
         command_tx: mpsc::Sender<ActorInput>,
         event_tx: broadcast::Sender<RuntimeEvent>,

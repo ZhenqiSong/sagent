@@ -14,8 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::database::SqliteDatabase;
 use crate::{
-    ReadOnlySessionStorage, ReadStorage, SessionStorage, Storage, StorageDependencies,
-    StorageReadDependencies, StorageResult, WriteStorage,
+    ReadOnlySessionStorage, ReadStorage, SessionStorage, Storage, StorageResult, WriteStorage,
 };
 
 mod events;
@@ -76,12 +75,6 @@ pub(crate) fn write_storage_from_database(database: SqliteDatabase) -> WriteStor
     }))
 }
 
-/// 将 SQLite 数据库句柄包装为兼容期的完整领域端口集合。
-fn storage_dependencies_from_database(database: SqliteDatabase) -> StorageDependencies {
-    let (write, query, search) = ports_from_database(database);
-    StorageDependencies::new(write, query, search)
-}
-
 /// 为完整 Actor 存储一次性装配共享数据库句柄，保证写入、查询和搜索看到同一资源。
 fn ports_from_database(
     database: SqliteDatabase,
@@ -102,23 +95,17 @@ fn ports_from_database(
     )
 }
 
-/// 兼容期 Factory 使用的 SQLite 端口转换，不向上层暴露连接细节。
-impl From<SqliteDatabase> for StorageDependencies {
+/// 将 SQLite 数据库句柄转换为完整业务存储，供测试和 adapter 装配边界使用。
+impl From<SqliteDatabase> for Storage {
     fn from(database: SqliteDatabase) -> Self {
-        storage_dependencies_from_database(database)
+        storage_from_database(database)
     }
 }
 
 /// 只读 SQLite 句柄只能转换为查询和搜索端口，不能获得写入能力。
-impl From<SqliteDatabase> for StorageReadDependencies {
+impl From<SqliteDatabase> for ReadStorage {
     fn from(database: SqliteDatabase) -> Self {
-        let shared = Arc::new(Mutex::new(database));
-        StorageReadDependencies::new(
-            SqliteSessionQueryStorage {
-                database: Arc::clone(&shared),
-            },
-            SqliteSearchStorage { database: shared },
-        )
+        read_storage_from_database(database)
     }
 }
 

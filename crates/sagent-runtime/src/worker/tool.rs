@@ -4,7 +4,7 @@
 //! RuntimeEvent。Provider 的原始 `call_id` 在结果中保留；底层工具需要的本地
 //! `ToolCallId` 仅用于进程跟踪和结果构造，不能暴露为上游调用 ID。
 
-use sagent_store::{StorageFactory, StorageManager};
+use sagent_store::StorageManager;
 use sagent_tools::{
     ReadFileLimits, ReadFileRequest, ReadFileService, SessionSearchRequest, SessionSearchService,
     TerminalExecutor, TerminalLimits, TerminalRequest, ToolResult, WorkspaceRoot, WriteFileLimits,
@@ -92,18 +92,6 @@ impl ToolWorker {
     ) -> Self {
         self.session_search = Some(SessionSearchService::from_storage_manager(
             storage_manager,
-            Default::default(),
-        ));
-        self
-    }
-
-    /// 绑定迁移期的搜索 Factory；正式生产路径应使用 `with_session_search_manager`。
-    pub fn with_session_search_factory(
-        mut self,
-        storage_factory: std::sync::Arc<dyn StorageFactory>,
-    ) -> Self {
-        self.session_search = Some(SessionSearchService::from_storage_factory(
-            storage_factory,
             Default::default(),
         ));
         self
@@ -405,10 +393,10 @@ mod tests {
             .expect("应能写入搜索消息");
         drop(store);
 
-        let factory = std::sync::Arc::new(
-            sagent_store::SqliteStorageFactory::new(&database).expect("测试数据库路径应有效"),
+        let manager = std::sync::Arc::new(
+            sagent_store::SqliteStorageManager::new(&database).expect("测试数据库路径应有效"),
         );
-        let worker = worker.with_session_search_factory(factory);
+        let worker = worker.with_session_search_manager(manager);
         let plans = dispatcher
             .plan(vec![ToolCall {
                 call_id: "call_search_1".into(),

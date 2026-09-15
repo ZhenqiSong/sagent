@@ -213,8 +213,8 @@ config.yaml → ProfileConfig → StorageDescriptor → selector → StorageMana
 同一个 Profile 只创建一个长期 `StorageManager`。配置不得在 Service、Handler、Actor 或
 每次查询中重复读取。
 
-`StorageFactory` 只能存在于 bootstrap/selector 或 Manager 构造边界；业务对象不得长期持有
-或传播原始 Factory。
+后端构造只允许位于 bootstrap/selector 和具体 Manager adapter 边界；业务对象不得长期持有
+或传播数据库构造器。
 
 ## 5. Service、Handler 和 Actor 规范
 
@@ -363,7 +363,7 @@ session_search_hides_rewound_messages
 7. 是否只在 bootstrap/selector 读取配置和创建 Manager？
 8. 读写权限是否按最小能力分离？
 9. 跨表操作是否仍是一个高层原子 Storage 方法？
-10. 是否删除了重复的 Factory、配置读取和自由函数路径？
+10. 是否删除了重复的后端构造器、配置读取和自由函数路径？
 11. 文件、函数、测试文件是否超过规模阈值？
 12. 新增 public item 是否有中文 Rustdoc？
 13. 测试是否验证行为契约而非源码形状？
@@ -381,5 +381,5 @@ git diff --check
 影响存储边界时，额外检查上层是否仍依赖具体实现：
 
 ```powershell
-rg -n "Store::|use rusqlite|StorageFactory" crates/sagent-runtime crates/sagent-rpc crates/sagent-cli/src crates/sagent-tools -g '*.rs'
+rg -n "Store::|use rusqlite|StorageFactory" crates/sagent-runtime/src crates/sagent-rpc/src crates/sagent-cli/src crates/sagent-tools/src -g '*.rs'
 ```

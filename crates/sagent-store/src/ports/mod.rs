@@ -3,8 +3,6 @@
 //! 端口只描述 Runtime、RPC、CLI 和工具需要的行为，不包含 SQL、连接、文件路径或
 //! 具体数据库类型。不同后端应在各自 adapter 中实现这些端口。
 
-mod dependencies;
-mod factory;
 mod manager;
 mod query;
 mod read_storage;
@@ -17,8 +15,6 @@ mod write_storage;
 #[cfg(test)]
 mod storage_tests;
 
-pub use dependencies::{StorageDependencies, StorageReadDependencies, StorageWriteDependencies};
-pub use factory::StorageFactory;
 pub use manager::StorageManager;
 pub use query::SessionQueryStorage;
 pub use read_storage::ReadOnlySessionStorage;

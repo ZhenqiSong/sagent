@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use sagent_config::{
     SagentPaths, load_profile_config, normalize_profile_name, resolve_active_paths,
 };
-use sagent_store::{ReadStorage, SqliteStorageManager, StorageManager, WriteStorage};
+use sagent_store::{ReadStorage, StorageManager, WriteStorage, create_storage_manager};
 
 /// 一条 CLI 命令作用域内的存储装配上下文。
 ///
@@ -51,19 +51,12 @@ impl CliStorageContext {
 
 /// 根据已解析的 Profile 配置创建 CLI 作用域内的存储 Manager。
 ///
-/// 当前后端能力只支持 SQLite，因此 selector 在 CLI 边界绑定 SQLite adapter；远程、只读
-/// 策略和未实现的 descriptor 组合会在这里 fail-closed，不会静默回退到 `state.db`。
+/// 当前后端能力只支持 SQLite；远程、只读策略和未实现的 descriptor 组合由共享 selector
+/// fail-closed，不会静默回退到 `state.db`。
 fn manager_from_paths(paths: &SagentPaths) -> Result<Arc<dyn StorageManager>> {
     let config = load_profile_config(paths).context("读取当前 Profile 配置失败")?;
     let descriptor = config.get_storage_descriptor();
-    descriptor
-        .ensure_legacy_bootstrap_supported()
-        .context("当前 Profile 存储配置不可用")?;
-    let database_path = descriptor
-        .resolve_sqlite_database_path(paths)
-        .context("解析当前 Profile 数据库路径失败")?;
-    let manager = SqliteStorageManager::new(database_path).context("创建 SQLite 存储管理器失败")?;
-    Ok(Arc::new(manager))
+    create_storage_manager(paths, descriptor).context("创建当前 Profile 存储管理器失败")
 }
 
 /// 根据已解析的 Profile 路径创建一条 CLI 命令使用的存储上下文。

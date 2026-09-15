@@ -38,13 +38,6 @@ impl SessionStorage {
         }
     }
 
-    pub(super) fn from_parts(
-        write: Box<dyn SessionWriteStorage>,
-        read: ReadOnlySessionStorage,
-    ) -> Self {
-        Self { write, read }
-    }
-
     pub(super) fn into_parts(
         self,
     ) -> (

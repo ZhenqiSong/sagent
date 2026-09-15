@@ -32,13 +32,6 @@ impl ReadOnlySessionStorage {
         }
     }
 
-    pub(super) fn from_parts(
-        query: Box<dyn SessionQueryStorage>,
-        search: Box<dyn SearchStorage>,
-    ) -> Self {
-        Self { query, search }
-    }
-
     pub(super) fn into_parts(self) -> (Box<dyn SessionQueryStorage>, Box<dyn SearchStorage>) {
         (self.query, self.search)
     }

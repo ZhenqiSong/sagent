@@ -8,10 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sagent_provider::ModelProvider;
-use sagent_store::{
-    SessionQueryStorage, Storage, StorageDependencies as DomainStorageDependencies, StorageFactory,
-    StorageManager,
-};
+use sagent_store::{SessionQueryStorage, Storage, StorageManager};
 use sagent_types::SessionId;
 use tokio::sync::{broadcast, mpsc};
 
@@ -33,21 +30,24 @@ type ActorStorageProvider = Arc<dyn Fn() -> Result<Storage, String> + Send + Syn
 type QueryStorageProvider =
     Arc<dyn Fn() -> Result<Box<dyn SessionQueryStorage>, String> + Send + Sync>;
 
-/// 负责为每个 actor 创建独占领域存储端口的运行时依赖。
-pub(crate) struct RuntimeStorageDependencies {
+/// 负责为每个 Actor 创建独占业务存储和查询端口的运行时提供器。
+pub(crate) struct RuntimeStorageProviders {
     pub(crate) actor_storage_provider: ActorStorageProvider,
     query_storage_provider: QueryStorageProvider,
 }
 
-impl RuntimeStorageDependencies {
-    /// 从兼容期的具体存储工厂创建运行时依赖。
-    fn from_factory<F, D>(factory: F) -> Self
+impl RuntimeStorageProviders {
+    /// 从存储提供器创建运行时依赖。
+    ///
+    /// 提供器只负责在 Actor 创建边界返回一个完整业务 `Storage`；数据库类型、连接
+    /// 生命周期和后端选择均由 `StorageManager` 或测试装配代码隐藏。
+    fn from_provider<F, D>(provider: F) -> Self
     where
         F: Fn() -> Result<D, String> + Send + Sync + 'static,
-        D: Into<DomainStorageDependencies> + 'static,
+        D: Into<Storage> + 'static,
     {
         let actor_storage_provider: ActorStorageProvider =
-            Arc::new(move || factory().map(Into::into).map(Storage::from_dependencies));
+            Arc::new(move || provider().map(Into::into));
         let query_storage_provider =
             query_provider_from_actor_provider(Arc::clone(&actor_storage_provider));
         Self {
@@ -56,16 +56,10 @@ impl RuntimeStorageDependencies {
         }
     }
 
-    /// 从抽象 StorageFactory 创建一个只属于当前 actor 的存储依赖。
-    fn from_storage_factory(factory: Arc<dyn StorageFactory>) -> Self {
-        Self::from_factory(move || factory.create().map_err(|error| error.to_string()))
-    }
-
     /// 从 Profile 级 Manager 创建 Actor 独占存储和连接级只读查询端口。
     ///
     /// Actor 与查询使用 Manager 的不同申请入口：前者取得完整 `Storage`，后者只能
-    /// 取得 `ReadStorage` 中的查询端口。这样迁移期仍可让 Actor 构造边界消费旧依赖，
-    /// 但不会为了查询而打开可写端口。
+    /// 取得 `ReadStorage` 中的查询端口，避免为了查询而打开可写端口。
     fn from_storage_manager(manager: Arc<dyn StorageManager>) -> Self {
         let actor_manager = Arc::clone(&manager);
         let actor_storage_provider: ActorStorageProvider = Arc::new(move || {
@@ -95,8 +89,7 @@ impl RuntimeStorageDependencies {
     ///
     /// 查询服务不能借用某个 Actor 的写入端口：Actor 退出、切换会话或关闭 mailbox
     /// 都不应影响已经建立的 RPC 连接。因此这里仍创建连接级端口，但创建入口由同一
-    /// 份运行时依赖统一管理，避免 Bootstrap 再保存一条独立的数据库装配路径。Factory
-    /// 兼容路径和 Manager 路径都遵守这一边界。
+    /// 份运行时依赖统一管理，避免 Bootstrap 再保存一条独立的数据库装配路径。
     pub(crate) fn create_query_storage(
         &self,
     ) -> Result<Box<dyn SessionQueryStorage>, RuntimeError> {
@@ -104,7 +97,7 @@ impl RuntimeStorageDependencies {
     }
 }
 
-/// 为兼容期 Factory 派生只读查询闭包；Manager 路径使用独立的 `open_read_storage`。
+/// 从 Actor 存储提供器派生只读查询闭包；Manager 路径也使用独立的 `open_read_storage`。
 fn query_provider_from_actor_provider(
     actor_storage_provider: ActorStorageProvider,
 ) -> QueryStorageProvider {
@@ -166,37 +159,24 @@ impl Default for RuntimePolicy {
 /// 该对象只在 bootstrap 或测试装配阶段按值构建；交给 Supervisor 后不可再修改，
 /// 从而避免活跃 Session 在 Turn 中途更换 Provider、工具集合或审批策略。
 pub struct SessionSupervisorDependencies {
-    storage: RuntimeStorageDependencies,
+    storage: RuntimeStorageProviders,
     model: ModelRuntime,
     tools: ToolRuntime,
     policy: RuntimePolicy,
 }
 
 impl SessionSupervisorDependencies {
-    /// 从每 actor 独占的存储工厂创建默认依赖集合。
+    /// 从每个 Actor 独占的存储提供器创建默认依赖集合。
     ///
     /// Provider 与工具依赖默认缺失，以支持只读 RPC、空会话和测试；一旦注入，配置
     /// 会在 Supervisor 接管时冻结。
-    pub fn new<F, D>(storage_factory: F) -> Self
+    pub fn new<F, D>(storage_provider: F) -> Self
     where
         F: Fn() -> Result<D, String> + Send + Sync + 'static,
-        D: Into<DomainStorageDependencies> + 'static,
+        D: Into<Storage> + 'static,
     {
         Self {
-            storage: RuntimeStorageDependencies::from_factory(storage_factory),
-            model: ModelRuntime::Unconfigured,
-            tools: ToolRuntime::Disabled,
-            policy: RuntimePolicy::default(),
-        }
-    }
-
-    /// 从抽象 `StorageFactory` 创建运行时依赖集合。
-    ///
-    /// Factory 会在每个 Actor 创建时生成新的端口集合；Runtime 只保存 Factory 的
-    /// 抽象句柄，不保存数据库路径、连接或具体 SQLite 数据库句柄。
-    pub fn from_storage_factory(factory: Arc<dyn StorageFactory>) -> Self {
-        Self {
-            storage: RuntimeStorageDependencies::from_storage_factory(factory),
+            storage: RuntimeStorageProviders::from_provider(storage_provider),
             model: ModelRuntime::Unconfigured,
             tools: ToolRuntime::Disabled,
             policy: RuntimePolicy::default(),
@@ -206,11 +186,10 @@ impl SessionSupervisorDependencies {
     /// 从 Profile 级 `StorageManager` 创建运行时依赖集合。
     ///
     /// Manager 由 bootstrap 持有并可被多个 Actor 共享；每个 Actor 和 RPC 查询仍通过
-    /// 独立申请入口取得自己的存储对象。该构造函数是 Runtime 从 Factory 迁移到 Manager
-    /// 的正式边界，旧的 `from_storage_factory` 仅为兼容期保留。
+    /// 独立申请入口取得自己的存储对象。
     pub fn from_storage_manager(manager: Arc<dyn StorageManager>) -> Self {
         Self {
-            storage: RuntimeStorageDependencies::from_storage_manager(manager),
+            storage: RuntimeStorageProviders::from_storage_manager(manager),
             model: ModelRuntime::Unconfigured,
             tools: ToolRuntime::Disabled,
             policy: RuntimePolicy::default(),
@@ -276,7 +255,7 @@ impl SessionSupervisorDependencies {
 /// 此类型不公开，防止 transport 或业务层绕过 `SessionSupervisorDependencies` 在运行中拼接
 /// 不完整依赖；它只处理 actor 构造，不拥有 actor 的启动、停止或映射关系。
 pub(crate) struct SessionActorFactory {
-    storage: RuntimeStorageDependencies,
+    storage: RuntimeStorageProviders,
     model: ModelRuntime,
     tools: ToolRuntime,
     policy: RuntimePolicy,
@@ -327,9 +306,9 @@ mod tests {
 
     use sagent_store::{SqliteStorageManager, StorageManager};
 
-    use super::RuntimeStorageDependencies;
+    use super::RuntimeStorageProviders;
 
-    /// Manager 路径必须能分别提供 Actor 完整存储和查询只读端口，且不依赖旧 Factory。
+    /// Manager 路径必须能分别提供 Actor 完整存储和查询只读端口。
     #[test]
     fn manager_dependencies_open_actor_and_query_storage() {
         let database_path =
@@ -343,7 +322,7 @@ mod tests {
         manager
             .initialize()
             .expect("Manager 应能初始化 SQLite schema");
-        let dependencies = RuntimeStorageDependencies::from_storage_manager(manager);
+        let dependencies = RuntimeStorageProviders::from_storage_manager(manager);
 
         // Act：两个申请入口分别创建完整 Actor 存储和只读查询端口。
         let actor_storage = dependencies.create().expect("Manager 应能提供 Actor 存储");

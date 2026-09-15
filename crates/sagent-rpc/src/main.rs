@@ -12,8 +12,6 @@ mod runtime_bootstrap;
 mod service;
 #[path = "transport/stdio.rs"]
 mod stdio;
-#[path = "bootstrap/storage_factory.rs"]
-mod storage_factory;
 #[path = "transport/websocket.rs"]
 mod websocket;
 

@@ -2,7 +2,7 @@
 
 use std::{fmt, sync::Arc};
 
-use sagent_store::{MessageSearchQuery, SearchStorage, StorageFactory, StorageManager};
+use sagent_store::{MessageSearchQuery, SearchStorage, StorageManager};
 use sagent_types::SessionId;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -69,8 +69,8 @@ type SearchStorageProvider = Arc<dyn Fn() -> Result<Box<dyn SearchStorage>, Stri
 /// 绑定单个 Profile 搜索能力的只读搜索服务。
 ///
 /// 服务只保存搜索能力提供器，不保存数据库路径或连接；每次搜索创建短生命周期端口，
-/// 使不同 Actor/连接不会共享后端连接，也不能通过参数切换 Profile。Manager 和迁移期
-/// Factory 都在构造阶段收敛成同一个窄搜索端口。
+/// 使不同 Actor/连接不会共享后端连接，也不能通过参数切换 Profile。Manager 在构造
+/// 阶段收敛成窄搜索端口。
 #[derive(Clone)]
 pub struct SessionSearchService {
     search_storage_provider: SearchStorageProvider,
@@ -101,21 +101,6 @@ impl SessionSearchService {
                 .open_read_storage()
                 .map_err(|error| error.to_string())?;
             let (_query, search) = storage.into_parts();
-            Ok(search)
-        });
-        Self::from_provider(search_storage_provider, limits)
-    }
-
-    /// 从迁移期 Factory 创建会话搜索服务；仅供旧调用方过渡使用。
-    pub fn from_storage_factory(
-        storage_factory: Arc<dyn StorageFactory>,
-        limits: SessionSearchLimits,
-    ) -> Self {
-        let search_storage_provider: SearchStorageProvider = Arc::new(move || {
-            let dependencies = storage_factory
-                .create()
-                .map_err(|error| error.to_string())?;
-            let (_write, _query, search) = dependencies.into_parts();
             Ok(search)
         });
         Self::from_provider(search_storage_provider, limits)
@@ -263,9 +248,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use sagent_store::{
-        NewMessage, NewSession, SqliteDatabase, SqliteStorageFactory, SqliteStorageManager,
-    };
+    use sagent_store::{NewMessage, NewSession, SqliteDatabase, SqliteStorageManager};
     use sagent_types::{MessageId, SessionId, ToolCallId};
     use tokio_util::sync::CancellationToken;
 
@@ -310,10 +293,6 @@ mod tests {
         (path, session)
     }
 
-    fn factory(path: &std::path::Path) -> Arc<dyn sagent_store::StorageFactory> {
-        Arc::new(SqliteStorageFactory::new(path).expect("测试数据库路径应为绝对路径"))
-    }
-
     #[tokio::test]
     async fn searches_cjk_with_stable_ids_and_bounded_snippet() {
         let (path, session) = fixture();
@@ -340,8 +319,8 @@ mod tests {
     #[tokio::test]
     async fn rejects_empty_and_pre_cancelled_queries_without_store_side_effects() {
         let (path, _) = fixture();
-        let service =
-            SessionSearchService::from_storage_factory(factory(&path), Default::default());
+        let manager = Arc::new(SqliteStorageManager::new(&path).expect("测试数据库路径应有效"));
+        let service = SessionSearchService::from_storage_manager(manager, Default::default());
         let empty = service
             .search(
                 ToolCallId::new(),

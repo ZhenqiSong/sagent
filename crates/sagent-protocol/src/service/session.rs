@@ -177,7 +177,7 @@ impl From<StoredMessage> for SessionMessageDto {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use sagent_store::{NewMessage, NewSession, StorageDependencies};
+    use sagent_store::{NewMessage, NewSession, ReadStorage};
     use sagent_types::SessionId;
 
     use super::{DEFAULT_PAGE_LIMIT, SessionReadService, SessionService, store_error};
@@ -227,7 +227,7 @@ mod tests {
 
     fn query_service(path: &std::path::Path) -> SessionService {
         let store = sagent_store::SqliteDatabase::open_readonly(path).expect("应能只读打开数据库");
-        let (_session, query, _search) = StorageDependencies::from(store).into_parts();
+        let (query, _search) = ReadStorage::from(store).into_parts();
         SessionService::new_boxed(query)
     }
 

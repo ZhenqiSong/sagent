@@ -1,6 +1,6 @@
 //! SQLite 后端实现的模块地图。
 //!
-//! `sqlite` 统一收纳连接生命周期、schema/migration、Manager/Factory 以及按领域划分的
+//! `sqlite` 统一收纳连接生命周期、schema/migration、Manager 以及按领域划分的
 //! Session 持久化实现。上层只通过 `sagent_store` 根模块导出的抽象 Storage 和兼容期
 //! 类型访问本包；连接、SQL 和表模型不跨出这个后端边界。
 //!
@@ -11,14 +11,12 @@
 //! 作者：SongZQ
 
 mod database;
-mod factory;
 mod manager;
 mod migration;
 mod schema;
 mod session;
 
 pub use database::SqliteDatabase;
-pub use factory::SqliteStorageFactory;
 pub use manager::SqliteStorageManager;
 
 pub use migration::SCHEMA_VERSION;

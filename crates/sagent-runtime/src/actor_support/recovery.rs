@@ -175,8 +175,8 @@ fn turn_events(
 mod tests {
     use super::plan_recovery;
     use sagent_store::{
-        NewDaemonEvent, NewGeneration, NewMessage, NewSession, SqliteDatabase, StartTurn,
-        StorageDependencies,
+        NewDaemonEvent, NewGeneration, NewMessage, NewSession, ReadStorage, SqliteDatabase,
+        StartTurn,
     };
     use sagent_types::{SessionId, TurnId};
 
@@ -252,8 +252,8 @@ mod tests {
             })
             .expect("应能写入审批事实");
 
-        let dependencies = StorageDependencies::from(store);
-        let plan = plan_recovery(dependencies.query(), &session_id)
+        let (query, _search) = ReadStorage::from(store).into_parts();
+        let plan = plan_recovery(query.as_ref(), &session_id)
             .expect("恢复计划应可读取")
             .expect("应存在 running Turn");
         assert_eq!(plan.unresolved_tools.len(), 1);
@@ -261,7 +261,6 @@ mod tests {
             plan.unresolved_tools[0].error_kind,
             "approval_interrupted_by_restart"
         );
-        drop(dependencies);
         let _ = std::fs::remove_file(path);
     }
 }

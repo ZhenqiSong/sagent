@@ -2,26 +2,26 @@
 //!
 //! 端口模块只表达业务持久化行为；`sqlite` 包统一封装 SQLite 连接、事务、migration
 //! 和按领域划分的适配器。上层 Runtime、RPC、CLI 和工具应通过 `StorageManager` 按职责
-//! 获取端口，`StorageFactory` 只停留在 bootstrap/selector 构造边界，避免把具体数据库
-//! 路径或连接生命周期扩散到业务编排代码。
+//! 获取业务存储，避免把具体数据库路径或连接生命周期扩散到业务编排代码。
 //!
 //! 作者：SongZQ
 //! 创建日期：2026-08-29
 
 pub mod ports;
+mod selector;
 mod sqlite;
 
 pub use ports::{
     ReadOnlySessionStorage, ReadStorage, SearchStorage, SessionQueryStorage, SessionStorage,
-    SessionWriteStorage, Storage, StorageDependencies, StorageFactory, StorageManager,
-    StorageReadDependencies, StorageResult, StorageWriteDependencies, WriteOnlySessionStorage,
+    SessionWriteStorage, Storage, StorageManager, StorageResult, WriteOnlySessionStorage,
     WriteStorage,
 };
+pub use selector::create_storage_manager;
 pub use sqlite::{
     DatabaseInfo, MessageQuery, MessageSearchQuery, MessageWindow, NewGeneration, NewMessage,
     NewSession, RestoreResult, RetryCheckpoint, RewindCheckpoint, RewindResult, SCHEMA_VERSION,
-    SessionListQuery, SqliteDatabase, SqliteStorageFactory, SqliteStorageManager, StartTurn,
-    StoredGeneration, StoredRunningTurn,
+    SessionListQuery, SqliteDatabase, SqliteStorageManager, StartTurn, StoredGeneration,
+    StoredRunningTurn,
 };
 pub use sqlite::{
     EVENT_APPROVAL_REQUESTED, EVENT_APPROVAL_RESOLVED, EVENT_APPROVAL_TIMED_OUT,

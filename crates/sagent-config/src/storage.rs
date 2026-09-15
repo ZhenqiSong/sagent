@@ -1,7 +1,7 @@
 //! Profile 级存储意图描述。
 //!
 //! 本模块只负责把配置文件中的存储选择解析为不可变 descriptor；它不打开数据库、
-//! 创建连接或读取远程凭据。真正的后端选择和连接创建属于后续 StorageFactory/Bootstrap。
+//! 创建连接或读取远程凭据。真正的后端选择和连接创建属于 StorageManager/Bootstrap。
 
 use std::path::PathBuf;
 
@@ -20,7 +20,7 @@ pub enum StorageKind {
     /// Profile 本地 SQLite 文件；未配置 storage 时的默认后端。
     #[default]
     Sqlite,
-    /// 由后续 StorageFactory 创建的远程存储连接。
+    /// 由后续 StorageManager 创建的远程存储连接。
     ///
     /// 当前阶段只解析其连接引用，不代表远程后端已经可用；Bootstrap 在后续工作包
     /// 接入具体实现前必须显式拒绝该类型，不能静默回退到 SQLite。
@@ -29,7 +29,7 @@ pub enum StorageKind {
 
 /// 描述 Profile 应使用哪一种持久化后端及其非秘密定位信息。
 ///
-/// `path` 允许相对 Profile 的路径，后续 StorageFactory 负责将其锚定到
+/// `path` 允许相对 Profile 的路径，后续 StorageManager 负责将其锚定到
 /// [`crate::SagentPaths::sagent_home`]；`connection_env` 只保存凭据/连接串的
 /// 环境变量名，绝不保存环境变量值。该类型不执行 I/O，因此可安全用于配置校验和公开
 /// capability 计算，但不应直接作为数据库连接使用。

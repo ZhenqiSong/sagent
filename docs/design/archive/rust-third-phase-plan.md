@@ -1,7 +1,7 @@
 # Sagent Rust 第三阶段计划：本地 JSON-RPC 会话服务
 
 作者：SongZQ  
-状态：实施计划  
+状态：历史记录（已完成，已由当前 Phase 3 计划替代）  
 前置条件：第一、二阶段的配置、Profile、SQLite 会话存储和 CLI 会话命令已经可用。
 
 ## 1. 阶段目标

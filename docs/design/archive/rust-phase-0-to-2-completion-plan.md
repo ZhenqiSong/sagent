@@ -298,5 +298,5 @@ Phase 0–2 只有同时满足下列条件才可标记完成：
 - 三平台终端与进程树 smoke 已记录；
 - 无密钥、真实用户文件、开发者 home 或 Python runtime 成为测试/生产依赖。
 
-完成后，下一步是 [Phase 3：能力扩展与本地多客户端接入](rust-phase-3-plan.md)，覆盖
+完成后，下一步是 [Phase 3：能力扩展与本地多客户端接入](../rust-phase-3-plan.md)，覆盖
 MCP、memory、cron、delegation、多 Provider 路由与 Desktop/Web attach。

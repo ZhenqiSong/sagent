@@ -2,7 +2,7 @@
 
 作者：SongZQ  
 适用范围：`sagent` 全部 Rust crate、生产代码、测试和文档  
-关联计划：[StorageManager 重构执行计划](rust-storage-manager-execution-plan.md)
+关联计划：[StorageManager 重构执行计划](archive/rust-storage-manager-execution-plan.md)
 
 ## 1. 总原则
 

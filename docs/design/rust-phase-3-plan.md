@@ -9,9 +9,11 @@ Phase 3 的功能继续堆叠到现有大对象和具体基础设施实现中。
 
 ## 1. 定位、命名与目标
 
-本计划是 [Phase 0–2 收尾计划](rust-phase-0-to-2-completion-plan.md) 所称的“下一步
-Phase 3”。仓库中较早的 `rust-third-phase-plan.md` 与 `rust-fourth-phase-*.md` 记录的是
-已经实施过的 RPC/最小 Agent 垂直切片的历史拆分；它们不定义本阶段范围。新工作必须以
+本计划是 [Phase 0–2 收尾计划](archive/rust-phase-0-to-2-completion-plan.md) 所称的“下一步
+Phase 3”。仓库中较早的
+[`rust-third-phase-plan.md`](archive/rust-third-phase-plan.md) 与第四阶段 4.1～4.5
+计划（见 [`docs/design/archive/`](archive/)）记录的是已经实施过的 RPC/最小 Agent
+垂直切片历史拆分；它们不定义本阶段范围。新工作必须以
 本文件的工作包、边界和退出条件为准。
 
 Phase 3 的目标不是堆叠更多工具，而是把 Phase 2 的单 Provider、固定工具集、本地 TUI

@@ -1,6 +1,6 @@
 # Sagent 代码可读性、职责边界与可替换性优化计划
 
-状态：执行中（R0–R2 已完成；R3–R8 待执行）
+状态：执行中（R0–R3.5 已结项；下一工作包为 R4–R8）
 范围：独立 Rust 项目 `sagent` 的既有 Phase 0–2 实现  
 前置：Phase 0–2 已完成；本计划是进入 Phase 3 前的结构治理，不交付 MCP、memory、cron、delegation、Desktop/Web 或新 Provider 功能。
 
@@ -209,11 +209,13 @@ Provider/worker/tool 的非法 `Option` 组合。`submit_prompt` 已按校验、
 
 ### R3：持久化端口与 SQLite 实现隔离
 
+状态：已完成（R3.1–R3.5）
+
 当前进度：R3.1 `StorageDescriptor`、R3.2 `provider.rs` 配置职责拆分、SQLite 默认路径
 降级、R3.3 最小领域存储端口与首个 SQLite adapter 已完成；R3.4 Runtime/RPC/工具和
-CLI 迁移已完成；R3.5 `StorageManager` 框架、调用方迁移和 Factory 过渡路径清理已完成，
-仅剩综合验收。R3.5 的分阶段执行拆分见
-[StorageManager 重构执行计划](rust-storage-manager-execution-plan.md)。
+CLI 迁移已完成；R3.5 `StorageManager` 框架、调用方迁移、Factory 过渡路径清理和综合
+验收已完成。R3.5 的分阶段执行拆分见
+[StorageManager 重构执行计划](archive/rust-storage-manager-execution-plan.md)。
 Runtime Actor、SessionSupervisorDependencies、RPC SessionService、RuntimeService、`session_search`
 以及 CLI 会话/Profile 管理命令均已通过工厂申请领域端口，不再直接依赖 `Store`。
 
@@ -357,6 +359,28 @@ start/commit/complete/interrupt；`storage.kind = sqlite` 保持当前默认行�
 和搜索均通过 manager 申请与其职责匹配的依赖。代码中除 selector、manager 构造和 adapter
 外，不再出现后端构造器的长期持有或传播；SQLite 使用本地 Store、PG 使用连接池
 时，上层调用路径和领域端口签名保持不变。
+
+**R3.5 结项记录（2026-09-15）：**
+
+- [x] `StorageManager` 管理端口提供按职责拆分的 actor/read/write 申请入口；
+- [x] Runtime、RPC、CLI 和工具只持有 manager 或窄领域端口，不再传播原始 Factory；
+- [x] `SessionStorage`、`SessionQueryStorage`、`SearchStorage` 的职责边界保持独立，
+  Actor 写入端口不会被 RPC/工具复用；
+- [x] SQLite 路径、Store/连接生命周期和后端 selector 均封装在 manager/adapter 内，
+  未支持的远程后端 fail-closed，不回退到 SQLite；
+- [x] StorageManager 分阶段执行记录已归档至
+  [`rust-storage-manager-execution-plan.md`](archive/rust-storage-manager-execution-plan.md)。
+
+**R3.5 质量门禁（2026-09-15，Windows）：**
+
+- [x] `cargo fmt --all -- --check`；
+- [x] `cargo test --workspace --offline`；
+- [x] `cargo clippy --workspace --all-targets --offline -- -D warnings`；
+- [x] `git diff --check`；
+- [x] 本地 Markdown 相对链接检查。
+
+R3.5 已完成并关闭。后续如增加 PostgreSQL 或其他持久化后端，只能在既有
+`StorageManager`/adapter 边界内扩展，不重新向 Runtime、RPC、CLI 或工具暴露数据库细节。
 
 ### R4：配置、Provider 与每回合能力快照
 

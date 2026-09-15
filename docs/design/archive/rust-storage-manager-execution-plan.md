@@ -1,7 +1,7 @@
 # Sagent StorageManager 重构执行计划
 
 作者：SongZQ  
-状态：M0、M1、M2、M3、M4.1、M5、M6、M7 已完成；M8 综合验证与 R3.5 结项待执行
+状态：M0、M1、M2、M3、M4.1、M5、M6、M7、M8 已完成；R3.5 已结项
 范围：R3.5 StorageManager 领域存储聚合与后端隔离
 
 ## 1. 背景与问题
@@ -360,6 +360,15 @@ SQLite 相对路径或默认文件名解析为 Profile 作用域的绝对路径�
 
 完成条件：R3.5 专项验收全部满足，R3.4 的已有行为无回归。
 
+**执行记录（2026-09-15）：** 已新增 recording `StorageManager` 契约测试，验证每次
+`open_actor_storage()` 都返回独立实例、Session 业务操作按调用顺序到达写入端口，并覆盖
+Manager 的初始化、健康检查、只读和只写申请记录。SQLite Manager 新增跨 Profile 隔离测试，
+并将 `health_check()` 收紧为只读校验 schema 版本和 FTS5 索引；空数据库、缺失数据库和
+不支持的远程/SQLite 选项均保持 fail-closed。既有真实 SQLite 事务、FTS、schema 损坏和
+读写权限契约测试继续通过。最终执行 `cargo fmt --all -- --check`、`cargo check
+--workspace --all-targets`、`cargo clippy --workspace --all-targets -- -D warnings`、
+`cargo test --workspace -- --test-threads=1` 和 `git diff --check`，全部通过。
+
 ## 7. 不变量与风险控制
 
 ### 7.1 必须保持的不变量
@@ -409,4 +418,5 @@ rg -n "Store::|use rusqlite|StorageFactory" crates/sagent-runtime/src crates/sag
 - 当前已存在的 `StorageManager` 和 `SqliteStorageManager` 只作为过渡骨架，需按本计划的
   `Storage`/业务 Storage 分层重新整理；
 - M0–M4 完成后才开始 Runtime、RPC、CLI 和工具的长期依赖迁移；
-- M8 完成后，R3.5 才能标记为完成。
+- M8 已完成，R3.5 已标记为完成；后续仅在新增远程后端或新领域时沿用本计划的 Manager
+  与业务 Storage 边界。

@@ -2,7 +2,7 @@
 
 作者：SongZQ  
 状态：步骤 0 已完成  
-依据：`rust-fourth-phase-4.5-plan.md`
+依据：[第四阶段 4.5 执行计划](archive/rust-fourth-phase-4.5-plan.md)
 
 本文冻结 4.5 第一版工具、terminal、approval 和 tool-call 回环的行为边界。它是 Rust 实现的契约，不是对 Python 全部工具的复制。
 

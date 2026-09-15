@@ -1,7 +1,7 @@
 # Sagent Rust 第四阶段 4.1 计划：纯 Agent 状态机与 PromptSnapshot
 
 作者：SongZQ  
-状态：实施计划  
+状态：已完成  
 所属阶段：[第四阶段：最小可用 Agent 与交互式 TUI 垂直切片](D:/projects/sagent/docs/design/rust-fourth-phase-plan.md)  
 前置条件：第三阶段的 Profile、SQLite 会话读取、JSON-RPC 只读服务和黑盒测试已经完成。
 

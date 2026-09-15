@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 
 use super::{
     database::SqliteDatabase,
+    migration::SCHEMA_VERSION,
     session::{read_storage_from_database, storage_from_database, write_storage_from_database},
 };
 use crate::{ReadStorage, Storage, StorageManager, StorageResult, WriteStorage};
@@ -56,6 +57,20 @@ impl SqliteStorageManager {
             .context("检查 SQLite 只读存储失败")?;
         Ok(database)
     }
+
+    /// 只读验证业务 schema，避免把可连接但未初始化的 SQLite 文件报告为健康。
+    fn verify_schema(&self, database: &SqliteDatabase) -> Result<()> {
+        let info = database
+            .inspect_schema()
+            .context("检查 SQLite schema 失败")?;
+        if info.schema_version != Some(SCHEMA_VERSION) {
+            bail!("SQLite schema 版本不受支持：{:?}", info.schema_version);
+        }
+        if !info.has_fts5 {
+            bail!("SQLite schema 缺少 FTS5 消息索引");
+        }
+        Ok(())
+    }
 }
 
 impl StorageManager for SqliteStorageManager {
@@ -81,7 +96,8 @@ impl StorageManager for SqliteStorageManager {
 
     /// 只读检查已有 SQLite 数据库，不创建文件或触发 schema migration。
     fn health_check(&self) -> StorageResult<()> {
-        self.open_readonly_database().map(|_| ())
+        let database = self.open_readonly_database()?;
+        self.verify_schema(&database)
     }
 }
 
@@ -89,6 +105,7 @@ impl StorageManager for SqliteStorageManager {
 mod tests {
     use std::{fs, path::PathBuf};
 
+    use rusqlite::Connection;
     use sagent_types::SessionId;
 
     use super::SqliteStorageManager;
@@ -183,6 +200,72 @@ mod tests {
             })
             .expect("Actor 存储应能创建会话");
         assert!(manager.health_check().is_ok());
+        remove(&path);
+    }
+
+    #[test]
+    fn managers_keep_profile_databases_isolated() {
+        let path_a = test_path("profile-a");
+        let path_b = test_path("profile-b");
+        remove(&path_a);
+        remove(&path_b);
+        let manager_a = SqliteStorageManager::new(&path_a).expect("Profile A 路径应有效");
+        let manager_b = SqliteStorageManager::new(&path_b).expect("Profile B 路径应有效");
+        let session_a = SessionId::new("profile-a-session");
+        let session_b = SessionId::new("profile-b-session");
+
+        manager_a
+            .open_write_storage()
+            .expect("Profile A 应能申请写入存储")
+            .session
+            .create_session(&NewSession {
+                id: session_a.clone(),
+                source: Some("profile-a".to_owned()),
+                model: None,
+                title: None,
+                started_at: "2026-09-15T00:00:00Z".to_owned(),
+            })
+            .expect("Profile A 应能写入自己的会话");
+        manager_b
+            .open_write_storage()
+            .expect("Profile B 应能申请写入存储")
+            .session
+            .create_session(&NewSession {
+                id: session_b.clone(),
+                source: Some("profile-b".to_owned()),
+                model: None,
+                title: None,
+                started_at: "2026-09-15T00:00:00Z".to_owned(),
+            })
+            .expect("Profile B 应能写入自己的会话");
+
+        let read_a = manager_a
+            .open_read_storage()
+            .expect("Profile A 应能申请只读存储");
+        let read_b = manager_b
+            .open_read_storage()
+            .expect("Profile B 应能申请只读存储");
+        assert!(read_a.session.get_session(&session_a).unwrap().is_some());
+        assert!(read_a.session.get_session(&session_b).unwrap().is_none());
+        assert!(read_b.session.get_session(&session_b).unwrap().is_some());
+        assert!(read_b.session.get_session(&session_a).unwrap().is_none());
+
+        remove(&path_a);
+        remove(&path_b);
+    }
+
+    #[test]
+    fn health_check_rejects_an_uninitialized_schema_without_migration() {
+        let path = test_path("invalid-schema");
+        remove(&path);
+        Connection::open(&path).expect("应能创建空 SQLite 文件");
+        let manager = SqliteStorageManager::new(&path).expect("绝对路径应能创建管理器");
+
+        let error = manager
+            .health_check()
+            .expect_err("空数据库不应通过 schema 健康检查");
+        assert!(error.to_string().contains("schema"));
+        assert!(path.is_file(), "只读健康检查不得删除或重建数据库文件");
         remove(&path);
     }
 }

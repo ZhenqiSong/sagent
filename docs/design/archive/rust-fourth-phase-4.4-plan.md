@@ -1,7 +1,7 @@
 # Sagent Rust 第四阶段 4.4 计划：Provider 与流式模型接入
 
 作者：SongZQ  
-状态：规划中  
+状态：已完成（步骤 0～9）  
 前置条件：4.1 已完成 Agent 状态机与 PromptSnapshot；4.2 已完成 generation、Turn、消息和事件持久化；4.3 已完成 SessionActor、Supervisor、取消和生命周期管理。
 
 ## 1. 阶段目标
@@ -345,20 +345,20 @@ EOF 无 finish 却标记 completed。
 
 ## 9. 验收清单
 
-- [ ] `sagent-provider` 独立 crate 创建并加入 workspace；
-- [ ] Provider trait 与 DTO 不泄露 HTTP/SSE 类型；
-- [ ] Mock SSE 覆盖正常、半包、EOF、429、5xx 和取消；
-- [ ] OpenAI-compatible adapter 可以流式输出普通文本；
-- [ ] Profile-scoped resolver 正确读取 endpoint/model/key；
-- [ ] API key 不进入日志、消息、事件和错误正文；
-- [ ] Provider 不依赖 Store，不直接写数据库；
-- [ ] Actor 仍是唯一 Turn/Message 写入者；
-- [ ] delta 只作为瞬态事件；
-- [ ] final/failure/cancel 都有唯一终态；
-- [ ] 完成事件发布前 assistant 已可从 Store 读取；
-- [ ] EOF、网络错误、取消不会伪造 assistant final；
-- [ ] 普通回合退出后可以重新打开并恢复；
-- [ ] workspace fmt/test/clippy 全部通过。
+- [x] `sagent-provider` 独立 crate 创建并加入 workspace；
+- [x] Provider trait 与 DTO 不泄露 HTTP/SSE 类型；
+- [x] Mock SSE 覆盖正常、半包、EOF、429、5xx 和取消；
+- [x] OpenAI-compatible adapter 可以流式输出普通文本；
+- [x] Profile-scoped resolver 正确读取 endpoint/model/key；
+- [x] API key 不进入日志、消息、事件和错误正文；
+- [x] Provider 不依赖 Store，不直接写数据库；
+- [x] Actor 仍是唯一 Turn/Message 写入者；
+- [x] delta 只作为瞬态事件；
+- [x] final/failure/cancel 都有唯一终态；
+- [x] 完成事件发布前 assistant 已可从 Store 读取；
+- [x] EOF、网络错误、取消不会伪造 assistant final；
+- [x] 普通回合退出后可以重新打开并恢复；
+- [x] workspace fmt/test/clippy 全部通过。
 
 ## 10. 风险和取舍
 

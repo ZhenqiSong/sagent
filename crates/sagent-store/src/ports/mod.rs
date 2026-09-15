@@ -13,6 +13,8 @@ mod storage;
 mod write_storage;
 
 #[cfg(test)]
+mod manager_tests;
+#[cfg(test)]
 mod storage_tests;
 
 pub use manager::StorageManager;

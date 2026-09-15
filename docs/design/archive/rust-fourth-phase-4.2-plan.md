@@ -1,7 +1,7 @@
 # Sagent Rust 第四阶段 4.2 计划：Turn、Generation 与事件持久化
 
 作者：SongZQ  
-状态：实施计划  
+状态：已完成  
 前置条件：4.1 已完成 `sagent-agent` 的 Turn 状态机、事件、`PromptSnapshot` 与 transcript 不变量；现有 `sagent-store` schema 为 v2。
 
 ## 步骤 0 执行记录
@@ -518,17 +518,17 @@ cargo clippy --workspace --all-targets --offline -- -D warnings
 
 ## 6. 4.2 验收清单
 
-- [ ] 新建 Sagent 数据库直接得到 schema v3；v1/v2 fixture 均能无损升级。
-- [ ] 既有 session/message/FTS/rewind/restore/retry 行为不变。
-- [ ] 每个 turn 绑定一个已存在的 generation。
-- [ ] begin turn 的 user message、turn row、started event 原子提交。
-- [ ] tool 最终结果以普通 tool message 持久化并写入恢复事件。
-- [ ] final assistant message、completed turn outcome、完成事件原子提交。
-- [ ] interrupted/failed turn 没有伪造 assistant final message。
-- [ ] 重复完成不会产生第二条 assistant 消息或第二组完成事件。
-- [ ] 可按 `session_id + sequence` 可靠重放持久化事件。
-- [ ] Store 仍不依赖 `sagent-agent`、provider、runtime、RPC 或 TUI。
-- [ ] workspace 全量测试和 Clippy 通过。
+- [x] 新建 Sagent 数据库直接得到 schema v3；v1/v2 fixture 均能无损升级。
+- [x] 既有 session/message/FTS/rewind/restore/retry 行为不变。
+- [x] 每个 turn 绑定一个已存在的 generation。
+- [x] begin turn 的 user message、turn row、started event 原子提交。
+- [x] tool 最终结果以普通 tool message 持久化并写入恢复事件。
+- [x] final assistant message、completed turn outcome、完成事件原子提交。
+- [x] interrupted/failed turn 没有伪造 assistant final message。
+- [x] 重复完成不会产生第二条 assistant 消息或第二组完成事件。
+- [x] 可按 `session_id + sequence` 可靠重放持久化事件。
+- [x] Store 仍不依赖 `sagent-agent`、provider、runtime、RPC 或 TUI。
+- [x] workspace 全量测试和 Clippy 通过。
 
 完成 4.2 后，下一步才是 4.3：让 `sagent-runtime::SessionActor` 成为每个 session 的唯一写入者，并调用这些 repository API。
 

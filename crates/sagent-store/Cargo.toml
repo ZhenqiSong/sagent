@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+sagent-config={path="../sagent-config"}
 sagent-types={path="../sagent-types"}
 anyhow.workspace=true
 rusqlite={version="0.32", features=["bundled"]}

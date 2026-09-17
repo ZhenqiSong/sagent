@@ -2,7 +2,7 @@
 
 作者：SongZQ  
 日期：2026-09-17  
-状态：R4.0 已完成；R4.1–R4.8 待执行  
+状态：R4.0 已完成；R4.1 执行中；R4.2–R4.8 待执行
 所属总计划：[代码可读性、职责边界与可替换性优化计划](rust-code-quality-and-architecture-optimization-plan.md)  
 前置条件：R0–R3.5 已结项；StorageManager 已成为唯一持久化装配边界。  
 关联阶段：[Phase 3：能力扩展与本地多客户端接入](rust-phase-3-plan.md)
@@ -295,6 +295,14 @@ LegacyGeneration 状态；不得伪造新的 Provider 或把旧数据升级成�
 6. 删除 config crate 对 sagent-provider 的生产依赖，更新 workspace 依赖图和公开导出；
 7. 更新 PublicConfig 测试，保证 endpoint、credential reference、secret value 和路径均不出现在
    JSON 或 Debug。
+
+**已完成子项（2026-09-17）：**
+
+- [x] 新增 parser 专用 `RawProviderConfig`、`RawModelSetting` 和
+  `RawUserProviderConfig`，兼容 alias 不再进入运行时 descriptor；
+- [x] `ProviderDescriptor`、`ModelSetting`、`ModelDetail` 和 `UserProviderConfig` 只保存
+  归一化字段，`name/model`、`api/url/base_url` 和 `key_env/api_key_env` 在 parser 边界合并；
+- [x] 增加 alias 归一化行为测试，确认 ProfileConfig 对外只暴露 canonical 字段。
 
 **验收：** 删除/暂时屏蔽 config.yaml 与 .env 后，已经创建的 ProfileConfig 仍能完成
 descriptor/public summary 相关纯操作；config crate 编译不需要 Provider adapter；无 HTTP、

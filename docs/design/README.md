@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | [`rust-phase-3-plan.md`](rust-phase-3-plan.md) | Phase 3 能力扩展与本地多客户端接入 | 规划中 |
 | [`rust-code-quality-and-architecture-optimization-plan.md`](rust-code-quality-and-architecture-optimization-plan.md) | R4–R8 代码治理与架构优化 | 执行中 |
-| [`rust-r4-provider-capability-plan.md`](rust-r4-provider-capability-plan.md) | R4 配置、Provider 与每回合能力快照 | R4.0 已完成，R4.1 待执行 |
+| [`rust-r4-provider-capability-plan.md`](rust-r4-provider-capability-plan.md) | R4 配置、Provider 与每回合能力快照 | R4.0 已完成，R4.1 执行中 |
 | [`rust-fourth-phase-plan.md`](rust-fourth-phase-plan.md) | 第四阶段总览 | 4.6/4.7 进行中 |
 | [`rust-fourth-phase-4.6-plan.md`](rust-fourth-phase-4.6-plan.md) | 交互 RPC、事件流与 Headless E2E | 执行中 |
 | [`rust-fourth-phase-4.7-plan.md`](rust-fourth-phase-4.7-plan.md) | Ratatui 薄客户端 | 待执行 |

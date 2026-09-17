@@ -23,8 +23,7 @@ pub use paths::{SagentPaths, resolve_active_paths, resolve_paths};
 pub use profile::{Profile, ProfileInfo, ProfileName, normalize_profile_name};
 pub use profile_config::ProfileConfig;
 pub use provider_config::{
-    ModelDetail, ModelSetting, ProviderConfig, ProviderDescriptor, UserProviderConfig,
-    WorkspaceDescriptor,
+    ModelDetail, ModelSetting, ProviderDescriptor, UserProviderConfig, WorkspaceDescriptor,
 };
 pub use provider_resolver::{
     ResolvedProvider, ResolvedProviderConfig, resolve_openai_provider_from_config,

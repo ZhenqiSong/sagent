@@ -4,8 +4,10 @@
 //! 生命周期边界内。它只保存非秘密意图和诊断信息，不创建数据库、Provider、HTTP client
 //! 或后台任务；Bootstrap 将它交给各自 Factory/Resolver 创建运行时实现。
 
+use anyhow::Result;
+
 use crate::{
-    provider_config::{ProviderConfig, ProviderDescriptor, WorkspaceDescriptor},
+    provider_config::{ProviderDescriptor, RawProviderConfig, WorkspaceDescriptor},
     storage::StorageDescriptor,
 };
 
@@ -35,13 +37,17 @@ impl ProfileConfig {
     }
 
     /// 从一次完整文档解析结果组合 Profile 快照。
-    pub(crate) fn from_document(document: ProviderConfig, unknown_fields: Vec<String>) -> Self {
-        Self {
-            storage: document.storage.clone().unwrap_or_default(),
-            provider: document.provider_descriptor(),
-            workspace: document.workspace_descriptor(),
+    pub(crate) fn from_document(
+        document: RawProviderConfig,
+        unknown_fields: Vec<String>,
+    ) -> Result<Self> {
+        let (storage, provider, workspace) = document.into_descriptors()?;
+        Ok(Self {
+            storage,
+            provider,
+            workspace,
             unknown_fields,
-        }
+        })
     }
 }
 
@@ -49,6 +55,7 @@ impl ProfileConfig {
 mod tests {
     use std::fs;
 
+    use crate::{ModelSetting, UserProviderConfig};
     use crate::{
         load_profile_config, read_public_config_from_config, resolve_openai_provider_from_config,
         resolve_paths, resolve_workspace_from_config, test_support::test_root,
@@ -81,5 +88,48 @@ mod tests {
         assert_eq!(public.model.as_deref(), Some("test-model"));
         assert_eq!(provider.model, "test-model");
         fs::remove_dir_all(root).expect("应能清理 snapshot fixture");
+    }
+
+    #[test]
+    fn parser_normalizes_yaml_aliases_before_exposing_provider_descriptor() {
+        let root = test_root("provider-aliases");
+        fs::write(
+            root.join("config.yaml"),
+            "provider: openai-compatible\nmodel:\n  model: nested-model\n  key_env: MODEL_KEY\nbase_url: http://127.0.0.1:1/v1\nkey_env: TOP_LEVEL_KEY\nproviders:\n  backup:\n    url: http://backup.example/v1\n    key_env: BACKUP_KEY\n    model: backup-model\n",
+        )
+        .expect("应能写入 alias fixture");
+
+        let paths = resolve_paths(Some(&root), None).expect("应能解析 Profile 路径");
+        let config = load_profile_config(&paths).expect("alias 应在 parser 层归一化");
+
+        assert_eq!(
+            config.provider.api_key_env.as_deref(),
+            Some("TOP_LEVEL_KEY")
+        );
+        match config.provider.model.as_ref() {
+            Some(ModelSetting::Detail(detail)) => {
+                assert_eq!(detail.model.as_deref(), Some("nested-model"));
+                assert_eq!(detail.api_key_env.as_deref(), Some("MODEL_KEY"));
+            }
+            other => panic!("应保留为规范化 detail model，实际为 {other:?}"),
+        }
+        assert_eq!(
+            config
+                .provider
+                .providers
+                .get("backup")
+                .and_then(UserProviderConfig::endpoint),
+            Some("http://backup.example/v1")
+        );
+        assert_eq!(
+            config
+                .provider
+                .providers
+                .get("backup")
+                .and_then(|provider| provider.api_key_env.as_deref()),
+            Some("BACKUP_KEY")
+        );
+
+        fs::remove_dir_all(root).expect("应能清理 alias fixture");
     }
 }

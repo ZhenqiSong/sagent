@@ -8,7 +8,7 @@ use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 
-use crate::{SagentPaths, profile_config::ProfileConfig, provider_config::ProviderConfig};
+use crate::{SagentPaths, profile_config::ProfileConfig, provider_config::RawProviderConfig};
 
 /// 读取当前 Profile 的配置文本；缺失文件按空配置处理。
 pub(crate) fn read_config_yaml(paths: &SagentPaths, purpose: &str) -> Result<String> {
@@ -25,15 +25,15 @@ pub fn load_profile_config(paths: &SagentPaths) -> Result<ProfileConfig> {
     let content = read_config_yaml(paths, "Profile")?;
     let document = parse_provider_config(&content, &paths.config_yaml)?;
     let unknown_fields = collect_unknown_fields(&content, &paths.config_yaml)?;
-    let config = ProfileConfig::from_document(document, unknown_fields);
+    let config = ProfileConfig::from_document(document, unknown_fields)?;
     config.get_storage_descriptor().validate()?;
     Ok(config)
 }
 
 /// 将已经读取的 YAML 转为 Provider 配置，供公开摘要复用严格反序列化结果。
-pub(crate) fn parse_provider_config(content: &str, path: &Path) -> Result<ProviderConfig> {
+pub(crate) fn parse_provider_config(content: &str, path: &Path) -> Result<RawProviderConfig> {
     if content.trim().is_empty() {
-        return Ok(ProviderConfig::default());
+        return Ok(RawProviderConfig::default());
     }
     serde_yaml::from_str(content)
         .with_context(|| format!("解析 Provider 配置失败：{}", path.display()))

@@ -10,10 +10,14 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use sagent_agent::{PromptToolCall, Transcript};
-use sagent_config::{StorageDescriptor, StorageKind, normalize_profile_name};
+use sagent_config::{
+    StorageDescriptor, StorageKind, load_profile_config, normalize_profile_name,
+    read_public_config_from_config, resolve_paths, resolve_provider_config_from_config,
+};
 use sagent_protocol::{ClientHelloParams, negotiate_hello};
-use sagent_store::SqliteDatabase;
+use sagent_store::{NewGeneration, NewSession, SqliteDatabase};
 use sagent_tools::{CommandRisk, ToolDefinition, ToolRegistry, classify_command};
+use sagent_types::SessionId;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -86,6 +90,8 @@ fn run_fixture(path: &Path) -> Result<()> {
         "profile_name" => profile_name(fixture.input)?,
         "storage_descriptor" => storage_descriptor(fixture.input)?,
         "store_schema" => store_schema(fixture.input)?,
+        "provider_config_snapshot" => provider_config_snapshot(fixture.input)?,
+        "generation_record" => generation_record(fixture.input)?,
         other => bail!("unknown contract kind {other:?}"),
     };
     // 事件顺序、role、capability 与 hash 都是契约的一部分；不能以“只含关键字段”的
@@ -238,6 +244,105 @@ fn store_schema(input: Value) -> Result<Value> {
         let _ = fs::remove_file(path);
     }
     Ok(json!({"schema_version": info.schema_version, "has_fts5": info.has_fts5}))
+}
+
+/// 验证 Profile 配置只在启动时读取一次，并且 Provider 解析的调试输出不会泄漏密钥。
+fn provider_config_snapshot(input: Value) -> Result<Value> {
+    #[derive(Deserialize)]
+    struct Input {
+        yaml: String,
+        env: String,
+        secret: String,
+    }
+
+    let input: Input = serde_json::from_value(input)?;
+    let root = std::env::temp_dir().join(format!(
+        "sagent-contract-provider-snapshot-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).context("创建 Provider snapshot 临时目录失败")?;
+    fs::write(root.join("config.yaml"), input.yaml).context("写入 Provider 配置 fixture 失败")?;
+    fs::write(root.join(".env"), input.env).context("写入 Provider 凭据 fixture 失败")?;
+
+    // 先解析完整快照和 Provider 配置，再删除源文件；后续摘要仍能工作，证明运行时依赖
+    // 的是同一份不可变输入，而不是在每个 resolver 内重新读取 config.yaml。
+    let result = (|| -> Result<Value> {
+        let profile = normalize_profile_name("default")?;
+        let paths = resolve_paths(Some(&root), Some(&profile))?;
+        let config = load_profile_config(&paths)?;
+        let resolved = resolve_provider_config_from_config(&paths, &config, None, None)?;
+        let before_delete = read_public_config_from_config(&paths, &config)?;
+        fs::remove_file(&paths.config_yaml).context("删除配置 fixture 失败")?;
+        fs::remove_file(&paths.env_file).context("删除凭据 fixture 失败")?;
+        let after_delete = read_public_config_from_config(&paths, &config)?;
+        let debug = format!("{resolved:?}");
+        Ok(json!({
+            "profile": after_delete.profile,
+            "provider": resolved.provider,
+            "model": resolved.model,
+            "provider_names": after_delete.provider_names,
+            "unknown_fields": after_delete.unknown_fields,
+            "snapshot_survives_config_delete": before_delete == after_delete,
+            "resolved_debug_contains_secret": debug.contains(&input.secret),
+        }))
+    })();
+    // 临时 fixture 必须无论断言成功或失败都清理，避免凭据样例残留在宿主临时目录。
+    let _ = fs::remove_dir_all(&root);
+    result
+}
+
+/// 验证 generation 的模型、prompt/tool hash 和 profile revision 按原值持久化并可恢复。
+fn generation_record(input: Value) -> Result<Value> {
+    #[derive(Deserialize)]
+    struct Input {
+        session_id: String,
+        generation: i64,
+        system_hash: String,
+        tool_schema_hash: String,
+        model_id: String,
+        profile_revision: String,
+    }
+
+    let input: Input = serde_json::from_value(input)?;
+    let database_file = std::env::temp_dir().join(format!(
+        "sagent-contract-generation-{}.db",
+        std::process::id()
+    ));
+    let _ = fs::remove_file(&database_file);
+    let result = (|| -> Result<Value> {
+        let mut database = SqliteDatabase::open_readwrite(&database_file)?;
+        let session_id = SessionId::new(input.session_id);
+        database.create_session(&NewSession {
+            id: session_id.clone(),
+            source: Some("contract".to_owned()),
+            model: Some(input.model_id.clone()),
+            title: None,
+            started_at: "2026-09-17T00:00:00Z".to_owned(),
+        })?;
+        database.create_generation(&NewGeneration {
+            session_id: session_id.clone(),
+            generation: input.generation,
+            system_hash: input.system_hash,
+            tool_schema_hash: input.tool_schema_hash,
+            model_id: input.model_id,
+            profile_revision: input.profile_revision,
+            created_at: "2026-09-17T00:00:00Z".to_owned(),
+        })?;
+        let stored = database
+            .get_generation(&session_id, input.generation)?
+            .context("generation fixture 未能读回已写入记录")?;
+        Ok(json!({
+            "generation": stored.generation,
+            "system_hash": stored.system_hash,
+            "tool_schema_hash": stored.tool_schema_hash,
+            "model_id": stored.model_id,
+            "profile_revision": stored.profile_revision,
+        }))
+    })();
+    // Windows 仍持有数据库连接时无法删除文件，所以必须先结束上面的闭包再清理。
+    let _ = fs::remove_file(&database_file);
+    result
 }
 
 #[cfg(test)]

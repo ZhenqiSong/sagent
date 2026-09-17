@@ -1,0 +1,22 @@
+{
+  "contract_version": 1,
+  "kind": "provider_config_snapshot",
+  "input": {
+    "yaml": "provider: openai-compatible\nmodel: fixture-model\nbase_url: http://private.example/v1\napi_key_env: R4_FIXTURE_KEY\nproviders:\n  backup:\n    api: http://backup.example/v1\nworkspace: workspace\nfuture_field: keep\n",
+    "env": "R4_FIXTURE_KEY=must-not-leak\n",
+    "secret": "must-not-leak"
+  },
+  "expected": {
+    "profile": "default",
+    "provider": "openai-compatible",
+    "model": "fixture-model",
+    "provider_names": [
+      "backup"
+    ],
+    "unknown_fields": [
+      "future_field"
+    ],
+    "snapshot_survives_config_delete": true,
+    "resolved_debug_contains_secret": false
+  }
+}

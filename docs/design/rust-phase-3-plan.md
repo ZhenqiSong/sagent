@@ -16,6 +16,9 @@ Phase 3”。仓库中较早的
 垂直切片历史拆分；它们不定义本阶段范围。新工作必须以
 本文件的工作包、边界和退出条件为准。
 
+R4 的具体迁移顺序、ProviderFactory 边界、generation resolution 持久化和 Actor 接入细节见
+[rust-r4-provider-capability-plan.md](rust-r4-provider-capability-plan.md)。
+
 Phase 3 的目标不是堆叠更多工具，而是把 Phase 2 的单 Provider、固定工具集、本地 TUI
 闭环扩展成一套可控的能力解析与运行时编排机制：
 

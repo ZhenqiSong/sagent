@@ -15,6 +15,7 @@ Run all fixtures with:
 cargo run -p sagent-contracts
 ```
 
-Supported initial kinds are `rpc_hello`, `transcript`, `tool_registry`, `command_policy`,
-`profile_name`, `storage_descriptor`, and `store_schema`. Add a runner branch and a fixture in the same change when a
-new externally observable boundary is introduced.
+Supported kinds are `rpc_hello`, `transcript`, `tool_registry`, `command_policy`, `profile_name`,
+`storage_descriptor`, `store_schema`, `provider_config_snapshot`, and `generation_record`. Add a
+runner branch and a fixture in the same change when a new externally observable boundary is
+introduced.

@@ -1,0 +1,19 @@
+{
+  "contract_version": 1,
+  "kind": "generation_record",
+  "input": {
+    "session_id": "contract-generation-session",
+    "generation": 3,
+    "system_hash": "sha256:r4-system",
+    "tool_schema_hash": "sha256:r4-tools",
+    "model_id": "fixture-model",
+    "profile_revision": "baseline-r4"
+  },
+  "expected": {
+    "generation": 3,
+    "system_hash": "sha256:r4-system",
+    "tool_schema_hash": "sha256:r4-tools",
+    "model_id": "fixture-model",
+    "profile_revision": "baseline-r4"
+  }
+}

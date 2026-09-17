@@ -386,6 +386,11 @@ R3.5 已完成并关闭。后续如增加 PostgreSQL 或其他持久化后端，
 
 **目的：** 配置只描述意图，bootstrap 创建实现；能力选择从全局 Supervisor 移到每个 Turn。
 
+R4 详细执行步骤见[《配置、Provider 与每回合能力快照》](rust-r4-provider-capability-plan.md)。
+
+当前进度：R4.0 的行为契约与 fixture 基线已完成；下一步为 R4.1，仍未进入 R4 的生产路径
+迁移。
+
 **工作：**
 
 1. 将当前 Provider YAML 解析分为 `ProviderDescriptor`、模型选择、凭据引用和公开摘要；

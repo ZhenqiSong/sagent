@@ -15,3 +15,4 @@ sagent-config = { path = "../sagent-config" }
 sagent-protocol = { path = "../sagent-protocol" }
 sagent-store = { path = "../sagent-store" }
 sagent-tools = { path = "../sagent-tools" }
+sagent-types = { path = "../sagent-types" }

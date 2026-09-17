@@ -30,14 +30,23 @@ pub fn read_public_config_from_config(
 ) -> Result<PublicConfig> {
     Ok(PublicConfig {
         profile: paths.profile.clone(),
-        provider: config.provider.provider.clone(),
+        provider: config
+            .provider
+            .provider
+            .as_ref()
+            .map(|provider| provider.as_str().to_owned()),
         model: config
             .provider
             .model
             .as_ref()
             .and_then(ModelSetting::display_name)
             .map(str::to_owned),
-        provider_names: config.provider.providers.keys().cloned().collect(),
+        provider_names: config
+            .provider
+            .providers
+            .keys()
+            .map(|provider| provider.as_str().to_owned())
+            .collect(),
         unknown_fields: config.unknown_fields.clone(),
     })
 }

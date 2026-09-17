@@ -7,6 +7,7 @@ mod config_reader;
 mod credentials;
 mod profile_config;
 mod provider_config;
+mod provider_identity;
 mod provider_resolver;
 mod public_config;
 mod workspace;
@@ -25,6 +26,7 @@ pub use profile_config::ProfileConfig;
 pub use provider_config::{
     ModelDetail, ModelSetting, ProviderDescriptor, UserProviderConfig, WorkspaceDescriptor,
 };
+pub use provider_identity::{CredentialReference, DescriptorRevision, ModelId, ProviderKind};
 pub use provider_resolver::{
     ResolvedProvider, ResolvedProviderConfig, resolve_openai_provider_from_config,
     resolve_provider_config_from_config,

@@ -388,8 +388,9 @@ R3.5 已完成并关闭。后续如增加 PostgreSQL 或其他持久化后端，
 
 R4 详细执行步骤见[《配置、Provider 与每回合能力快照》](rust-r4-provider-capability-plan.md)。
 
-当前进度：R4.0 的行为契约与 fixture 基线已完成；R4.1 正在进行配置 descriptor 纯化，尚未
-进入 ProviderFactory 和 Runtime 生产路径迁移。
+当前进度：R4.0 的行为契约与 fixture 基线已完成；R4.1 已完成 raw/canonical descriptor
+分离、alias 归一化及 provider identity 类型化，正在继续收口纯 descriptor 解析；尚未进入
+ProviderFactory 和 Runtime 生产路径迁移。
 
 **工作：**
 

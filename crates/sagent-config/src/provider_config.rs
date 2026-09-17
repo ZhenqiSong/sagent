@@ -8,8 +8,12 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Result, bail};
 use serde::Deserialize;
+use serde_json::{Value, json};
 
-use crate::storage::StorageDescriptor;
+use crate::{
+    provider_identity::{CredentialReference, DescriptorRevision, ModelId, ProviderKind},
+    storage::StorageDescriptor,
+};
 
 /// parser 层使用的 Profile `config.yaml` 原始文档模型。
 ///
@@ -104,25 +108,59 @@ pub(crate) struct RawUserProviderConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderDescriptor {
     /// 例如 `openai-compatible`，也可以是 `providers` 下的自定义 key。
-    pub provider: Option<String>,
+    pub provider: Option<ProviderKind>,
     /// 模型名称或模型级覆盖配置。
     pub model: Option<ModelSetting>,
     /// 归一化后的全局 OpenAI-compatible endpoint。
     pub base_url: Option<String>,
     /// API key 所在的环境变量名；只保存引用，不保存值。
-    pub api_key_env: Option<String>,
+    pub api_key_env: Option<CredentialReference>,
     /// 按 provider 名称索引的归一化自定义 Provider 配置。
-    pub providers: BTreeMap<String, UserProviderConfig>,
+    pub providers: BTreeMap<ProviderKind, UserProviderConfig>,
+    /// 仅由 canonical descriptor 计算的稳定 revision，不包含 secret 值。
+    pub descriptor_revision: DescriptorRevision,
 }
 
 impl ProviderDescriptor {
+    /// 创建未配置 Provider 的合法 descriptor，供只读启动和测试 fixture 使用。
+    pub fn empty() -> Self {
+        let canonical = canonical_descriptor_value(None, None, None, None, &BTreeMap::new());
+        Self {
+            provider: None,
+            model: None,
+            base_url: None,
+            api_key_env: None,
+            providers: BTreeMap::new(),
+            // Value 只由 JSON 基础类型构成，序列化失败代表实现不变量被破坏；这里不把
+            // 不可能的内部错误伪装成可恢复的配置错误。
+            descriptor_revision: DescriptorRevision::from_canonical_bytes(
+                &serde_json::to_vec(&canonical).expect("canonical descriptor must serialize"),
+            ),
+        }
+    }
+
     /// 从 parser 原始模型创建规范化 descriptor；所有 alias 在此边界被消费。
     fn from_raw(raw: &RawProviderConfig) -> Result<Self> {
-        let provider = normalize_optional(raw.provider.clone(), "provider")?;
+        let provider = raw
+            .provider
+            .as_deref()
+            .map(ProviderKind::try_new)
+            .transpose()?;
         let model = raw.model.clone().map(ModelSetting::from_raw).transpose()?;
         let base_url = normalize_optional(raw.base_url.clone(), "base_url")?;
-        let api_key_env = normalize_optional(raw.api_key_env.clone(), "api_key_env")?;
+        let api_key_env = raw
+            .api_key_env
+            .as_deref()
+            .map(CredentialReference::try_new)
+            .transpose()?;
         let providers = normalize_provider_map(raw.providers.clone())?;
+        let descriptor_revision = descriptor_revision(
+            provider.as_ref(),
+            model.as_ref(),
+            base_url.as_deref(),
+            api_key_env.as_ref(),
+            &providers,
+        )?;
 
         let descriptor = Self {
             provider,
@@ -130,6 +168,7 @@ impl ProviderDescriptor {
             base_url,
             api_key_env,
             providers,
+            descriptor_revision,
         };
         descriptor.validate()?;
         Ok(descriptor)
@@ -137,23 +176,18 @@ impl ProviderDescriptor {
 
     /// 检查 descriptor 已经完成文本归一化，避免空值在 resolver 深处才暴露。
     pub(crate) fn validate(&self) -> Result<()> {
-        if self.provider.as_deref().is_some_and(str::is_empty) {
-            bail!("Provider 名称不能为空");
-        }
-        if self.base_url.as_deref().is_some_and(str::is_empty) {
+        if self
+            .base_url
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
             bail!("Provider base_url 不能为空");
-        }
-        if self.api_key_env.as_deref().is_some_and(str::is_empty) {
-            bail!("Provider api_key_env 不能为空");
         }
         if let Some(model) = &self.model {
             model.validate()?;
         }
         for (name, provider) in &self.providers {
-            if name.is_empty() {
-                bail!("自定义 Provider 名称不能为空");
-            }
-            provider.validate(name)?;
+            provider.validate(name.as_str())?;
         }
         Ok(())
     }
@@ -170,7 +204,7 @@ pub struct WorkspaceDescriptor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelSetting {
     /// 直接使用的模型名。
-    Name(String),
+    Name(ModelId),
     /// 包含可选覆盖项的模型设置。
     Detail(ModelDetail),
 }
@@ -179,13 +213,27 @@ impl ModelSetting {
     /// 将 parser 原始模型转换为只含 canonical 字段的模型设置。
     fn from_raw(raw: RawModelSetting) -> Result<Self> {
         match raw {
-            RawModelSetting::Name(value) => Ok(Self::Name(normalize_required(value, "model")?)),
-            RawModelSetting::Detail(detail) => Ok(Self::Detail(ModelDetail {
-                model: normalize_optional(detail.name.or(detail.model), "model")?,
-                provider: normalize_optional(detail.provider, "model.provider")?,
-                base_url: normalize_optional(detail.base_url, "model.base_url")?,
-                api_key_env: normalize_optional(detail.api_key_env, "model.api_key_env")?,
-            })),
+            RawModelSetting::Name(value) => Ok(Self::Name(ModelId::try_new(value)?)),
+            RawModelSetting::Detail(detail) => {
+                let model = normalize_optional(detail.name.or(detail.model), "model")?
+                    .as_deref()
+                    .map(ModelId::try_new)
+                    .transpose()?;
+                Ok(Self::Detail(ModelDetail {
+                    model,
+                    provider: detail
+                        .provider
+                        .as_deref()
+                        .map(ProviderKind::try_new)
+                        .transpose()?,
+                    base_url: normalize_optional(detail.base_url, "model.base_url")?,
+                    api_key_env: detail
+                        .api_key_env
+                        .as_deref()
+                        .map(CredentialReference::try_new)
+                        .transpose()?,
+                }))
+            }
         }
     }
 
@@ -197,7 +245,11 @@ impl ModelSetting {
                 // 字段仍在 parser 边界完成归一化，R4.2 再收紧 Provider 可用性校验。
                 return Ok(());
             }
-            if detail.model.as_deref().is_some_and(str::is_empty) {
+            if detail
+                .model
+                .as_ref()
+                .is_some_and(|value| value.as_str().is_empty())
+            {
                 bail!("model 名称不能为空");
             }
         }
@@ -207,13 +259,26 @@ impl ModelSetting {
     /// 返回 resolver 所需的模型、Provider、endpoint 和 credential reference。
     pub(crate) fn values(&self) -> (Option<&str>, Option<&str>, Option<&str>, Option<&str>) {
         match self {
-            Self::Name(value) => (Some(value), None, None, None),
+            Self::Name(value) => (Some(value.as_str()), None, None, None),
             Self::Detail(detail) => (
-                detail.model.as_deref(),
-                detail.provider.as_deref(),
+                detail.model.as_ref().map(ModelId::as_str),
+                detail.provider.as_ref().map(ProviderKind::as_str),
                 detail.base_url.as_deref(),
-                detail.api_key_env.as_deref(),
+                detail.api_key_env.as_ref().map(CredentialReference::as_str),
             ),
+        }
+    }
+
+    /// 返回 revision 计算所需的非秘密 canonical JSON 片段。
+    fn fingerprint(&self) -> Value {
+        match self {
+            Self::Name(model) => json!({"model": model.as_str()}),
+            Self::Detail(detail) => json!({
+                "model": detail.model.as_ref().map(ModelId::as_str),
+                "provider": detail.provider.as_ref().map(ProviderKind::as_str),
+                "base_url": detail.base_url,
+                "api_key_env": detail.api_key_env.as_ref().map(CredentialReference::as_str),
+            }),
         }
     }
 
@@ -227,13 +292,13 @@ impl ModelSetting {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelDetail {
     /// parser 已将 `name`/`model` 两个 YAML 形态合并后的模型名。
-    pub model: Option<String>,
+    pub model: Option<ModelId>,
     /// 覆盖顶层 Provider 名称。
-    pub provider: Option<String>,
+    pub provider: Option<ProviderKind>,
     /// 覆盖顶层 endpoint。
     pub base_url: Option<String>,
     /// canonical credential reference。
-    pub api_key_env: Option<String>,
+    pub api_key_env: Option<CredentialReference>,
 }
 
 /// `providers.<name>` 的规范化 Provider 配置。
@@ -244,9 +309,9 @@ pub struct UserProviderConfig {
     /// 归一化后的 OpenAI-compatible endpoint。
     pub base_url: Option<String>,
     /// credential reference，不保存 secret 值。
-    pub api_key_env: Option<String>,
+    pub api_key_env: Option<CredentialReference>,
     /// Provider 使用的模型名。
-    pub model: Option<String>,
+    pub model: Option<ModelId>,
 }
 
 impl UserProviderConfig {
@@ -263,30 +328,32 @@ impl UserProviderConfig {
         if self.base_url.as_deref().is_some_and(str::is_empty) {
             bail!("自定义 Provider '{name}' 的 base_url 不能为空");
         }
-        if self.api_key_env.as_deref().is_some_and(str::is_empty) {
-            bail!("自定义 Provider '{name}' 的 api_key_env 不能为空");
-        }
-        if self.model.as_deref().is_some_and(str::is_empty) {
-            bail!("自定义 Provider '{name}' 的 model 不能为空");
-        }
         Ok(())
     }
 }
 
 fn normalize_provider_map(
     providers: BTreeMap<String, RawUserProviderConfig>,
-) -> Result<BTreeMap<String, UserProviderConfig>> {
+) -> Result<BTreeMap<ProviderKind, UserProviderConfig>> {
     let mut normalized = BTreeMap::new();
     for (name, provider) in providers {
-        let name = normalize_required(name, "providers name")?;
+        let name = ProviderKind::try_new(name)?;
         let endpoint = provider.api.or(provider.url).or(provider.base_url);
         let canonical = UserProviderConfig {
             name: normalize_optional(provider.name, "providers.name")?,
             base_url: normalize_optional(endpoint, "providers.base_url")?,
-            api_key_env: normalize_optional(provider.api_key_env, "providers.api_key_env")?,
-            model: normalize_optional(provider.model, "providers.model")?,
+            api_key_env: provider
+                .api_key_env
+                .as_deref()
+                .map(CredentialReference::try_new)
+                .transpose()?,
+            model: provider
+                .model
+                .as_deref()
+                .map(ModelId::try_new)
+                .transpose()?,
         };
-        canonical.validate(&name)?;
+        canonical.validate(name.as_str())?;
         if normalized.insert(name.clone(), canonical).is_some() {
             bail!("重复的自定义 Provider 名称：{name}");
         }
@@ -306,4 +373,47 @@ fn normalize_optional(value: Option<String>, field: &str) -> Result<Option<Strin
     value
         .map(|value| normalize_required(value, field))
         .transpose()
+}
+
+fn descriptor_revision(
+    provider: Option<&ProviderKind>,
+    model: Option<&ModelSetting>,
+    base_url: Option<&str>,
+    api_key_env: Option<&CredentialReference>,
+    providers: &BTreeMap<ProviderKind, UserProviderConfig>,
+) -> Result<DescriptorRevision> {
+    let canonical = canonical_descriptor_value(provider, model, base_url, api_key_env, providers);
+    let bytes = serde_json::to_vec(&canonical)?;
+    Ok(DescriptorRevision::from_canonical_bytes(&bytes))
+}
+
+fn canonical_descriptor_value(
+    provider: Option<&ProviderKind>,
+    model: Option<&ModelSetting>,
+    base_url: Option<&str>,
+    api_key_env: Option<&CredentialReference>,
+    providers: &BTreeMap<ProviderKind, UserProviderConfig>,
+) -> Value {
+    let custom_providers = providers
+        .iter()
+        .map(|(kind, provider)| {
+            (
+                kind.as_str().to_owned(),
+                json!({
+                    "name": provider.name.as_deref(),
+                    "base_url": provider.base_url.as_deref(),
+                    "api_key_env": provider.api_key_env.as_ref().map(CredentialReference::as_str),
+                    "model": provider.model.as_ref().map(ModelId::as_str),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let canonical = json!({
+        "provider": provider.map(ProviderKind::as_str),
+        "model": model.map(ModelSetting::fingerprint),
+        "base_url": base_url,
+        "api_key_env": api_key_env.map(CredentialReference::as_str),
+        "providers": custom_providers,
+    });
+    canonical
 }

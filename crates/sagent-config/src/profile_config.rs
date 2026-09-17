@@ -103,13 +103,26 @@ mod tests {
         let config = load_profile_config(&paths).expect("alias 应在 parser 层归一化");
 
         assert_eq!(
-            config.provider.api_key_env.as_deref(),
+            config
+                .provider
+                .api_key_env
+                .as_ref()
+                .map(|reference| reference.as_str()),
             Some("TOP_LEVEL_KEY")
         );
         match config.provider.model.as_ref() {
             Some(ModelSetting::Detail(detail)) => {
-                assert_eq!(detail.model.as_deref(), Some("nested-model"));
-                assert_eq!(detail.api_key_env.as_deref(), Some("MODEL_KEY"));
+                assert_eq!(
+                    detail.model.as_ref().map(|model| model.as_str()),
+                    Some("nested-model")
+                );
+                assert_eq!(
+                    detail
+                        .api_key_env
+                        .as_ref()
+                        .map(|reference| reference.as_str()),
+                    Some("MODEL_KEY")
+                );
             }
             other => panic!("应保留为规范化 detail model，实际为 {other:?}"),
         }
@@ -126,8 +139,26 @@ mod tests {
                 .provider
                 .providers
                 .get("backup")
-                .and_then(|provider| provider.api_key_env.as_deref()),
+                .and_then(|provider| {
+                    provider
+                        .api_key_env
+                        .as_ref()
+                        .map(|reference| reference.as_str())
+                }),
             Some("BACKUP_KEY")
+        );
+
+        let alias_revision = config.provider.descriptor_revision.clone();
+        fs::write(
+            root.join("config.yaml"),
+            "provider: openai-compatible\nmodel:\n  model: nested-model\n  api_key_env: MODEL_KEY\nbase_url: http://127.0.0.1:1/v1\napi_key_env: TOP_LEVEL_KEY\nproviders:\n  backup:\n    base_url: http://backup.example/v1\n    api_key_env: BACKUP_KEY\n    model: backup-model\n",
+        )
+        .expect("应能写入 canonical fixture");
+        let canonical = load_profile_config(&paths).expect("canonical 配置应能加载");
+        // alias 只影响输入形态；相同的规范化 descriptor 必须得到同一个 revision。
+        assert_eq!(
+            alias_revision, canonical.provider.descriptor_revision,
+            "alias 归一化后不得改变 descriptor revision"
         );
 
         fs::remove_dir_all(root).expect("应能清理 alias fixture");

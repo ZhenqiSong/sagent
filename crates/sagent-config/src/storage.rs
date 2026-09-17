@@ -244,13 +244,7 @@ mod tests {
 
         let config = ProfileConfig {
             storage: configured.clone(),
-            provider: crate::provider_config::ProviderDescriptor {
-                provider: None,
-                model: None,
-                base_url: None,
-                api_key_env: None,
-                providers: std::collections::BTreeMap::new(),
-            },
+            provider: crate::provider_config::ProviderDescriptor::empty(),
             workspace: crate::provider_config::WorkspaceDescriptor::default(),
             unknown_fields: Vec::new(),
         };
@@ -271,13 +265,7 @@ mod tests {
                 namespace: None,
                 read_only: false,
             },
-            provider: crate::provider_config::ProviderDescriptor {
-                provider: None,
-                model: None,
-                base_url: None,
-                api_key_env: None,
-                providers: std::collections::BTreeMap::new(),
-            },
+            provider: crate::provider_config::ProviderDescriptor::empty(),
             workspace: crate::provider_config::WorkspaceDescriptor::default(),
             unknown_fields: Vec::new(),
         };

@@ -10,6 +10,7 @@
     "profile": "default",
     "provider": "openai-compatible",
     "model": "fixture-model",
+    "descriptor_revision": "sha256:d0ee3046a0e8e6cf0f6da493c763942eaa0b4e48947c619d162dac27e6dce11c",
     "provider_names": [
       "backup"
     ],

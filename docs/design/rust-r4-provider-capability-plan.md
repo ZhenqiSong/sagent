@@ -303,6 +303,9 @@ LegacyGeneration 状态；不得伪造新的 Provider 或把旧数据升级成�
 - [x] `ProviderDescriptor`、`ModelSetting`、`ModelDetail` 和 `UserProviderConfig` 只保存
   归一化字段，`name/model`、`api/url/base_url` 和 `key_env/api_key_env` 在 parser 边界合并；
 - [x] 增加 alias 归一化行为测试，确认 ProfileConfig 对外只暴露 canonical 字段。
+- [x] 新增 `ProviderKind`、`ModelId`、`CredentialReference`、`DescriptorRevision` 显式值对象；
+  构造时校验空白和格式，descriptor revision 基于归一化且不含 secret 的 canonical JSON
+  计算 SHA-256。
 
 **验收：** 删除/暂时屏蔽 config.yaml 与 .env 后，已经创建的 ProfileConfig 仍能完成
 descriptor/public summary 相关纯操作；config crate 编译不需要 Provider adapter；无 HTTP、

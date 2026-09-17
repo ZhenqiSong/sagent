@@ -281,6 +281,7 @@ fn provider_config_snapshot(input: Value) -> Result<Value> {
             "profile": after_delete.profile,
             "provider": resolved.provider,
             "model": resolved.model,
+            "descriptor_revision": config.provider.descriptor_revision.as_str(),
             "provider_names": after_delete.provider_names,
             "unknown_fields": after_delete.unknown_fields,
             "snapshot_survives_config_delete": before_delete == after_delete,

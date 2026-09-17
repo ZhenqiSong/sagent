@@ -77,7 +77,10 @@ pub fn resolve_provider_config_from_config(
         .unwrap_or_default();
     let provider = provider_override
         .or(provider_from_model)
-        .or(provider_config.provider.as_deref())
+        .or(provider_config
+            .provider
+            .as_ref()
+            .map(|value| value.as_str()))
         .unwrap_or("openai-compatible")
         .trim()
         .to_lowercase();
@@ -85,7 +88,7 @@ pub fn resolve_provider_config_from_config(
         bail!("Provider 名称不能为空");
     }
 
-    let custom = provider_config.providers.get(&provider);
+    let custom = provider_config.providers.get(provider.as_str());
     let endpoint = custom
         .and_then(UserProviderConfig::endpoint)
         .or(base_from_model)
@@ -94,7 +97,7 @@ pub fn resolve_provider_config_from_config(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Provider '{}' 未配置 base_url", provider))?;
     let model = model_override
-        .or(custom.and_then(|value| value.model.as_deref()))
+        .or(custom.and_then(|value| value.model.as_ref().map(|model| model.as_str())))
         .or(model_from_config)
         .unwrap_or("")
         .trim()
@@ -104,9 +107,17 @@ pub fn resolve_provider_config_from_config(
     }
 
     let key_name = custom
-        .and_then(|value| value.api_key_env.as_deref())
+        .and_then(|value| {
+            value
+                .api_key_env
+                .as_ref()
+                .map(|reference| reference.as_str())
+        })
         .or(key_from_model)
-        .or(provider_config.api_key_env.as_deref())
+        .or(provider_config
+            .api_key_env
+            .as_ref()
+            .map(|value| value.as_str()))
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("Provider '{}' 未配置 api_key_env", provider))?;
@@ -130,7 +141,10 @@ pub fn resolve_openai_provider_from_config(
     let resolved =
         resolve_provider_config_from_config(paths, config, provider_override, model_override)?;
     if resolved.provider != "openai-compatible"
-        && !config.provider.providers.contains_key(&resolved.provider)
+        && !config
+            .provider
+            .providers
+            .contains_key(resolved.provider.as_str())
     {
         bail!("不支持的 Provider：{}", resolved.provider);
     }

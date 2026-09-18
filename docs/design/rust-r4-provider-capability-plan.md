@@ -288,7 +288,7 @@ LegacyGeneration 状态；不得伪造新的 Provider 或把旧数据升级成�
 1. 将 raw YAML model 与已校验 ProviderDescriptor 分开，所有 alias 只在 parser 层归一化；
 2. 为 provider kind、model id、credential reference、descriptor revision 定义显式类型或
    构造校验函数；
-3. 把 resolve_provider_config_from_config 改为纯 descriptor 解析；名称应表达“已加载
+3. 把 resolve_provider_config_from_snapshot 改为纯 descriptor 解析；名称应表达“已加载
    快照输入”，不得再接受路径或隐式读取配置；
 4. 删除 ResolvedProvider、ResolvedProviderConfig 中的 OpenAiCompatibleProvider 字段；
 5. 将凭据读取收口为只供 bootstrap/Factory 使用的窄入口，禁止 ProfileConfig 保存 secret；
@@ -306,6 +306,8 @@ LegacyGeneration 状态；不得伪造新的 Provider 或把旧数据升级成�
 - [x] 新增 `ProviderKind`、`ModelId`、`CredentialReference`、`DescriptorRevision` 显式值对象；
   构造时校验空白和格式，descriptor revision 基于归一化且不含 secret 的 canonical JSON
   计算 SHA-256。
+- [x] `resolve_provider_config_from_snapshot` 只接收已加载的 `ProfileConfig`，输出无 secret 的
+  provider/model/endpoint/credential reference，不再通过路径或隐式读取配置、凭据。
 
 **验收：** 删除/暂时屏蔽 config.yaml 与 .env 后，已经创建的 ProfileConfig 仍能完成
 descriptor/public summary 相关纯操作；config crate 编译不需要 Provider adapter；无 HTTP、

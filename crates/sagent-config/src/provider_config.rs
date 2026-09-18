@@ -256,15 +256,22 @@ impl ModelSetting {
         Ok(())
     }
 
-    /// 返回 resolver 所需的模型、Provider、endpoint 和 credential reference。
-    pub(crate) fn values(&self) -> (Option<&str>, Option<&str>, Option<&str>, Option<&str>) {
+    /// 返回 resolver 所需的已校验模型、Provider、endpoint 和 credential reference。
+    pub(crate) fn values(
+        &self,
+    ) -> (
+        Option<&ModelId>,
+        Option<&ProviderKind>,
+        Option<&str>,
+        Option<&CredentialReference>,
+    ) {
         match self {
-            Self::Name(value) => (Some(value.as_str()), None, None, None),
+            Self::Name(value) => (Some(value), None, None, None),
             Self::Detail(detail) => (
-                detail.model.as_ref().map(ModelId::as_str),
-                detail.provider.as_ref().map(ProviderKind::as_str),
+                detail.model.as_ref(),
+                detail.provider.as_ref(),
                 detail.base_url.as_deref(),
-                detail.api_key_env.as_ref().map(CredentialReference::as_str),
+                detail.api_key_env.as_ref(),
             ),
         }
     }
@@ -284,7 +291,7 @@ impl ModelSetting {
 
     /// 返回可展示的模型名，不暴露 Provider endpoint 或 credential 关联信息。
     pub fn display_name(&self) -> Option<&str> {
-        self.values().0
+        self.values().0.map(ModelId::as_str)
     }
 }
 

@@ -29,7 +29,7 @@ pub use provider_config::{
 pub use provider_identity::{CredentialReference, DescriptorRevision, ModelId, ProviderKind};
 pub use provider_resolver::{
     ResolvedProvider, ResolvedProviderConfig, resolve_openai_provider_from_config,
-    resolve_provider_config_from_config,
+    resolve_provider_config_from_snapshot,
 };
 pub use public_config::{PublicConfig, read_public_config_from_config};
 pub use storage::{DEFAULT_SQLITE_DATABASE_FILE, StorageDescriptor, StorageKind};

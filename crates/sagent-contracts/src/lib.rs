@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use sagent_agent::{PromptToolCall, Transcript};
 use sagent_config::{
     StorageDescriptor, StorageKind, load_profile_config, normalize_profile_name,
-    read_public_config_from_config, resolve_paths, resolve_provider_config_from_config,
+    read_public_config_from_config, resolve_paths, resolve_provider_config_from_snapshot,
 };
 use sagent_protocol::{ClientHelloParams, negotiate_hello};
 use sagent_store::{NewGeneration, NewSession, SqliteDatabase};
@@ -271,7 +271,7 @@ fn provider_config_snapshot(input: Value) -> Result<Value> {
         let profile = normalize_profile_name("default")?;
         let paths = resolve_paths(Some(&root), Some(&profile))?;
         let config = load_profile_config(&paths)?;
-        let resolved = resolve_provider_config_from_config(&paths, &config, None, None)?;
+        let resolved = resolve_provider_config_from_snapshot(&config, None, None)?;
         let before_delete = read_public_config_from_config(&paths, &config)?;
         fs::remove_file(&paths.config_yaml).context("删除配置 fixture 失败")?;
         fs::remove_file(&paths.env_file).context("删除凭据 fixture 失败")?;
@@ -279,8 +279,8 @@ fn provider_config_snapshot(input: Value) -> Result<Value> {
         let debug = format!("{resolved:?}");
         Ok(json!({
             "profile": after_delete.profile,
-            "provider": resolved.provider,
-            "model": resolved.model,
+            "provider": resolved.provider.as_str(),
+            "model": resolved.model.as_str(),
             "descriptor_revision": config.provider.descriptor_revision.as_str(),
             "provider_names": after_delete.provider_names,
             "unknown_fields": after_delete.unknown_fields,
